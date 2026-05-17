@@ -1,4 +1,3 @@
-import copy
 import os
 import pickle
 import random
@@ -22,8 +21,8 @@ from flax import serialization, struct
 
 TensorBatch = Dict[str, jnp.ndarray]
 
-ALGORITHM_NAME = "SA-CDAF"
-ALGORITHM_FULL_NAME = "Support-Aware Conservative Delayed Advantage Filtering"
+# ALGORITHM_NAME = "CDAF"
+ALGORITHM_FULL_NAME = "Conservative Delayed Advantage Filtering"
 
 
 @dataclass
@@ -37,7 +36,7 @@ class TrainConfig:
     max_timesteps: int = int(1e6)
     checkpoints_path: Optional[str] = None
     load_model: str = ""
-    hyperparams_path: Optional[str] = "hyperparams/sa_cdaf_jax.yml"
+    hyperparams_path: Optional[str] = "hyperparams/cdaf_jax.yml"
     use_hyperparams: bool = True
 
     # Dataset
@@ -46,7 +45,7 @@ class TrainConfig:
     normalize: bool = True
     normalize_reward: bool = False
 
-    # SA-CDAF value learning
+    # CDAF value learning
     discount: float = 0.99
     tau: float = 0.005
     qf_lr: float = 3e-4
@@ -57,37 +56,29 @@ class TrainConfig:
     weight_logit_clip: float = 10.0
     beta_min: float = 0.0
 
-    # State-support gate rho(s). rho=0 treats the state as sparse and uses
-    # all dataset actions for V(s); rho=1 treats local action comparison as
-    # reliable and uses delayed-advantage filtering.
-    rho_mode: str = "batch_knn"  # one of: batch_knn, constant
-    rho_k: int = 10
-    rho_distance_scale: float = 1.0  # <=0 uses the batch median kth-neighbor distance
-    rho_power: float = 2.0
-    rho_min: float = 0.0
+    # Coverage-aware CDAF filtering
+    # beta_adv performs the original negative-advantage filtering.
+    # coverage_confidence c(s) controls how much we trust that filtering:
+    #   sparse state -> c(s) ~= 0 -> beta ~= 1, so V(s) is still trained from Q(s, a)
+    #   dense state  -> c(s) ~= 1 -> beta ~= beta_adv
+    use_coverage_aware_beta: bool = True
+    coverage_knn_k: int = 10
+    coverage_reference_size: int = 100_000
+    coverage_low_quantile: float = 0.20
+    coverage_high_quantile: float = 0.80
+    adv_margin: float = 0.0
 
-    # Actor fitting during evaluation/refit
-    # td3_bc preserves the original CDAF evaluation protocol.
+    # Actor update during training
+    # td3_bc uses the TD3+BC-style policy improvement objective.
     # weighted_bc is fully in-sample: weighted behavior cloning from dataset actions.
     # td3_weighted_bc keeps the TD3+BC Q-improvement term, but replaces the plain
     # BC regularizer with advantage-weighted BC from dataset actions.
-    actor_fit_method: str = "td3_bc"  # one of: td3_bc, weighted_bc, td3_weighted_bc
+    actor_lr: float = 3e-4
+    actor_update_method: str = "td3_bc"  # one of: td3_bc, weighted_bc, td3_weighted_bc
     policy_weight_exponent: float = 1.0
     policy_weight_clip: float = 20.0
-
-    # TD3+BC actor fitting during evaluation
-    actor_lr: float = 3e-4
-    eval_actor_steps: int = 1000
-    eval_actor_batch_size: int = 256
-    eval_actor_eval_freq: int = 2000
-    reset_actor_on_eval: bool = False
     alpha: float = 2.5
     bc_coef: float = 1.0
-
-    # Standalone actor refit from a saved checkpoint.
-    # Used when --load_model is provided with --max_timesteps 0.
-    refit_actor_steps: int = 50000
-    actor_refit_dir_name: str = "actor_refit"
 
     # Logging
     project: str = "ORL-BIAS"
@@ -102,34 +93,33 @@ class TrainConfig:
 
 
 def refresh_algorithm_names(config: TrainConfig) -> None:
-    config.project = "ORL-BIAS"
-    config.group = f"{ALGORITHM_NAME}-JAX"
-    config.name = f"{ALGORITHM_NAME}-JAX-{config.env}"
+    # config.project = "ORL-BIAS"
+    # config.group = f"{ALGORITHM_NAME}-JAX"
+    config.name = f"{config.group}-{config.env}"
 
 
 def validate_config(config: TrainConfig) -> None:
     assert config.min_weight_exponent >= 0.0, "min_weight_exponent must be >= 0"
     assert config.max_weight_exponent >= 0.0, "max_weight_exponent must be >= 0"
-    assert 0.0 <= config.beta_min <= 1.0, "beta_min must be in [0, 1]"
-    assert config.rho_mode in ("batch_knn", "constant"), "rho_mode must be batch_knn or constant"
-    assert config.rho_k > 0, "rho_k must be > 0"
-    assert config.rho_power > 0.0, "rho_power must be > 0"
-    assert 0.0 <= config.rho_min <= 1.0, "rho_min must be in [0, 1]"
-    assert config.policy_weight_exponent >= 0.0, "policy_weight_exponent must be >= 0"
-    assert config.policy_weight_clip > 0.0, "policy_weight_clip must be > 0"
-    assert config.actor_fit_method in (
-        "td3_bc",
-        "weighted_bc",
-        "td3_weighted_bc",
-    ), "actor_fit_method must be td3_bc, weighted_bc, or td3_weighted_bc"
+    assert config.beta_min >= 0.0, "beta_min must be >= 0"
+    assert config.weight_logit_clip > 0.0, "weight_logit_clip must be > 0"
+    assert config.coverage_knn_k > 0, "coverage_knn_k must be > 0"
+    assert config.coverage_reference_size > 0, "coverage_reference_size must be > 0"
+    assert 0.0 <= config.coverage_low_quantile <= 1.0, "coverage_low_quantile must be in [0, 1]"
+    assert 0.0 <= config.coverage_high_quantile <= 1.0, "coverage_high_quantile must be in [0, 1]"
+    assert config.coverage_high_quantile >= config.coverage_low_quantile
+    assert config.adv_margin >= 0.0, "adv_margin must be >= 0"
     assert config.max_weight_exponent >= config.min_weight_exponent
     assert config.delayed_update_period > 0
     assert config.bc_coef >= 0.0
+    assert config.policy_weight_exponent >= 0.0, "policy_weight_exponent must be >= 0"
+    assert config.policy_weight_clip > 0.0, "policy_weight_clip must be > 0"
+    assert config.actor_update_method in (
+        "td3_bc",
+        "weighted_bc",
+        "td3_weighted_bc",
+    ), "actor_update_method must be td3_bc, weighted_bc, or td3_weighted_bc"
     assert config.batch_size > 0
-    assert config.eval_actor_batch_size > 0
-    assert config.eval_actor_eval_freq > 0
-    assert config.refit_actor_steps >= 0
-    assert config.actor_refit_dir_name != ""
 
 
 def _cli_overridden_fields(argv: Optional[List[str]] = None) -> set:
@@ -250,6 +240,125 @@ def normalize_states(states: np.ndarray, mean: Union[np.ndarray, float], std: Un
     return (states - mean) / std
 
 
+def _query_knn_distances_numpy(
+    query_states: np.ndarray,
+    reference_states: np.ndarray,
+    k: int,
+    query_chunk_size: int = 4096,
+    reference_chunk_size: int = 32768,
+) -> np.ndarray:
+    """Memory-safe NumPy fallback for approximate kNN distances.
+
+    This is only used when scikit-learn is unavailable. It computes distances to a
+    reference subset in chunks, so it is slower than sklearn but avoids adding a hard
+    dependency to the training script.
+    """
+    k = min(k, reference_states.shape[0])
+    kth_distances = np.empty(query_states.shape[0], dtype=np.float32)
+
+    for q_start in range(0, query_states.shape[0], query_chunk_size):
+        q_end = min(q_start + query_chunk_size, query_states.shape[0])
+        q = query_states[q_start:q_end].astype(np.float32, copy=False)
+        best = np.full((q.shape[0], k), np.inf, dtype=np.float32)
+
+        q_norm = np.sum(q * q, axis=1, keepdims=True)
+        for r_start in range(0, reference_states.shape[0], reference_chunk_size):
+            r_end = min(r_start + reference_chunk_size, reference_states.shape[0])
+            r = reference_states[r_start:r_end].astype(np.float32, copy=False)
+            r_norm = np.sum(r * r, axis=1)[None, :]
+            dist_sq = np.maximum(q_norm + r_norm - 2.0 * (q @ r.T), 0.0)
+
+            # Keep the current k smallest squared distances for this query chunk.
+            merged = np.concatenate([best, dist_sq], axis=1)
+            kth_idx = min(k - 1, merged.shape[1] - 1)
+            best = np.partition(merged, kth_idx, axis=1)[:, :k]
+
+        kth_distances[q_start:q_end] = np.sqrt(np.max(best, axis=1))
+
+    return kth_distances
+
+
+def compute_state_coverage_confidence(
+    states: np.ndarray,
+    k: int = 10,
+    reference_size: int = 100_000,
+    low_quantile: float = 0.20,
+    high_quantile: float = 0.80,
+    seed: int = 0,
+    eps: float = 1e-8,
+) -> np.ndarray:
+    """Estimate state coverage confidence c(s) in [0, 1] from local density.
+
+    The input states should already be normalized. We use the kNN distance as an
+    inverse density estimate:
+      small kth-neighbor distance -> dense state  -> confidence near 1
+      large kth-neighbor distance -> sparse state -> confidence near 0
+
+    For large D4RL datasets, kNN is computed against a random reference subset.
+    This gives a cheap and stable density proxy without changing the online JAX
+    training step.
+    """
+    states = np.asarray(states, dtype=np.float32)
+    n_states = states.shape[0]
+    if n_states == 0:
+        return np.empty((0,), dtype=np.float32)
+    if n_states <= 2:
+        return np.ones((n_states,), dtype=np.float32)
+
+    reference_size = min(int(reference_size), n_states)
+    rng = np.random.default_rng(seed)
+    if reference_size < n_states:
+        reference_indices = rng.choice(n_states, size=reference_size, replace=False)
+        reference_states = states[reference_indices]
+        # With a reference subset, the query state may not be in the reference set.
+        n_neighbors = min(int(k), reference_size)
+    else:
+        reference_states = states
+        # Exact self-query includes the point itself as the nearest neighbor, so
+        # use k + 1 neighbors and take the last distance.
+        n_neighbors = min(int(k) + 1, reference_size)
+
+    if n_neighbors <= 1:
+        return np.ones((n_states,), dtype=np.float32)
+
+    try:
+        from sklearn.neighbors import NearestNeighbors
+
+        nn = NearestNeighbors(n_neighbors=n_neighbors, algorithm="auto", n_jobs=-1)
+        nn.fit(reference_states)
+        distances, _ = nn.kneighbors(states, return_distance=True)
+        kth_distances = distances[:, -1].astype(np.float32)
+    except Exception as exc:
+        print(
+            "scikit-learn kNN is unavailable or failed. Falling back to a slower "
+            f"NumPy kNN implementation. Original error: {exc}"
+        )
+        kth_distances = _query_knn_distances_numpy(
+            query_states=states,
+            reference_states=reference_states,
+            k=n_neighbors,
+        )
+
+    q_low, q_high = np.quantile(kth_distances, [low_quantile, high_quantile])
+    if q_high <= q_low + eps:
+        coverage_conf = np.ones_like(kth_distances, dtype=np.float32)
+    else:
+        # distance <= q_low  -> dense  -> 1
+        # distance >= q_high -> sparse -> 0
+        coverage_conf = 1.0 - (kth_distances - q_low) / (q_high - q_low)
+        coverage_conf = np.clip(coverage_conf, 0.0, 1.0).astype(np.float32)
+
+    print(
+        "State coverage confidence: "
+        f"mean={coverage_conf.mean():.4f}, min={coverage_conf.min():.4f}, "
+        f"max={coverage_conf.max():.4f}, "
+        f"k={k}, reference_size={reference_size}, "
+        f"distance_q_low={q_low:.6f}, distance_q_high={q_high:.6f}"
+    )
+    return coverage_conf.astype(np.float32)
+
+
+
 def wrap_env(
     env: gym.Env,
     state_mean: Union[np.ndarray, float] = 0.0,
@@ -284,6 +393,7 @@ class ReplayBuffer:
         self._rewards = np.zeros((buffer_size, 1), dtype=np.float32)
         self._next_states = np.zeros((buffer_size, state_dim), dtype=np.float32)
         self._dones = np.zeros((buffer_size, 1), dtype=np.float32)
+        self._state_coverage_conf = np.ones((buffer_size, 1), dtype=np.float32)
         self._device = device
 
     def load_d4rl_dataset(self, data: Dict[str, np.ndarray]):
@@ -298,6 +408,8 @@ class ReplayBuffer:
         self._rewards[:n_transitions] = data["rewards"][..., None].astype(np.float32)
         self._next_states[:n_transitions] = data["next_observations"].astype(np.float32)
         self._dones[:n_transitions] = data["terminals"][..., None].astype(np.float32)
+        if "state_coverage_conf" in data:
+            self._state_coverage_conf[:n_transitions] = data["state_coverage_conf"][..., None].astype(np.float32)
         self._size += n_transitions
         self._pointer = min(self._size, n_transitions)
         print(f"Dataset size: {n_transitions}")
@@ -310,6 +422,7 @@ class ReplayBuffer:
             "rewards": self._rewards[indices],
             "next_observations": self._next_states[indices],
             "dones": self._dones[indices],
+            "state_coverage_conf": self._state_coverage_conf[indices],
         }
         return tree_to_device({k: jnp.asarray(v) for k, v in batch.items()}, self._device)
 
@@ -459,7 +572,7 @@ class ValueFunction(nn.Module):
 
 
 @struct.dataclass
-class SACDAFState:
+class CDAFState:
     total_it: jnp.ndarray
     q_params: Any
     q_target_params: Any
@@ -477,16 +590,11 @@ class ActorState:
     opt_state: Any
 
 
-class SACDAFJAX:
-    """Support-Aware Conservative Delayed Advantage Filtering for offline RL.
+class CDAFJAX:
+    """Conservative Delayed Advantage Filtering (CDAF) for offline RL.
 
-    SA-CDAF uses a single value network V(s). The value target is weighted by
-
-        w(s,a) = (1 - rho(s)) + rho(s) * beta(s,a),
-
-    where beta is the delayed advantage filter and rho is a state-support gate.
-    Sparse states (rho≈0) keep all-data SARSA-style value supervision; dense
-    states (rho≈1) use filtered good-action expectation.
+    Q, V, and the policy are updated jointly during the main training loop.
+    Evaluation uses the actor produced by the main training loop directly.
     """
     def __init__(
         self,
@@ -504,12 +612,9 @@ class SACDAFJAX:
         max_weight_exponent: float = 2.0,
         weight_logit_clip: float = 10.0,
         beta_min: float = 0.0,
-        rho_mode: str = "batch_knn",
-        rho_k: int = 10,
-        rho_distance_scale: float = 1.0,
-        rho_power: float = 2.0,
-        rho_min: float = 0.0,
-        actor_fit_method: str = "td3_bc",
+        use_coverage_aware_beta: bool = True,
+        adv_margin: float = 0.0,
+        actor_update_method: str = "td3_bc",
         policy_weight_exponent: float = 1.0,
         policy_weight_clip: float = 20.0,
         alpha: float = 2.5,
@@ -528,12 +633,9 @@ class SACDAFJAX:
         self.max_weight_exponent = max_weight_exponent
         self.weight_logit_clip = weight_logit_clip
         self.beta_min = beta_min
-        self.rho_mode = rho_mode
-        self.rho_k = rho_k
-        self.rho_distance_scale = rho_distance_scale
-        self.rho_power = rho_power
-        self.rho_min = rho_min
-        self.actor_fit_method = actor_fit_method
+        self.use_coverage_aware_beta = use_coverage_aware_beta
+        self.adv_margin = adv_margin
+        self.actor_update_method = actor_update_method
         self.policy_weight_exponent = policy_weight_exponent
         self.policy_weight_clip = policy_weight_clip
         self.alpha = alpha
@@ -557,10 +659,7 @@ class SACDAFJAX:
         q_params = self.q_def.init(key_q, dummy_state, dummy_action)["params"]
         v_params = self.v_def.init(key_v, dummy_state)["params"]
 
-        self.initial_actor_params = copy.deepcopy(actor_params)
-        self.initial_actor_opt_state = self.actor_tx.init(actor_params)
-
-        self.state = SACDAFState(
+        self.state = CDAFState(
             total_it=jnp.asarray(0, dtype=jnp.int32),
             q_params=q_params,
             q_target_params=copy.deepcopy(q_params),
@@ -573,22 +672,20 @@ class SACDAFJAX:
         )
         self.actor_state = ActorState(
             params=actor_params,
-            opt_state=self.initial_actor_opt_state,
+            opt_state=self.actor_tx.init(actor_params),
         )
 
         self.state = tree_to_device(self.state, self.device)
         self.actor_state = tree_to_device(self.actor_state, self.device)
-        self.initial_actor_params = tree_to_device(self.initial_actor_params, self.device)
-        self.initial_actor_opt_state = tree_to_device(self.initial_actor_opt_state, self.device)
-
         self._train_step = self._build_train_step()
-        self._actor_fit_step = self._build_actor_fit_step()
 
     def _build_train_step(self):
+        actor_apply = self.actor_def.apply
         q_apply = self.q_def.apply
         v_apply = self.v_def.apply
         q_tx = self.q_tx
         v_tx = self.v_tx
+        actor_tx = self.actor_tx
         discount = self.discount
         tau = self.tau
         delayed_update_period = self.delayed_update_period
@@ -596,15 +693,17 @@ class SACDAFJAX:
         max_weight_exponent = self.max_weight_exponent
         weight_logit_clip = self.weight_logit_clip
         beta_min = self.beta_min
-        rho_mode = self.rho_mode
-        rho_k = self.rho_k
-        rho_distance_scale = self.rho_distance_scale
-        rho_power = self.rho_power
-        rho_min = self.rho_min
+        use_coverage_aware_beta = self.use_coverage_aware_beta
+        adv_margin = self.adv_margin
+        actor_update_method = self.actor_update_method
+        policy_weight_exponent = self.policy_weight_exponent
+        policy_weight_clip = self.policy_weight_clip
+        alpha = self.alpha
+        bc_coef = self.bc_coef
         max_steps = self.max_steps
 
         @jax.jit
-        def train_step(state: SACDAFState, batch: TensorBatch):
+        def train_step(state: CDAFState, actor_state: ActorState, batch: TensorBatch):
             total_it = state.total_it + jnp.asarray(1, dtype=jnp.int32)
             observations = batch["observations"]
             actions = batch["actions"]
@@ -630,47 +729,91 @@ class SACDAFJAX:
             delayed_v = v_apply({"params": state.v_delayed_params}, observations)
             raw_delayed_adv = delayed_q - delayed_v
             delayed_adv = jnp.clip(raw_delayed_adv, -weight_logit_clip, weight_logit_clip)
-            beta = jnp.where(delayed_adv < 0.0, jnp.exp(exponent * delayed_adv), jnp.ones_like(delayed_adv))
+
+            # Original CDAF filters every negative advantage. The margin delays
+            # filtering until the negative advantage is large enough to be trusted:
+            #   delayed_adv >= -adv_margin -> beta_adv = 1
+            #   delayed_adv <  -adv_margin -> beta_adv decreases smoothly
+            shifted_negative_adv = delayed_adv + adv_margin
+            beta_adv = jnp.where(
+                delayed_adv < -adv_margin,
+                jnp.exp(exponent * shifted_negative_adv),
+                jnp.ones_like(delayed_adv),
+            )
+            beta_adv = jnp.maximum(beta_adv, beta_min)
+
+            if use_coverage_aware_beta:
+                coverage_conf = jnp.clip(jnp.squeeze(batch["state_coverage_conf"], axis=-1), 0.0, 1.0)
+            else:
+                coverage_conf = jnp.ones_like(beta_adv)
+
+            # coverage_conf c(s) gates how much we trust advantage filtering.
+            #   sparse state: c(s) ~= 0 -> beta ~= 1 -> V(s) learns from Q(s, a)
+            #   dense state:  c(s) ~= 1 -> beta ~= beta_adv -> original CDAF
+            filter_strength = coverage_conf * progress
+            beta = 1.0 - filter_strength * (1.0 - beta_adv)
             beta = jnp.maximum(beta, beta_min)
-
-            # rho(s): batch-local state-support gate. rho≈0 means this state is
-            # treated as sparse, so V(s) uses all dataset actions. rho≈1 means
-            # local action comparison is considered reliable, so V(s) uses the
-            # delayed-advantage filtered expectation.
-            def compute_rho(states: jnp.ndarray) -> jnp.ndarray:
-                if rho_mode == "constant":
-                    return jnp.ones((states.shape[0],), dtype=states.dtype)
-
-                diff = states[:, None, :] - states[None, :, :]
-                dist2 = jnp.sum(diff ** 2, axis=-1)
-                dist2 = dist2 + jnp.eye(states.shape[0], dtype=states.dtype) * 1e9
-                k = max(1, min(int(rho_k), int(states.shape[0]) - 1))
-                kth_dist2 = jnp.sort(dist2, axis=-1)[:, k - 1]
-                kth_dist = jnp.sqrt(jnp.maximum(kth_dist2, 1e-12))
-                scale = (
-                    jnp.asarray(rho_distance_scale, dtype=states.dtype)
-                    if rho_distance_scale > 0.0
-                    else jax.lax.stop_gradient(jnp.median(kth_dist) + 1e-6)
-                )
-                rho = 1.0 / (1.0 + (kth_dist / jnp.maximum(scale, 1e-6)) ** rho_power)
-                rho = jnp.maximum(rho, rho_min)
-                return jnp.clip(rho, 0.0, 1.0)
-
-            rho = compute_rho(observations)
-            rho_sg = jax.lax.stop_gradient(rho)
-            beta_sg = jax.lax.stop_gradient(beta)
-            value_weight = (1.0 - rho_sg) + rho_sg * beta_sg
 
             def v_loss_fn(v_params):
                 target_v_q = q_apply({"params": state.q_target_params}, observations, actions)
                 v = v_apply({"params": v_params}, observations)
                 value_residual = v - jax.lax.stop_gradient(target_v_q)
-                value_loss = jnp.mean(value_weight * value_residual ** 2)
+                value_loss = jnp.mean(jax.lax.stop_gradient(beta) * value_residual ** 2)
                 return value_loss, (v, target_v_q)
 
             (value_loss, (v, target_v_q)), v_grads = jax.value_and_grad(v_loss_fn, has_aux=True)(state.v_params)
             v_updates, v_opt_state = v_tx.update(v_grads, state.v_opt_state, state.v_params)
             v_params = optax.apply_updates(state.v_params, v_updates)
+
+            def actor_loss_fn(actor_params):
+                pi = actor_apply({"params": actor_params}, observations)
+                bc_per_sample = jnp.mean((pi - actions) ** 2, axis=-1)
+
+                # Dataset-action advantage weights for weighted BC variants.
+                # We use the current learned CDAF value V(s) as the baseline, so
+                # the actor update is consistent with Q(s,a)-V(s) during training.
+                if actor_update_method in ("weighted_bc", "td3_weighted_bc"):
+                    data_q = q_apply({"params": q_params}, observations, actions)
+                    data_v = v_apply({"params": v_params}, observations)
+                    data_adv = jnp.clip(data_q - data_v, -weight_logit_clip, weight_logit_clip)
+                    policy_weight = jnp.exp(policy_weight_exponent * data_adv)
+                    policy_weight = policy_weight / jnp.maximum(jnp.mean(policy_weight), 1e-6)
+                    policy_weight = jnp.minimum(policy_weight, policy_weight_clip)
+                    weighted_bc_loss = jnp.mean(jax.lax.stop_gradient(policy_weight) * bc_per_sample)
+                    weight_mean = jnp.mean(policy_weight)
+                    weight_max = jnp.max(policy_weight)
+                else:
+                    data_q = jnp.zeros_like(bc_per_sample)
+                    weighted_bc_loss = jnp.mean(bc_per_sample)
+                    weight_mean = jnp.asarray(1.0)
+                    weight_max = jnp.asarray(1.0)
+
+                bc_loss = jnp.mean(bc_per_sample)
+
+                if actor_update_method == "weighted_bc":
+                    actor_loss = weighted_bc_loss
+                    q_for_log = data_q
+                    lmbda = jnp.asarray(0.0)
+                else:
+                    q_pi = q_apply({"params": q_params}, observations, pi)
+                    lmbda = jax.lax.stop_gradient(alpha / jnp.maximum(jnp.mean(jnp.abs(q_pi)), 1e-6))
+                    bc_regularizer = weighted_bc_loss if actor_update_method == "td3_weighted_bc" else bc_loss
+                    actor_loss = -lmbda * jnp.mean(q_pi) + bc_coef * bc_regularizer
+                    q_for_log = q_pi
+
+                return actor_loss, (q_for_log, lmbda, bc_loss, weighted_bc_loss, weight_mean, weight_max)
+
+            (
+                actor_loss,
+                (actor_q, actor_lmbda, actor_bc_loss, actor_weighted_bc_loss, actor_weight_mean, actor_weight_max),
+            ), actor_grads = jax.value_and_grad(actor_loss_fn, has_aux=True)(actor_state.params)
+            actor_updates, actor_opt_state = actor_tx.update(
+                actor_grads,
+                actor_state.opt_state,
+                actor_state.params,
+            )
+            actor_params = optax.apply_updates(actor_state.params, actor_updates)
+            new_actor_state = ActorState(params=actor_params, opt_state=actor_opt_state)
 
             q_target_params = soft_update(q_params, state.q_target_params, tau)
             v_target_params = soft_update(v_params, state.v_target_params, tau)
@@ -689,7 +832,7 @@ class SACDAFJAX:
                 operand=None,
             )
 
-            new_state = SACDAFState(
+            new_state = CDAFState(
                 total_it=total_it,
                 q_params=q_params,
                 q_target_params=q_target_params,
@@ -708,15 +851,23 @@ class SACDAFJAX:
                 "value_loss": value_loss,
                 "v_mean": jnp.mean(v),
                 "target_v_q_mean": jnp.mean(target_v_q),
+                "actor_loss": actor_loss,
+                "actor_q_mean": jnp.mean(actor_q),
+                "actor_lambda": actor_lmbda,
+                "actor_bc_loss": actor_bc_loss,
+                "actor_weighted_bc_loss": actor_weighted_bc_loss,
+                "actor_bc_coef": jnp.asarray(bc_coef),
+                "actor_policy_weight_mean": actor_weight_mean,
+                "actor_policy_weight_max": actor_weight_max,
                 "beta_mean": jnp.mean(beta),
                 "beta_min": jnp.min(beta),
                 "beta_max": jnp.max(beta),
-                "rho_mean": jnp.mean(rho),
-                "rho_min": jnp.min(rho),
-                "rho_max": jnp.max(rho),
-                "value_weight_mean": jnp.mean(value_weight),
-                "value_weight_min": jnp.min(value_weight),
-                "value_weight_max": jnp.max(value_weight),
+                "beta_adv_mean": jnp.mean(beta_adv),
+                "coverage_conf_mean": jnp.mean(coverage_conf),
+                "coverage_conf_min": jnp.min(coverage_conf),
+                "coverage_conf_max": jnp.max(coverage_conf),
+                "filter_strength_mean": jnp.mean(filter_strength),
+                "adv_margin": jnp.asarray(adv_margin),
                 "weight_exponent": exponent,
                 "delayed_adv_mean": jnp.mean(delayed_adv),
                 "delayed_adv_min": jnp.min(delayed_adv),
@@ -727,97 +878,15 @@ class SACDAFJAX:
                 "clipped_low_frac": jnp.mean((raw_delayed_adv <= -weight_logit_clip).astype(jnp.float32)),
                 "clipped_high_frac": jnp.mean((raw_delayed_adv >= weight_logit_clip).astype(jnp.float32)),
                 "negative_adv_frac": jnp.mean((raw_delayed_adv < 0.0).astype(jnp.float32)),
+                "filtered_adv_frac": jnp.mean((delayed_adv < -adv_margin).astype(jnp.float32)),
             }
-            return new_state, log_dict
+            return new_state, new_actor_state, log_dict
 
         return train_step
 
-    def _build_actor_fit_step(self):
-        actor_apply = self.actor_def.apply
-        q_apply = self.q_def.apply
-        v_apply = self.v_def.apply
-        actor_tx = self.actor_tx
-        alpha = self.alpha
-        bc_coef = self.bc_coef
-        actor_fit_method = self.actor_fit_method
-        policy_weight_exponent = self.policy_weight_exponent
-        policy_weight_clip = self.policy_weight_clip
-        weight_logit_clip = self.weight_logit_clip
-
-        @jax.jit
-        def actor_fit_step(actor_state: ActorState, q_params: Any, v_params: Any, batch: TensorBatch):
-            observations = batch["observations"]
-            actions = batch["actions"]
-
-            def actor_loss_fn(actor_params):
-                pi = actor_apply({"params": actor_params}, observations)
-                bc_per_sample = jnp.mean((pi - actions) ** 2, axis=-1)
-
-                # Dataset-action advantage weights for weighted BC variants.
-                # The baseline is the unified value V(s), consistent with the
-                # training-time delayed advantage Q_d(s,a)-V_d(s).
-                if actor_fit_method in ("weighted_bc", "td3_weighted_bc"):
-                    data_q = q_apply({"params": q_params}, observations, actions)
-                    data_v = v_apply({"params": v_params}, observations)
-                    data_adv = jnp.clip(data_q - data_v, -weight_logit_clip, weight_logit_clip)
-                    policy_weight = jnp.exp(policy_weight_exponent * data_adv)
-                    policy_weight = policy_weight / jnp.maximum(jnp.mean(policy_weight), 1e-6)
-                    policy_weight = jnp.minimum(policy_weight, policy_weight_clip)
-                    weighted_bc_loss = jnp.mean(jax.lax.stop_gradient(policy_weight) * bc_per_sample)
-                    weight_mean = jnp.mean(policy_weight)
-                    weight_max = jnp.max(policy_weight)
-                else:
-                    data_q = jnp.zeros_like(bc_per_sample)
-                    weighted_bc_loss = jnp.mean(bc_per_sample)
-                    weight_mean = jnp.asarray(1.0)
-                    weight_max = jnp.asarray(1.0)
-
-                bc_loss = jnp.mean(bc_per_sample)
-
-                if actor_fit_method == "weighted_bc":
-                    actor_loss = weighted_bc_loss
-                    q_for_log = data_q
-                    lmbda = jnp.asarray(0.0)
-                else:
-                    q_pi = q_apply({"params": q_params}, observations, pi)
-                    lmbda = jax.lax.stop_gradient(alpha / jnp.maximum(jnp.mean(jnp.abs(q_pi)), 1e-6))
-                    bc_regularizer = jnp.where(
-                        actor_fit_method == "td3_weighted_bc",
-                        weighted_bc_loss,
-                        bc_loss,
-                    )
-                    actor_loss = -lmbda * jnp.mean(q_pi) + bc_coef * bc_regularizer
-                    q_for_log = q_pi
-                return actor_loss, (q_for_log, lmbda, bc_loss, weighted_bc_loss, weight_mean, weight_max)
-
-            (actor_loss, (q, lmbda, bc_loss, weighted_bc_loss, weight_mean, weight_max)), actor_grads = jax.value_and_grad(actor_loss_fn, has_aux=True)(actor_state.params)
-            updates, opt_state = actor_tx.update(actor_grads, actor_state.opt_state, actor_state.params)
-            params = optax.apply_updates(actor_state.params, updates)
-            new_actor_state = ActorState(params=params, opt_state=opt_state)
-            log_dict = {
-                "loss": actor_loss,
-                "q_mean": jnp.mean(q),
-                "lambda": lmbda,
-                "bc_loss": bc_loss,
-                "weighted_bc_loss": weighted_bc_loss,
-                "bc_coef": jnp.asarray(bc_coef),
-                "policy_weight_mean": weight_mean,
-                "policy_weight_max": weight_max,
-            }
-            return new_actor_state, log_dict
-
-        return actor_fit_step
-
     def train(self, batch: TensorBatch) -> Dict[str, float]:
-        self.state, log_dict = self._train_step(self.state, batch)
+        self.state, self.actor_state, log_dict = self._train_step(self.state, self.actor_state, batch)
         return {key: float(jax.device_get(value)) for key, value in log_dict.items()}
-
-    def reset_actor(self):
-        self.actor_state = ActorState(
-            params=self.initial_actor_params,
-            opt_state=self.initial_actor_opt_state,
-        )
-        self.actor_state = tree_to_device(self.actor_state, self.device)
 
     def actor_act(self, actor_params: Any, state: np.ndarray) -> np.ndarray:
         state_jnp = tree_to_device(jnp.asarray(state.reshape(1, -1), dtype=jnp.float32), self.device)
@@ -828,7 +897,6 @@ class SACDAFJAX:
         env.seed(seed)
         episode_rewards = []
         for ep in range(n_episodes):
-            print(f"Episodes : {ep}")
             state, done = env.reset(), False
             episode_reward = 0.0
             while not done:
@@ -838,172 +906,15 @@ class SACDAFJAX:
             episode_rewards.append(episode_reward)
         return np.asarray(episode_rewards, dtype=np.float32)
 
-    def fit_actor(
-        self,
-        replay_buffer: ReplayBuffer,
-        actor_state: ActorState,
-        steps: int,
-        batch_size: int,
-        eval_env: Optional[gym.Env] = None,
-        eval_episodes: int = 0,
-        eval_seed: int = 0,
-        eval_interval: int = 0,
-        prefix: str = "fit_actor",
-        save_dir: Optional[Union[str, Path]] = None,
-        loaded_checkpoint: Optional[Union[str, Path]] = None,
-        log_wandb_artifacts: bool = False,
-    ) -> Tuple[ActorState, Dict[str, Any]]:
-        eval_fit_log: Dict[str, Any] = {
-            f"{prefix}/final_loss": np.nan,
-            f"{prefix}/final_q": np.nan,
-            f"{prefix}/final_lambda": np.nan,
-            f"{prefix}/final_bc_loss": np.nan,
-            f"{prefix}/final_weighted_bc_loss": np.nan,
-            f"{prefix}/final_policy_weight_mean": np.nan,
-            f"{prefix}/final_policy_weight_max": np.nan,
-            f"{prefix}/final_score_mean": np.nan,
-            f"{prefix}/final_score_std": np.nan,
-            f"{prefix}/final_d4rl_normalized_score_mean": np.nan,
-            f"{prefix}/final_d4rl_normalized_score_std": np.nan,
-            f"{prefix}/best_score_mean": np.nan,
-            f"{prefix}/best_score_std": np.nan,
-            f"{prefix}/best_d4rl_normalized_score_mean": np.nan,
-            f"{prefix}/best_d4rl_normalized_score_std": np.nan,
-            f"{prefix}/inner_eval_steps": [],
-            f"{prefix}/inner_score_mean": [],
-            f"{prefix}/inner_score_std": [],
-            f"{prefix}/inner_d4rl_normalized_score_mean": [],
-            f"{prefix}/inner_d4rl_normalized_score_std": [],
-        }
-        if steps <= 0:
-            return actor_state, eval_fit_log
-
-        best_normalized_score_mean = -np.inf
-        q_params = self.state.q_params
-        v_params = self.state.v_params
-        save_dir_path = Path(save_dir) if save_dir is not None else None
-        if save_dir_path is not None:
-            save_dir_path.mkdir(parents=True, exist_ok=True)
-        loaded_checkpoint_value = "" if loaded_checkpoint is None else str(loaded_checkpoint)
-
-        for fit_step in range(1, steps + 1):
-            batch = replay_buffer.sample(batch_size)
-            actor_state, step_log = self._actor_fit_step(actor_state, q_params, v_params, batch)
-            step_log = {key: float(jax.device_get(value)) for key, value in step_log.items()}
-
-            eval_fit_log[f"{prefix}/final_loss"] = step_log["loss"]
-            eval_fit_log[f"{prefix}/final_q"] = step_log["q_mean"]
-            eval_fit_log[f"{prefix}/final_lambda"] = step_log["lambda"]
-            eval_fit_log[f"{prefix}/final_bc_loss"] = step_log["bc_loss"]
-            eval_fit_log[f"{prefix}/final_weighted_bc_loss"] = step_log["weighted_bc_loss"]
-            eval_fit_log[f"{prefix}/final_policy_weight_mean"] = step_log["policy_weight_mean"]
-            eval_fit_log[f"{prefix}/final_policy_weight_max"] = step_log["policy_weight_max"]
-
-            should_eval = (
-                eval_env is not None
-                and eval_episodes > 0
-                and eval_interval > 0
-                and (fit_step % eval_interval == 0 or fit_step == steps)
-            )
-            if should_eval:
-                eval_scores = self.eval_actor(
-                    eval_env,
-                    actor_state.params,
-                    n_episodes=eval_episodes,
-                    seed=eval_seed,
-                )
-                normalized_eval_scores = normalize_episode_scores(eval_env, eval_scores)
-
-                eval_score_mean = float(np.mean(eval_scores))
-                eval_score_std = float(np.std(eval_scores))
-                normalized_eval_score_mean = float(np.mean(normalized_eval_scores))
-                normalized_eval_score_std = float(np.std(normalized_eval_scores))
-
-                eval_fit_log[f"{prefix}/inner_eval_steps"].append(int(fit_step))
-                eval_fit_log[f"{prefix}/inner_score_mean"].append(eval_score_mean)
-                eval_fit_log[f"{prefix}/inner_score_std"].append(eval_score_std)
-                eval_fit_log[f"{prefix}/inner_d4rl_normalized_score_mean"].append(normalized_eval_score_mean)
-                eval_fit_log[f"{prefix}/inner_d4rl_normalized_score_std"].append(normalized_eval_score_std)
-                eval_fit_log[f"{prefix}/final_score_mean"] = eval_score_mean
-                eval_fit_log[f"{prefix}/final_score_std"] = eval_score_std
-                eval_fit_log[f"{prefix}/final_d4rl_normalized_score_mean"] = normalized_eval_score_mean
-                eval_fit_log[f"{prefix}/final_d4rl_normalized_score_std"] = normalized_eval_score_std
-
-                is_best = normalized_eval_score_mean > best_normalized_score_mean
-                if is_best:
-                    best_normalized_score_mean = normalized_eval_score_mean
-                    eval_fit_log[f"{prefix}/best_score_mean"] = eval_score_mean
-                    eval_fit_log[f"{prefix}/best_score_std"] = eval_score_std
-                    eval_fit_log[f"{prefix}/best_d4rl_normalized_score_mean"] = normalized_eval_score_mean
-                    eval_fit_log[f"{prefix}/best_d4rl_normalized_score_std"] = normalized_eval_score_std
-
-                if save_dir_path is not None:
-                    latest_actor_path = save_dir_path / "latest_actor.pkl"
-                    best_actor_path = save_dir_path / "best_actor.pkl"
-                    fit_eval_logs_path = save_dir_path / "fit_eval_logs.npz"
-
-                    save_pickle(
-                        latest_actor_path,
-                        serialization.to_state_dict(actor_state.params),
-                    )
-                    if is_best:
-                        save_pickle(
-                            best_actor_path,
-                            serialization.to_state_dict(actor_state.params),
-                        )
-                    save_logs_npz(
-                        [{"loaded_checkpoint": loaded_checkpoint_value, **eval_fit_log}],
-                        str(fit_eval_logs_path),
-                    )
-
-                    if log_wandb_artifacts and wandb.run is not None:
-                        wandb.save(str(latest_actor_path), policy="now")
-                        if is_best:
-                            wandb.save(str(best_actor_path), policy="now")
-                        wandb.save(str(fit_eval_logs_path), policy="now")
-
-                    print(
-                        f"Saved refit intermediate actor to: {latest_actor_path}"
-                    )
-                    if is_best:
-                        print(f"Saved best refit actor to:        {best_actor_path}")
-                    print(f"Saved refit logs to:              {fit_eval_logs_path}")
-
-                print(
-                    f"[{prefix}:{self.actor_fit_method}] step {fit_step}/{steps}: "
-                    f"loss={step_log['loss']:.4f}, q={step_log['q_mean']:.4f}, "
-                    f"lambda={step_log['lambda']:.4f}, bc_loss={step_log['bc_loss']:.4f}, "
-                    f"weighted_bc_loss={step_log['weighted_bc_loss']:.4f}, "
-                    f"weight_mean={step_log['policy_weight_mean']:.4f}, "
-                    f"eval_mean={eval_score_mean:.3f}, eval_std={eval_score_std:.3f}, "
-                    f"D4RL_mean={normalized_eval_score_mean:.3f}, "
-                    f"D4RL_std={normalized_eval_score_std:.3f}"
-                )
-
-        return actor_state, eval_fit_log
-
     def state_dict(self) -> Dict[str, Any]:
         return {
-            "sa_cdaf_state": serialization.to_state_dict(self.state),
+            "cdaf_state": serialization.to_state_dict(self.state),
             "actor_state": serialization.to_state_dict(self.actor_state),
-            "initial_actor_params": serialization.to_state_dict(self.initial_actor_params),
-            "initial_actor_opt_state": serialization.to_state_dict(self.initial_actor_opt_state),
         }
 
     def load_state_dict(self, state_dict: Dict[str, Any]):
-        state_key = "sa_cdaf_state" if "sa_cdaf_state" in state_dict else "cdaf_state"
-        self.state = serialization.from_state_dict(self.state, state_dict[state_key])
+        self.state = serialization.from_state_dict(self.state, state_dict["cdaf_state"])
         self.actor_state = serialization.from_state_dict(self.actor_state, state_dict["actor_state"])
-        if "initial_actor_params" in state_dict:
-            self.initial_actor_params = serialization.from_state_dict(
-                self.initial_actor_params,
-                state_dict["initial_actor_params"],
-            )
-        if "initial_actor_opt_state" in state_dict:
-            self.initial_actor_opt_state = serialization.from_state_dict(
-                self.initial_actor_opt_state,
-                state_dict["initial_actor_opt_state"],
-            )
         self.state = tree_to_device(self.state, self.device)
         self.actor_state = tree_to_device(self.actor_state, self.device)
 
@@ -1022,7 +933,7 @@ def resolve_checkpoint_path(
     run_name: Optional[str] = None,
     seed: Optional[int] = None,
 ) -> Tuple[Path, Path]:
-    """Return (run_dir, checkpoint_path) for a saved SA-CDAF checkpoint.
+    """Return (run_dir, checkpoint_path) for a saved CDAF checkpoint.
 
     Supported load_model formats:
 
@@ -1041,7 +952,7 @@ def resolve_checkpoint_path(
        --load_model logs/tuning/cdaf_jax/0.2/0.1
 
        resolves to:
-       logs/tuning/cdaf_jax/0.2/0.1/SA-CDAF-JAX-antmaze-medium-play-v2/0/checkpoint.pkl
+       logs/tuning/cdaf_jax/0.2/0.1/CDAF-JAX-antmaze-medium-play-v2/0/checkpoint.pkl
     """
     load_path = Path(load_model)
 
@@ -1114,9 +1025,7 @@ def resolve_checkpoint_path(
 @pyrallis.wrap()
 def train(config: TrainConfig):
     config = apply_env_hyperparams(config)
-    refit_only = config.load_model != "" and int(config.max_timesteps) <= 0
-    if not refit_only:
-        config = finalize_checkpoint_path(config)
+    config = finalize_checkpoint_path(config)
 
     jax_device = select_jax_device(config.device)
     env = gym.make(config.env)
@@ -1135,6 +1044,19 @@ def train(config: TrainConfig):
 
     dataset["observations"] = normalize_states(dataset["observations"], state_mean, state_std)
     dataset["next_observations"] = normalize_states(dataset["next_observations"], state_mean, state_std)
+
+    if config.use_coverage_aware_beta:
+        dataset["state_coverage_conf"] = compute_state_coverage_confidence(
+            dataset["observations"],
+            k=config.coverage_knn_k,
+            reference_size=config.coverage_reference_size,
+            low_quantile=config.coverage_low_quantile,
+            high_quantile=config.coverage_high_quantile,
+            seed=config.seed,
+        )
+    else:
+        dataset["state_coverage_conf"] = np.ones(dataset["observations"].shape[0], dtype=np.float32)
+
     env = wrap_env(env, state_mean=state_mean, state_std=state_std)
 
     replay_buffer = ReplayBuffer(
@@ -1147,7 +1069,7 @@ def train(config: TrainConfig):
 
     max_action = float(env.action_space.high[0])
 
-    if config.checkpoints_path is not None and not refit_only:
+    if config.checkpoints_path is not None:
         print(f"Checkpoints path: {config.checkpoints_path}")
         os.makedirs(config.checkpoints_path, exist_ok=True)
         config_path = os.path.join(config.checkpoints_path, "config.yaml")
@@ -1161,10 +1083,10 @@ def train(config: TrainConfig):
     set_seed(seed, env)
 
     print("---------------------------------------")
-    print(f"Training {ALGORITHM_NAME}-JAX, Env: {config.env}, Seed: {seed}")
+    print(f"Training {config.name}, Env: {config.env}, Seed: {seed}")
     print("---------------------------------------")
 
-    trainer = SACDAFJAX(
+    trainer = CDAFJAX(
         max_action=max_action,
         state_dim=state_dim,
         action_dim=action_dim,
@@ -1179,12 +1101,9 @@ def train(config: TrainConfig):
         max_weight_exponent=config.max_weight_exponent,
         weight_logit_clip=config.weight_logit_clip,
         beta_min=config.beta_min,
-        rho_mode=config.rho_mode,
-        rho_k=config.rho_k,
-        rho_distance_scale=config.rho_distance_scale,
-        rho_power=config.rho_power,
-        rho_min=config.rho_min,
-        actor_fit_method=config.actor_fit_method,
+        use_coverage_aware_beta=config.use_coverage_aware_beta,
+        adv_margin=config.adv_margin,
+        actor_update_method=config.actor_update_method,
         policy_weight_exponent=config.policy_weight_exponent,
         policy_weight_clip=config.policy_weight_clip,
         alpha=config.alpha,
@@ -1193,9 +1112,8 @@ def train(config: TrainConfig):
         device=jax_device,
     )
 
-    loaded_run_dir: Optional[Path] = None
     if config.load_model != "":
-        loaded_run_dir, checkpoint_path = resolve_checkpoint_path(
+        _, checkpoint_path = resolve_checkpoint_path(
             config.load_model,
             run_name=config.name,
             seed=config.seed,
@@ -1207,61 +1125,6 @@ def train(config: TrainConfig):
     if config.log_wandb:
         wandb_init(asdict(config))
 
-    if refit_only:
-        if loaded_run_dir is None:
-            raise ValueError("refit_only mode requires --load_model")
-
-        actor_refit_dir = loaded_run_dir / config.actor_refit_dir_name
-        actor_refit_dir.mkdir(parents=True, exist_ok=True)
-        print("---------------------------------------")
-        print(f"Actor refit from saved {ALGORITHM_NAME} checkpoint")
-        print(f"Saving actor refit outputs to: {actor_refit_dir}")
-        print("---------------------------------------")
-
-        fresh_actor_state = ActorState(
-            params=copy.deepcopy(trainer.initial_actor_params),
-            opt_state=copy.deepcopy(trainer.initial_actor_opt_state),
-        )
-        fresh_actor_state = tree_to_device(fresh_actor_state, jax_device)
-
-        refit_actor_state, refit_log = trainer.fit_actor(
-            replay_buffer=replay_buffer,
-            actor_state=fresh_actor_state,
-            steps=config.refit_actor_steps,
-            batch_size=config.eval_actor_batch_size,
-            eval_env=env,
-            eval_episodes=config.n_episodes,
-            eval_seed=config.seed,
-            eval_interval=config.eval_actor_eval_freq,
-            prefix="actor_refit",
-            save_dir=actor_refit_dir,
-            loaded_checkpoint=loaded_run_dir / "checkpoint.pkl",
-            log_wandb_artifacts=config.log_wandb,
-        )
-
-        save_pickle(
-            actor_refit_dir / "final_actor.pkl",
-            serialization.to_state_dict(refit_actor_state.params),
-        )
-        save_logs_npz(
-            [{"loaded_checkpoint": str(loaded_run_dir / "checkpoint.pkl"), **refit_log}],
-            str(actor_refit_dir / "fit_eval_logs.npz"),
-        )
-        with open(actor_refit_dir / "refit_config.yaml", "w") as f:
-            pyrallis.dump(config, f)
-
-        if config.log_wandb and wandb.run is not None:
-            wandb.save(str(actor_refit_dir / "final_actor.pkl"), policy="now")
-            wandb.save(str(actor_refit_dir / "fit_eval_logs.npz"), policy="now")
-            wandb.save(str(actor_refit_dir / "refit_config.yaml"), policy="now")
-
-        print("---------------------------------------")
-        print("Actor refit finished")
-        print(f"Saved final actor to: {actor_refit_dir / 'final_actor.pkl'}")
-        print(f"Saved fit logs to:    {actor_refit_dir / 'fit_eval_logs.npz'}")
-        print("---------------------------------------")
-        return
-
     eval_logs: List[Dict[str, Any]] = []
     for t in range(int(config.max_timesteps)):
         batch = replay_buffer.sample(config.batch_size)
@@ -1272,31 +1135,35 @@ def train(config: TrainConfig):
 
         if (t + 1) % config.eval_freq == 0:
             print(f"Time steps: {t + 1}")
-            if config.reset_actor_on_eval:
-                trainer.reset_actor()
 
-            actor_state, eval_fit_log = trainer.fit_actor(
-                replay_buffer=replay_buffer,
-                actor_state=trainer.actor_state,
-                steps=config.eval_actor_steps,
-                batch_size=config.eval_actor_batch_size,
-                eval_env=env,
-                eval_episodes=config.n_episodes,
-                eval_seed=config.seed,
-                eval_interval=config.eval_actor_eval_freq,
-                prefix="fit_actor",
+            eval_scores = trainer.eval_actor(
+                env,
+                trainer.actor_state.params,
+                n_episodes=config.n_episodes,
+                seed=config.seed,
             )
-            trainer.actor_state = actor_state
+            normalized_eval_scores = normalize_episode_scores(env, eval_scores)
+
+            eval_score_mean = float(np.mean(eval_scores))
+            eval_score_std = float(np.std(eval_scores))
+            normalized_eval_score_mean = float(np.mean(normalized_eval_scores))
+            normalized_eval_score_std = float(np.std(normalized_eval_scores))
 
             eval_log: Dict[str, Any] = {
                 "timestep": int(t + 1),
-                "eval/reward_mean": eval_fit_log["fit_actor/final_score_mean"],
-                "eval/reward_std": eval_fit_log["fit_actor/final_score_std"],
-                "eval/normalized_score_mean": eval_fit_log["fit_actor/final_d4rl_normalized_score_mean"],
-                "eval/normalized_score_std": eval_fit_log["fit_actor/final_d4rl_normalized_score_std"],
+                "eval/reward_mean": eval_score_mean,
+                "eval/reward_std": eval_score_std,
+                "eval/normalized_score_mean": normalized_eval_score_mean,
+                "eval/normalized_score_std": normalized_eval_score_std,
             }
-            eval_log.update(eval_fit_log)
             eval_logs.append(eval_log.copy())
+
+            print(
+                f"Evaluation over {config.n_episodes} episodes: "
+                f"reward_mean={eval_score_mean:.3f}, reward_std={eval_score_std:.3f}, "
+                f"D4RL_mean={normalized_eval_score_mean:.3f}, "
+                f"D4RL_std={normalized_eval_score_std:.3f}"
+            )
 
             if config.log_wandb:
                 wandb_eval_log = {
