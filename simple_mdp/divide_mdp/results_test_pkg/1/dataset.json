@@ -1,0 +1,404 @@
+{
+  "num_transitions": 24,
+  "num_trajectories": 4,
+  "transitions": [
+    {
+      "state": 0,
+      "action": 0,
+      "reward": 0.0,
+      "next_state": 1,
+      "done": false,
+      "trajectory_id": 0,
+      "timestep": 0
+    },
+    {
+      "state": 1,
+      "action": 0,
+      "reward": 0.0,
+      "next_state": 2,
+      "done": false,
+      "trajectory_id": 0,
+      "timestep": 1
+    },
+    {
+      "state": 2,
+      "action": 0,
+      "reward": 0.0,
+      "next_state": 3,
+      "done": false,
+      "trajectory_id": 0,
+      "timestep": 2
+    },
+    {
+      "state": 3,
+      "action": 0,
+      "reward": 1.0,
+      "next_state": 11,
+      "done": true,
+      "trajectory_id": 0,
+      "timestep": 3
+    },
+    {
+      "state": 0,
+      "action": 0,
+      "reward": 0.0,
+      "next_state": 1,
+      "done": false,
+      "trajectory_id": 1,
+      "timestep": 0
+    },
+    {
+      "state": 1,
+      "action": 1,
+      "reward": 0.0,
+      "next_state": 2,
+      "done": false,
+      "trajectory_id": 1,
+      "timestep": 1
+    },
+    {
+      "state": 2,
+      "action": 1,
+      "reward": 0.0,
+      "next_state": 3,
+      "done": false,
+      "trajectory_id": 1,
+      "timestep": 2
+    },
+    {
+      "state": 3,
+      "action": 1,
+      "reward": 1.0,
+      "next_state": 11,
+      "done": true,
+      "trajectory_id": 1,
+      "timestep": 3
+    },
+    {
+      "state": 0,
+      "action": 1,
+      "reward": 0.0,
+      "next_state": 4,
+      "done": false,
+      "trajectory_id": 2,
+      "timestep": 0
+    },
+    {
+      "state": 4,
+      "action": 0,
+      "reward": 0.0,
+      "next_state": 5,
+      "done": false,
+      "trajectory_id": 2,
+      "timestep": 1
+    },
+    {
+      "state": 5,
+      "action": 0,
+      "reward": 0.0,
+      "next_state": 6,
+      "done": false,
+      "trajectory_id": 2,
+      "timestep": 2
+    },
+    {
+      "state": 6,
+      "action": 0,
+      "reward": 0.0,
+      "next_state": 7,
+      "done": false,
+      "trajectory_id": 2,
+      "timestep": 3
+    },
+    {
+      "state": 7,
+      "action": 0,
+      "reward": 0.0,
+      "next_state": 8,
+      "done": false,
+      "trajectory_id": 2,
+      "timestep": 4
+    },
+    {
+      "state": 8,
+      "action": 0,
+      "reward": 0.0,
+      "next_state": 9,
+      "done": false,
+      "trajectory_id": 2,
+      "timestep": 5
+    },
+    {
+      "state": 9,
+      "action": 0,
+      "reward": 0.0,
+      "next_state": 10,
+      "done": false,
+      "trajectory_id": 2,
+      "timestep": 6
+    },
+    {
+      "state": 10,
+      "action": 0,
+      "reward": 1.0,
+      "next_state": 11,
+      "done": true,
+      "trajectory_id": 2,
+      "timestep": 7
+    },
+    {
+      "state": 0,
+      "action": 1,
+      "reward": 0.0,
+      "next_state": 4,
+      "done": false,
+      "trajectory_id": 3,
+      "timestep": 0
+    },
+    {
+      "state": 4,
+      "action": 1,
+      "reward": 0.0,
+      "next_state": 5,
+      "done": false,
+      "trajectory_id": 3,
+      "timestep": 1
+    },
+    {
+      "state": 5,
+      "action": 1,
+      "reward": 0.0,
+      "next_state": 6,
+      "done": false,
+      "trajectory_id": 3,
+      "timestep": 2
+    },
+    {
+      "state": 6,
+      "action": 1,
+      "reward": 0.0,
+      "next_state": 7,
+      "done": false,
+      "trajectory_id": 3,
+      "timestep": 3
+    },
+    {
+      "state": 7,
+      "action": 1,
+      "reward": 0.0,
+      "next_state": 8,
+      "done": false,
+      "trajectory_id": 3,
+      "timestep": 4
+    },
+    {
+      "state": 8,
+      "action": 1,
+      "reward": 0.0,
+      "next_state": 9,
+      "done": false,
+      "trajectory_id": 3,
+      "timestep": 5
+    },
+    {
+      "state": 9,
+      "action": 1,
+      "reward": 0.0,
+      "next_state": 10,
+      "done": false,
+      "trajectory_id": 3,
+      "timestep": 6
+    },
+    {
+      "state": 10,
+      "action": 1,
+      "reward": 1.0,
+      "next_state": 11,
+      "done": true,
+      "trajectory_id": 3,
+      "timestep": 7
+    }
+  ],
+  "trajectories": [
+    {
+      "trajectory_id": 0,
+      "branch": "short",
+      "branch_action": 0,
+      "states": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "actions": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "rewards": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "next_states": [
+        1,
+        2,
+        3,
+        11
+      ],
+      "dones": [
+        false,
+        false,
+        false,
+        true
+      ]
+    },
+    {
+      "trajectory_id": 1,
+      "branch": "short",
+      "branch_action": 1,
+      "states": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "actions": [
+        0,
+        1,
+        1,
+        1
+      ],
+      "rewards": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "next_states": [
+        1,
+        2,
+        3,
+        11
+      ],
+      "dones": [
+        false,
+        false,
+        false,
+        true
+      ]
+    },
+    {
+      "trajectory_id": 2,
+      "branch": "long",
+      "branch_action": 0,
+      "states": [
+        0,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "actions": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "rewards": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "next_states": [
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "dones": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true
+      ]
+    },
+    {
+      "trajectory_id": 3,
+      "branch": "long",
+      "branch_action": 1,
+      "states": [
+        0,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "actions": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "rewards": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "next_states": [
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "dones": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true
+      ]
+    }
+  ]
+}

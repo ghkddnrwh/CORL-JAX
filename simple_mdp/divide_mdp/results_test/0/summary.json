@@ -1,0 +1,243 @@
+{
+  "env_name": "two_path_branching_mdp",
+  "short_horizon": 4,
+  "branch_num_actions": 2,
+  "num_states": 12,
+  "num_actions": 2,
+  "reward_value": 1.0,
+  "coverage": [
+    [
+      2,
+      2
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      0,
+      0
+    ]
+  ],
+  "optimal_policy": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "optimal_return": 0.9702989999999999,
+  "learned_policy": [
+    0,
+    0,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    0,
+    1,
+    1,
+    0
+  ],
+  "learned_return": 0.970299,
+  "return_gap": -1.1102230246251565e-16,
+  "chosen_branch": "short",
+  "chose_short_path": true,
+  "selected_optimal_path": true,
+  "optimal_branch": "short",
+  "short_path_return": 0.970299,
+  "long_path_return": 0.9320653479069899,
+  "learned_actions": [
+    0,
+    0,
+    1,
+    1
+  ],
+  "learned_rewards": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+  ],
+  "learned_states": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "learned_state_names": [
+    "s_0",
+    "s_1_1",
+    "s_1_2",
+    "s_1_3"
+  ],
+  "action_reward_table": [
+    {
+      "state": 0,
+      "state_name": "s_0",
+      "valid_actions": [
+        0,
+        1
+      ],
+      "action_0_reward": 0.0,
+      "action_1_reward": 0.0
+    },
+    {
+      "state": 1,
+      "state_name": "s_1_1",
+      "valid_actions": [
+        0,
+        1
+      ],
+      "action_0_reward": 0.0,
+      "action_1_reward": 0.0
+    },
+    {
+      "state": 2,
+      "state_name": "s_1_2",
+      "valid_actions": [
+        0,
+        1
+      ],
+      "action_0_reward": 0.0,
+      "action_1_reward": 0.0
+    },
+    {
+      "state": 3,
+      "state_name": "s_1_3",
+      "valid_actions": [
+        0,
+        1
+      ],
+      "action_0_reward": 1.0,
+      "action_1_reward": 1.0
+    },
+    {
+      "state": 4,
+      "state_name": "s_2_1",
+      "valid_actions": [
+        0,
+        1
+      ],
+      "action_0_reward": 0.0,
+      "action_1_reward": 0.0
+    },
+    {
+      "state": 5,
+      "state_name": "s_2_2",
+      "valid_actions": [
+        0,
+        1
+      ],
+      "action_0_reward": 0.0,
+      "action_1_reward": 0.0
+    },
+    {
+      "state": 6,
+      "state_name": "s_2_3",
+      "valid_actions": [
+        0,
+        1
+      ],
+      "action_0_reward": 0.0,
+      "action_1_reward": 0.0
+    },
+    {
+      "state": 7,
+      "state_name": "s_2_4",
+      "valid_actions": [
+        0,
+        1
+      ],
+      "action_0_reward": 0.0,
+      "action_1_reward": 0.0
+    },
+    {
+      "state": 8,
+      "state_name": "s_2_5",
+      "valid_actions": [
+        0,
+        1
+      ],
+      "action_0_reward": 0.0,
+      "action_1_reward": 0.0
+    },
+    {
+      "state": 9,
+      "state_name": "s_2_6",
+      "valid_actions": [
+        0,
+        1
+      ],
+      "action_0_reward": 0.0,
+      "action_1_reward": 0.0
+    },
+    {
+      "state": 10,
+      "state_name": "s_2_7",
+      "valid_actions": [
+        0,
+        1
+      ],
+      "action_0_reward": 1.0,
+      "action_1_reward": 1.0
+    },
+    {
+      "state": 11,
+      "state_name": "s_1_4(=s_2_8)",
+      "valid_actions": [
+        0
+      ],
+      "action_0_reward": 0.0,
+      "action_1_reward": null
+    }
+  ],
+  "num_dataset_trajectories": 4,
+  "expected_num_dataset_trajectories": 4,
+  "seed": 0
+}

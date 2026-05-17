@@ -1,0 +1,23 @@
+{
+  "num_seeds": 10,
+  "seed_start": 0,
+  "short_path_selection_probability": 0.6,
+  "optimal_path_selection_probability": 0.6,
+  "mean_learned_return": 0.2759709845526487,
+  "std_learned_return": 0.11483042952922912,
+  "optimal_return": 0.36972963764972655,
+  "gamma": 0.99,
+  "note": "When gamma < 1, the short path is the unique optimal path.",
+  "run_dirs": [
+    "results/N=100/A=2/R=1.0/sigma=0.0/clipped_q_learning/batch_size=1__gamma=0.99__init_std=0.001__learning_rate=0.1__noise_std=0.0__num_epochs=50__num_q=2__policy_extraction=mean__polyak_tau=1.0__reward_value=1.0__seed=0__target_update_freq=1__update_mode=sample",
+    "results/N=100/A=2/R=1.0/sigma=0.0/clipped_q_learning/batch_size=1__gamma=0.99__init_std=0.001__learning_rate=0.1__noise_std=0.0__num_epochs=50__num_q=2__policy_extraction=mean__polyak_tau=1.0__reward_value=1.0__seed=1__target_update_freq=1__update_mode=sample",
+    "results/N=100/A=2/R=1.0/sigma=0.0/clipped_q_learning/batch_size=1__gamma=0.99__init_std=0.001__learning_rate=0.1__noise_std=0.0__num_epochs=50__num_q=2__policy_extraction=mean__polyak_tau=1.0__reward_value=1.0__seed=2__target_update_freq=1__update_mode=sample",
+    "results/N=100/A=2/R=1.0/sigma=0.0/clipped_q_learning/batch_size=1__gamma=0.99__init_std=0.001__learning_rate=0.1__noise_std=0.0__num_epochs=50__num_q=2__policy_extraction=mean__polyak_tau=1.0__reward_value=1.0__seed=3__target_update_freq=1__update_mode=sample",
+    "results/N=100/A=2/R=1.0/sigma=0.0/clipped_q_learning/batch_size=1__gamma=0.99__init_std=0.001__learning_rate=0.1__noise_std=0.0__num_epochs=50__num_q=2__policy_extraction=mean__polyak_tau=1.0__reward_value=1.0__seed=4__target_update_freq=1__update_mode=sample",
+    "results/N=100/A=2/R=1.0/sigma=0.0/clipped_q_learning/batch_size=1__gamma=0.99__init_std=0.001__learning_rate=0.1__noise_std=0.0__num_epochs=50__num_q=2__policy_extraction=mean__polyak_tau=1.0__reward_value=1.0__seed=5__target_update_freq=1__update_mode=sample",
+    "results/N=100/A=2/R=1.0/sigma=0.0/clipped_q_learning/batch_size=1__gamma=0.99__init_std=0.001__learning_rate=0.1__noise_std=0.0__num_epochs=50__num_q=2__policy_extraction=mean__polyak_tau=1.0__reward_value=1.0__seed=6__target_update_freq=1__update_mode=sample",
+    "results/N=100/A=2/R=1.0/sigma=0.0/clipped_q_learning/batch_size=1__gamma=0.99__init_std=0.001__learning_rate=0.1__noise_std=0.0__num_epochs=50__num_q=2__policy_extraction=mean__polyak_tau=1.0__reward_value=1.0__seed=7__target_update_freq=1__update_mode=sample",
+    "results/N=100/A=2/R=1.0/sigma=0.0/clipped_q_learning/batch_size=1__gamma=0.99__init_std=0.001__learning_rate=0.1__noise_std=0.0__num_epochs=50__num_q=2__policy_extraction=mean__polyak_tau=1.0__reward_value=1.0__seed=8__target_update_freq=1__update_mode=sample",
+    "results/N=100/A=2/R=1.0/sigma=0.0/clipped_q_learning/batch_size=1__gamma=0.99__init_std=0.001__learning_rate=0.1__noise_std=0.0__num_epochs=50__num_q=2__policy_extraction=mean__polyak_tau=1.0__reward_value=1.0__seed=9__target_update_freq=1__update_mode=sample"
+  ]
+}

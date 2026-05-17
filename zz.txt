@@ -1,0 +1,92 @@
+(corl) ukjo1@ccrl-Precision-7920-Tower:~/research/ssd1/offline_rl/insampling$ ps -ef | grep python
+root        3143       1  0  5월08 ?      00:00:00 /usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal
+ukjo1     169499  169455  0 13:46 ?        00:00:01 /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python-env-tools/bin/pet server
+ukjo1     215858  215857 99 15:31 pts/152  00:15:22 python algorithms/uk_offline/basic/iql_jax.py --env antmaze-large-diverse-v2 --hyperparams_path hyperparams/iql_jax.yml --device gpu --seed 0 --checkpoints_path logs/basic --log_wandb False
+ukjo1     216432  216431 99 15:31 pts/156  00:15:13 python algorithms/uk_offline/basic/iql_jax.py --env antmaze-large-play-v2 --hyperparams_path hyperparams/iql_jax.yml --device gpu --seed 0 --checkpoints_path logs/basic --log_wandb False
+kill -9 218018
+kill -9 218019
+kill -9 218020
+kill -9 218021
+kill -9 218022
+kill -9 218023
+kill -9 218024
+kill -9 218025
+kill -9 218026
+kill -9 218027
+kill -9 218028
+kill -9 218029
+kill -9 218030
+kill -9 218031
+kill -9 218032
+kill -9 218033
+kill -9 218034
+kill -9 218035
+kill -9 218036
+kill -9 218037
+kill -9 218038
+kill -9 218039
+kill -9 218040
+kill -9 218041
+kill -9 218042
+kill -9 218043
+kill -9 218044
+kill -9 218045
+kill -9 218046
+kill -9 218047
+kill -9 218048
+kill -9 218049
+kill -9 218050
+kill -9 218051
+kill -9 218052
+kill -9 218053
+kill -9 218054
+kill -9 218055
+kill -9 218056
+kill -9 218057
+kill -9 241747
+kill -9 241748
+kill -9 241749
+kill -9 241750
+kill -9 241751
+kill -9 241752
+kill -9 241753
+kill -9 241754
+kill -9 241755
+kill -9 241756
+kill -9 241757
+kill -9 241758
+kill -9 241759
+kill -9 241760
+kill -9 241761
+kill -9 241762
+kill -9 241763
+kill -9 241764
+kill -9 241765
+kill -9 241766
+kill -9 241767
+kill -9 241768
+kill -9 241769
+kill -9 241770
+kill -9 241771
+kill -9 241772
+kill -9 241773
+kill -9 241774
+kill -9 241775
+kill -9 241776
+kill -9 241777
+kill -9 241778
+kill -9 241779
+kill -9 241780
+kill -9 241781
+kill -9 241782
+kill -9 241783
+kill -9 241784
+kill -9 241785
+kill -9 241786
+ukjo1     297670  110930  0 15:44 pts/148  00:00:00 grep --color=auto python
+ukjo1    3904749 3904157  0 08:55 ?        00:00:01 /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python-env-tools/bin/pet server
+ukjo1    3905196 3904699  0 08:55 ?        00:00:01 /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python-env-tools/bin/pet server
+ukjo1    3906334 3904699  0 08:55 ?        00:00:00 /home/ukjo1/anaconda3/envs/action_robust/bin/python /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python_files/run-jedi-language-server.py
+ukjo1    3906431 3904158  0 08:55 ?        00:00:01 /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python-env-tools/bin/pet server
+ukjo1    3906955 3904158  0 08:55 ?        00:00:00 /home/ukjo1/anaconda3/envs/for_git/bin/python /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python_files/run-jedi-language-server.py
+ukjo1    3906968 3906955  0 08:55 ?        00:00:00 /home/ukjo1/anaconda3/envs/for_git/bin/python /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python_files/lib/jedilsp/jedi/inference/compiled/subprocess/__main__.py /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python_files/lib/jedilsp 3.9.21

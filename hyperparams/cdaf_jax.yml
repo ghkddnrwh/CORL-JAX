@@ -1,0 +1,134 @@
+# Hyperparameters for CDAF-JAX (Conservative Delayed Advantage Filtering)
+#
+# Notes:
+# - This file follows an RL-Zoo-style format: each top-level environment id has its own config.
+# - `n_timesteps` is treated as an alias for `max_timesteps` by the CDAF runner.
+# - CLI arguments override values loaded from this YAML file.
+# - YAML anchors/merge keys are used to avoid repeating identical hyperparameters.
+# - Top-level keys beginning with `_` are anchor definitions, not environments.
+
+_common: &common
+  n_timesteps: !!float 1e6
+  eval_freq: 25000
+
+  # Dataset
+  buffer_size: 10000000
+  batch_size: 256
+  normalize: true
+
+  # CDAF value learning
+  discount: 0.99
+  tau: 0.005
+  qf_lr: !!float 3e-4
+  vf_lr: !!float 3e-4
+  delayed_update_period: 250
+  min_weight_exponent: 0.0
+  max_weight_exponent: 0.25
+  weight_logit_clip: 10.0
+  beta_min: 0.0
+
+  # TD3+BC actor fitting / refit
+  actor_lr: !!float 3e-4
+  eval_actor_steps: 2000
+  eval_actor_batch_size: 256
+  eval_actor_eval_freq: 2000
+  refit_actor_steps: 50000
+  actor_refit_dir_name: "actor_refit"
+  reset_actor_on_eval: false
+  alpha: 2.5
+  bc_coef: 1.0
+
+_mujoco: &mujoco
+  <<: *common
+  n_episodes: 10
+  normalize_reward: false
+
+_antmaze: &antmaze
+  <<: *common
+  n_episodes: 100
+  normalize_reward: true
+
+# -----------------------------------------------------------------------------
+# MuJoCo locomotion: 3 environments x 6 datasets
+# Environments: halfcheetah, hopper, walker2d
+# Datasets: random, medium, medium-replay, medium-expert, expert, full-replay
+# -----------------------------------------------------------------------------
+
+# HalfCheetah
+halfcheetah-random-v2:
+  <<: *mujoco
+
+halfcheetah-medium-v2:
+  <<: *mujoco
+
+halfcheetah-medium-replay-v2:
+  <<: *mujoco
+
+halfcheetah-medium-expert-v2:
+  <<: *mujoco
+
+halfcheetah-expert-v2:
+  <<: *mujoco
+
+halfcheetah-full-replay-v2:
+  <<: *mujoco
+
+# Hopper
+hopper-random-v2:
+  <<: *mujoco
+
+hopper-medium-v2:
+  <<: *mujoco
+
+hopper-medium-replay-v2:
+  <<: *mujoco
+
+hopper-medium-expert-v2:
+  <<: *mujoco
+
+hopper-expert-v2:
+  <<: *mujoco
+
+hopper-full-replay-v2:
+  <<: *mujoco
+
+# Walker2d
+walker2d-random-v2:
+  <<: *mujoco
+
+walker2d-medium-v2:
+  <<: *mujoco
+
+walker2d-medium-replay-v2:
+  <<: *mujoco
+
+walker2d-medium-expert-v2:
+  <<: *mujoco
+
+walker2d-expert-v2:
+  <<: *mujoco
+
+walker2d-full-replay-v2:
+  <<: *mujoco
+
+# -----------------------------------------------------------------------------
+# AntMaze: 6 datasets
+# -----------------------------------------------------------------------------
+
+antmaze-umaze-v2:
+  <<: *antmaze
+
+antmaze-umaze-diverse-v2:
+  <<: *antmaze
+
+antmaze-medium-play-v2:
+  <<: *antmaze
+
+antmaze-medium-diverse-v2:
+  <<: *antmaze
+
+antmaze-large-play-v2:
+  <<: *antmaze
+
+antmaze-large-diverse-v2:
+  <<: *antmaze

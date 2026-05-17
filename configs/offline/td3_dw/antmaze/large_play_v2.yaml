@@ -1,0 +1,7 @@
+buffer_size: 10000000
+project: ORL-BIAS
+name: TD3-DW
+env: antmaze-large-play-v2
+n_episodes: 100
+normalize_reward: true
+group: TD3-DW

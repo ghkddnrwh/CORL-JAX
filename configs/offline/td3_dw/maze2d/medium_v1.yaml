@@ -1,0 +1,6 @@
+buffer_size: 10000000
+project: ORL-BIAS
+name: TD3-DW
+env: maze2d-medium-v1
+n_episodes: 100
+group: TD3-DW

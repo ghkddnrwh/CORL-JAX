@@ -1,0 +1,225 @@
+# Hyperparameters for IQL-JAX (Implicit Q-Learning)
+#
+# Notes:
+# - This file follows an RL-Zoo-style format: each top-level environment id has its own config.
+# - `n_timesteps` is treated as an alias for `max_timesteps` by the IQL-JAX runner.
+# - CLI arguments override values loaded from this YAML file.
+# - YAML anchors/merge keys are used to avoid repeating identical hyperparameters.
+# - Top-level keys beginning with `_` are anchor definitions, not environments.
+# - The original PyTorch configs use eval_freq: 5000, but the PyTorch TrainConfig multiplies
+#   eval_freq by 5 in __post_init__. Therefore this JAX config uses 25000 directly.
+
+_common: &common
+  n_timesteps: !!float 1e6
+  eval_freq: 25000
+  log_every: 500
+
+  # Dataset
+  buffer_size: 10000000
+  batch_size: 256
+  normalize: true
+
+  # IQL value/Q/actor learning
+  discount: 0.99
+  tau: 0.005
+  beta: 3.0
+  iql_tau: 0.7
+  iql_deterministic: false
+  qf_lr: !!float 3e-4
+  vf_lr: !!float 3e-4
+  actor_lr: !!float 3e-4
+
+  # Standalone actor refit from a saved checkpoint
+  refit_actor_steps: 50000
+  refit_actor_batch_size: 256
+  refit_actor_eval_freq: 2000
+  actor_refit_dir_name: "actor_refit"
+  refit_from_scratch: true
+
+_mujoco: &mujoco
+  <<: *common
+  n_episodes: 10
+  normalize_reward: false
+
+_hopper_medium: &hopper_medium
+  <<: *mujoco
+  tau: 0.001
+  iql_deterministic: true
+  normalize_reward: true
+
+_hopper_medium_expert: &hopper_medium_expert
+  <<: *mujoco
+  beta: 6.0
+  iql_tau: 0.5
+
+_antmaze: &antmaze
+  <<: *common
+  n_episodes: 10
+  normalize_reward: true
+  beta: 10.0
+  iql_tau: 0.9
+
+_maze2d: &maze2d
+  <<: *common
+  n_episodes: 100
+  normalize_reward: false
+
+_adroit: &adroit
+  <<: *common
+  n_episodes: 10
+  normalize_reward: false
+  iql_tau: 0.8
+  actor_dropout: 0.1
+
+# -----------------------------------------------------------------------------
+# MuJoCo locomotion: 3 environments x 6 datasets
+# Environments: halfcheetah, hopper, walker2d
+# Datasets: random, medium, medium-replay, medium-expert, expert, full-replay
+# -----------------------------------------------------------------------------
+
+# HalfCheetah
+halfcheetah-random-v2:
+  <<: *mujoco
+
+halfcheetah-medium-v2:
+  <<: *mujoco
+
+halfcheetah-medium-replay-v2:
+  <<: *mujoco
+
+halfcheetah-medium-expert-v2:
+  <<: *mujoco
+
+halfcheetah-expert-v2:
+  <<: *mujoco
+
+halfcheetah-full-replay-v2:
+  <<: *mujoco
+
+# Hopper
+hopper-random-v2:
+  <<: *mujoco
+
+hopper-medium-v2:
+  <<: *hopper_medium
+
+hopper-medium-replay-v2:
+  <<: *hopper_medium
+
+hopper-medium-expert-v2:
+  <<: *hopper_medium_expert
+
+hopper-expert-v2:
+  <<: *mujoco
+
+hopper-full-replay-v2:
+  <<: *mujoco
+
+# Walker2d
+walker2d-random-v2:
+  <<: *mujoco
+
+walker2d-medium-v2:
+  <<: *mujoco
+
+walker2d-medium-replay-v2:
+  <<: *mujoco
+
+walker2d-medium-expert-v2:
+  <<: *mujoco
+
+walker2d-expert-v2:
+  <<: *mujoco
+
+walker2d-full-replay-v2:
+  <<: *mujoco
+
+# -----------------------------------------------------------------------------
+# AntMaze: 6 datasets
+# -----------------------------------------------------------------------------
+
+antmaze-umaze-v2:
+  <<: *antmaze
+
+antmaze-umaze-diverse-v2:
+  <<: *antmaze
+
+antmaze-medium-play-v2:
+  <<: *antmaze
+
+antmaze-medium-diverse-v2:
+  <<: *antmaze
+
+antmaze-large-play-v2:
+  <<: *antmaze
+
+antmaze-large-diverse-v2:
+  <<: *antmaze
+
+# -----------------------------------------------------------------------------
+# Maze2D: 6 datasets
+# -----------------------------------------------------------------------------
+
+maze2d-umaze-v1:
+  <<: *maze2d
+
+maze2d-umaze-dense-v1:
+  <<: *maze2d
+
+maze2d-medium-v1:
+  <<: *maze2d
+
+maze2d-medium-dense-v1:
+  <<: *maze2d
+
+maze2d-large-v1:
+  <<: *maze2d
+
+maze2d-large-dense-v1:
+  <<: *maze2d
+
+# -----------------------------------------------------------------------------
+# Adroit manipulation: 4 environments x 3 datasets
+# Environments: pen, door, hammer, relocate
+# Datasets: human, cloned, expert
+# -----------------------------------------------------------------------------
+
+# Pen
+pen-human-v1:
+  <<: *adroit
+
+pen-cloned-v1:
+  <<: *adroit
+
+pen-expert-v1:
+  <<: *adroit
+
+# Door
+door-human-v1:
+  <<: *adroit
+
+door-cloned-v1:
+  <<: *adroit
+
+door-expert-v1:
+  <<: *adroit
+
+# Hammer
+hammer-human-v1:
+  <<: *adroit
+
+hammer-cloned-v1:
+  <<: *adroit
+
+hammer-expert-v1:
+  <<: *adroit
+
+# Relocate
+relocate-human-v1:
+  <<: *adroit
+
+relocate-cloned-v1:
+  <<: *adroit
+
+relocate-expert-v1:
+  <<: *adroit
