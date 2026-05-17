@@ -22,7 +22,7 @@ from flax import serialization, struct
 
 TensorBatch = Dict[str, jnp.ndarray]
 
-# ALGORITHM_NAME = "CDAF"
+ALGORITHM_NAME = "CDAF"
 ALGORITHM_FULL_NAME = "Conservative Delayed Advantage Filtering"
 
 
@@ -32,16 +32,24 @@ class TrainConfig:
     device: str = "gpu"  # one of: cpu, gpu, tpu. JAX selects the matching backend when available.
     env: str = "halfcheetah-medium-expert-v2"
     seed: int = 0
+    # Shared scheduling fields. Their meaning is selected by mode:
+    #   mode="train": eval_freq evaluates pi every eval_freq joint Q/V/pi training steps.
+    #   mode="refit": eval_freq evaluates pi every eval_freq actor-only refit steps.
     eval_freq: int = int(25e3)
     n_episodes: int = 10
+    #   mode="train": max_timesteps is the number of joint Q/V/pi training steps.
+    #   mode="refit": max_timesteps is the number of actor-only refit steps.
     max_timesteps: int = int(1e6)
     checkpoints_path: Optional[str] = None
     load_model: str = ""
+    mode: str = "train"  # one of: train, refit. refit loads Q/V and trains only pi.
     hyperparams_path: Optional[str] = "hyperparams/cdaf_jax.yml"
     use_hyperparams: bool = True
 
     # Dataset
     buffer_size: int = 2_000_000
+    #   mode="train": batch_size is used for joint Q/V/pi updates.
+    #   mode="refit": batch_size is used for actor-only refit updates.
     batch_size: int = 256
     normalize: bool = True
     normalize_reward: bool = False
@@ -75,14 +83,22 @@ class TrainConfig:
     alpha: float = 2.5
     bc_coef: float = 1.0
 
-    # Actor update objective.
+    # Actor objective used in both modes.
+    #   mode="train": actor_update_method is used while Q/V/pi are jointly updated.
+    #   mode="refit": the same actor_update_method is used while Q/V are frozen
+    #                  and only pi is refit.
     # td3_bc uses the TD3+BC actor objective.
     # weighted_bc is fully in-sample: weighted behavior cloning from dataset actions.
     # td3_weighted_bc keeps the TD3+BC Q-improvement term, but replaces the plain
     # BC regularizer with advantage-weighted BC from dataset actions.
-    actor_update_method: str = "td3_bc"  # one of: td3_bc, weighted_bc, td3_weighted_bc
+    actor_update_method: str = "td3_weighted_bc"  # one of: td3_bc, weighted_bc, td3_weighted_bc
     policy_weight_exponent: float = 1.0
     policy_weight_clip: float = 20.0
+    # Refit reuses the shared schedule fields above instead of separate names:
+    #   max_timesteps -> actor-only refit steps
+    #   batch_size    -> actor-only refit batch size
+    #   eval_freq     -> actor-only refit evaluation interval
+    actor_refit_dir_name: str = "actor_refit"
 
     # Logging
     project: str = "ORL-BIAS"
@@ -116,6 +132,7 @@ def validate_config(config: TrainConfig) -> None:
     assert config.max_weight_exponent >= config.min_weight_exponent
     assert config.delayed_update_period > 0
     assert config.bc_coef >= 0.0
+    assert config.mode in ("train", "refit"), "mode must be train or refit"
     assert config.policy_weight_exponent >= 0.0, "policy_weight_exponent must be >= 0"
     assert config.policy_weight_clip > 0.0, "policy_weight_clip must be > 0"
     assert config.actor_update_method in (
@@ -124,6 +141,11 @@ def validate_config(config: TrainConfig) -> None:
         "td3_weighted_bc",
     ), "actor_update_method must be td3_bc, weighted_bc, or td3_weighted_bc"
     assert config.batch_size > 0
+    assert config.eval_freq > 0
+    assert config.max_timesteps >= 0
+    assert config.actor_refit_dir_name != ""
+    if config.mode == "refit":
+        assert config.load_model != "", "mode='refit' requires --load_model"
 
 
 def _cli_overridden_fields(argv: Optional[List[str]] = None) -> set:
@@ -176,8 +198,6 @@ def apply_env_hyperparams(config: TrainConfig) -> TrainConfig:
     cli_overrides = _cli_overridden_fields()
     aliases = {
         "n_timesteps": "max_timesteps",
-        # Backward compatibility for older hyperparameter files.
-        "actor_fit_method": "actor_update_method",
     }
     config_fields = set(TrainConfig.__dataclass_fields__.keys())
     applied, skipped_unknown, skipped_cli = [], [], []
@@ -665,6 +685,9 @@ class CDAFJAX:
         q_params = self.q_def.init(key_q, dummy_state, dummy_action)["params"]
         v_params = self.v_def.init(key_v, dummy_state)["params"]
 
+        self.initial_actor_params = copy.deepcopy(actor_params)
+        self.initial_actor_opt_state = self.actor_tx.init(actor_params)
+
         self.state = CDAFState(
             total_it=jnp.asarray(0, dtype=jnp.int32),
             q_params=q_params,
@@ -678,13 +701,16 @@ class CDAFJAX:
         )
         self.actor_state = ActorState(
             params=actor_params,
-            opt_state=self.actor_tx.init(actor_params),
+            opt_state=self.initial_actor_opt_state,
         )
 
         self.state = tree_to_device(self.state, self.device)
         self.actor_state = tree_to_device(self.actor_state, self.device)
+        self.initial_actor_params = tree_to_device(self.initial_actor_params, self.device)
+        self.initial_actor_opt_state = tree_to_device(self.initial_actor_opt_state, self.device)
 
         self._train_step = self._build_train_step()
+        self._actor_fit_step = self._build_actor_fit_step()
 
     def _build_train_step(self):
         actor_apply = self.actor_def.apply
@@ -886,6 +912,80 @@ class CDAFJAX:
 
         return train_step
 
+    def _build_actor_fit_step(self):
+        actor_apply = self.actor_def.apply
+        q_apply = self.q_def.apply
+        v_apply = self.v_def.apply
+        actor_tx = self.actor_tx
+        alpha = self.alpha
+        bc_coef = self.bc_coef
+        actor_update_method = self.actor_update_method
+        policy_weight_exponent = self.policy_weight_exponent
+        policy_weight_clip = self.policy_weight_clip
+        weight_logit_clip = self.weight_logit_clip
+
+        @jax.jit
+        def actor_fit_step(actor_state: ActorState, q_params: Any, v_params: Any, batch: TensorBatch):
+            observations = batch["observations"]
+            actions = batch["actions"]
+
+            def actor_loss_fn(actor_params):
+                pi = actor_apply({"params": actor_params}, observations)
+                bc_per_sample = jnp.mean((pi - actions) ** 2, axis=-1)
+                bc_loss = jnp.mean(bc_per_sample)
+
+                # Refit uses fixed learned Q/V and updates only pi. Advantage weights
+                # remain fully in-sample because they are computed on dataset actions.
+                if actor_update_method in ("weighted_bc", "td3_weighted_bc"):
+                    data_q = q_apply({"params": q_params}, observations, actions)
+                    data_v = v_apply({"params": v_params}, observations)
+                    data_adv = jnp.clip(data_q - data_v, -weight_logit_clip, weight_logit_clip)
+                    policy_weight = jnp.exp(policy_weight_exponent * data_adv)
+                    policy_weight = policy_weight / jnp.maximum(jnp.mean(policy_weight), 1e-6)
+                    policy_weight = jnp.minimum(policy_weight, policy_weight_clip)
+                    weighted_bc_loss = jnp.mean(jax.lax.stop_gradient(policy_weight) * bc_per_sample)
+                    weight_mean = jnp.mean(policy_weight)
+                    weight_max = jnp.max(policy_weight)
+                else:
+                    data_q = jnp.zeros_like(bc_per_sample)
+                    weighted_bc_loss = bc_loss
+                    weight_mean = jnp.asarray(1.0)
+                    weight_max = jnp.asarray(1.0)
+
+                if actor_update_method == "weighted_bc":
+                    actor_loss = weighted_bc_loss
+                    q_for_log = data_q
+                    lmbda = jnp.asarray(0.0)
+                else:
+                    q_pi = q_apply({"params": q_params}, observations, pi)
+                    lmbda = jax.lax.stop_gradient(alpha / jnp.maximum(jnp.mean(jnp.abs(q_pi)), 1e-6))
+                    if actor_update_method == "td3_weighted_bc":
+                        bc_regularizer = weighted_bc_loss
+                    else:
+                        bc_regularizer = bc_loss
+                    actor_loss = -lmbda * jnp.mean(q_pi) + bc_coef * bc_regularizer
+                    q_for_log = q_pi
+
+                return actor_loss, (q_for_log, lmbda, bc_loss, weighted_bc_loss, weight_mean, weight_max)
+
+            (actor_loss, (q, lmbda, bc_loss, weighted_bc_loss, weight_mean, weight_max)), actor_grads = jax.value_and_grad(actor_loss_fn, has_aux=True)(actor_state.params)
+            updates, opt_state = actor_tx.update(actor_grads, actor_state.opt_state, actor_state.params)
+            params = optax.apply_updates(actor_state.params, updates)
+            new_actor_state = ActorState(params=params, opt_state=opt_state)
+            log_dict = {
+                "loss": actor_loss,
+                "q_mean": jnp.mean(q),
+                "lambda": lmbda,
+                "bc_loss": bc_loss,
+                "weighted_bc_loss": weighted_bc_loss,
+                "bc_coef": jnp.asarray(bc_coef),
+                "policy_weight_mean": weight_mean,
+                "policy_weight_max": weight_max,
+            }
+            return new_actor_state, log_dict
+
+        return actor_fit_step
+
     def train(self, batch: TensorBatch) -> Dict[str, float]:
         self.state, self.actor_state, log_dict = self._train_step(self.state, self.actor_state, batch)
         return {key: float(jax.device_get(value)) for key, value in log_dict.items()}
@@ -908,17 +1008,177 @@ class CDAFJAX:
             episode_rewards.append(episode_reward)
         return np.asarray(episode_rewards, dtype=np.float32)
 
+    def reset_actor(self):
+        self.actor_state = ActorState(
+            params=self.initial_actor_params,
+            opt_state=self.initial_actor_opt_state,
+        )
+        self.actor_state = tree_to_device(self.actor_state, self.device)
+
+    def fit_actor(
+        self,
+        replay_buffer: ReplayBuffer,
+        actor_state: ActorState,
+        steps: int,
+        batch_size: int,
+        eval_env: Optional[gym.Env] = None,
+        eval_episodes: int = 0,
+        eval_seed: int = 0,
+        eval_interval: int = 0,
+        prefix: str = "fit_actor",
+        save_dir: Optional[Union[str, Path]] = None,
+        loaded_checkpoint: Optional[Union[str, Path]] = None,
+        log_wandb: bool = False,
+    ) -> Tuple[ActorState, Dict[str, Any]]:
+        eval_fit_log: Dict[str, Any] = {
+            f"{prefix}/final_loss": np.nan,
+            f"{prefix}/final_q": np.nan,
+            f"{prefix}/final_lambda": np.nan,
+            f"{prefix}/final_bc_loss": np.nan,
+            f"{prefix}/final_weighted_bc_loss": np.nan,
+            f"{prefix}/final_policy_weight_mean": np.nan,
+            f"{prefix}/final_policy_weight_max": np.nan,
+            f"{prefix}/final_score_mean": np.nan,
+            f"{prefix}/final_score_std": np.nan,
+            f"{prefix}/final_d4rl_normalized_score_mean": np.nan,
+            f"{prefix}/final_d4rl_normalized_score_std": np.nan,
+            f"{prefix}/best_score_mean": np.nan,
+            f"{prefix}/best_score_std": np.nan,
+            f"{prefix}/best_d4rl_normalized_score_mean": np.nan,
+            f"{prefix}/best_d4rl_normalized_score_std": np.nan,
+            f"{prefix}/inner_eval_steps": [],
+            f"{prefix}/inner_score_mean": [],
+            f"{prefix}/inner_score_std": [],
+            f"{prefix}/inner_d4rl_normalized_score_mean": [],
+            f"{prefix}/inner_d4rl_normalized_score_std": [],
+        }
+        save_dir_path = Path(save_dir) if save_dir is not None else None
+        if save_dir_path is not None:
+            save_dir_path.mkdir(parents=True, exist_ok=True)
+        loaded_checkpoint_str = str(loaded_checkpoint) if loaded_checkpoint is not None else None
+
+        def save_refit_progress(current_actor_state: ActorState, is_best: bool) -> None:
+            if save_dir_path is None:
+                return
+
+            latest_actor_path = save_dir_path / "latest_actor.pkl"
+            fit_logs_path = save_dir_path / "fit_eval_logs.npz"
+            save_pickle(latest_actor_path, serialization.to_state_dict(current_actor_state.params))
+
+            log_record: Dict[str, Any] = eval_fit_log.copy()
+            if loaded_checkpoint_str is not None:
+                log_record = {"loaded_checkpoint": loaded_checkpoint_str, **log_record}
+            save_logs_npz([log_record], str(fit_logs_path))
+
+            saved_paths = [latest_actor_path, fit_logs_path]
+            if is_best:
+                best_actor_path = save_dir_path / "best_actor.pkl"
+                save_pickle(best_actor_path, serialization.to_state_dict(current_actor_state.params))
+                saved_paths.append(best_actor_path)
+
+            if log_wandb and wandb.run is not None:
+                for saved_path in saved_paths:
+                    wandb.save(str(saved_path), policy="now")
+
+        if steps <= 0:
+            return actor_state, eval_fit_log
+
+        best_normalized_score_mean = -np.inf
+        q_params = self.state.q_params
+        v_params = self.state.v_params
+
+        for fit_step in range(1, steps + 1):
+            batch = replay_buffer.sample(batch_size)
+            actor_state, step_log = self._actor_fit_step(actor_state, q_params, v_params, batch)
+            step_log = {key: float(jax.device_get(value)) for key, value in step_log.items()}
+
+            eval_fit_log[f"{prefix}/final_loss"] = step_log["loss"]
+            eval_fit_log[f"{prefix}/final_q"] = step_log["q_mean"]
+            eval_fit_log[f"{prefix}/final_lambda"] = step_log["lambda"]
+            eval_fit_log[f"{prefix}/final_bc_loss"] = step_log["bc_loss"]
+            eval_fit_log[f"{prefix}/final_weighted_bc_loss"] = step_log["weighted_bc_loss"]
+            eval_fit_log[f"{prefix}/final_policy_weight_mean"] = step_log["policy_weight_mean"]
+            eval_fit_log[f"{prefix}/final_policy_weight_max"] = step_log["policy_weight_max"]
+
+            should_eval = (
+                eval_env is not None
+                and eval_episodes > 0
+                and eval_interval > 0
+                and (fit_step % eval_interval == 0 or fit_step == steps)
+            )
+            if should_eval:
+                eval_scores = self.eval_actor(
+                    eval_env,
+                    actor_state.params,
+                    n_episodes=eval_episodes,
+                    seed=eval_seed,
+                )
+                normalized_eval_scores = normalize_episode_scores(eval_env, eval_scores)
+
+                eval_score_mean = float(np.mean(eval_scores))
+                eval_score_std = float(np.std(eval_scores))
+                normalized_eval_score_mean = float(np.mean(normalized_eval_scores))
+                normalized_eval_score_std = float(np.std(normalized_eval_scores))
+
+                eval_fit_log[f"{prefix}/inner_eval_steps"].append(int(fit_step))
+                eval_fit_log[f"{prefix}/inner_score_mean"].append(eval_score_mean)
+                eval_fit_log[f"{prefix}/inner_score_std"].append(eval_score_std)
+                eval_fit_log[f"{prefix}/inner_d4rl_normalized_score_mean"].append(normalized_eval_score_mean)
+                eval_fit_log[f"{prefix}/inner_d4rl_normalized_score_std"].append(normalized_eval_score_std)
+                eval_fit_log[f"{prefix}/final_score_mean"] = eval_score_mean
+                eval_fit_log[f"{prefix}/final_score_std"] = eval_score_std
+                eval_fit_log[f"{prefix}/final_d4rl_normalized_score_mean"] = normalized_eval_score_mean
+                eval_fit_log[f"{prefix}/final_d4rl_normalized_score_std"] = normalized_eval_score_std
+
+                is_best = False
+                if normalized_eval_score_mean > best_normalized_score_mean:
+                    best_normalized_score_mean = normalized_eval_score_mean
+                    eval_fit_log[f"{prefix}/best_score_mean"] = eval_score_mean
+                    eval_fit_log[f"{prefix}/best_score_std"] = eval_score_std
+                    eval_fit_log[f"{prefix}/best_d4rl_normalized_score_mean"] = normalized_eval_score_mean
+                    eval_fit_log[f"{prefix}/best_d4rl_normalized_score_std"] = normalized_eval_score_std
+                    is_best = True
+
+                save_refit_progress(actor_state, is_best=is_best)
+
+                print(
+                    f"[{prefix}:{self.actor_update_method}] step {fit_step}/{steps}: "
+                    f"loss={step_log['loss']:.4f}, q={step_log['q_mean']:.4f}, "
+                    f"lambda={step_log['lambda']:.4f}, bc_loss={step_log['bc_loss']:.4f}, "
+                    f"weighted_bc_loss={step_log['weighted_bc_loss']:.4f}, "
+                    f"weight_mean={step_log['policy_weight_mean']:.4f}, "
+                    f"eval_mean={eval_score_mean:.3f}, eval_std={eval_score_std:.3f}, "
+                    f"D4RL_mean={normalized_eval_score_mean:.3f}, "
+                    f"D4RL_std={normalized_eval_score_std:.3f}"
+                )
+
+        return actor_state, eval_fit_log
+
     def state_dict(self) -> Dict[str, Any]:
         return {
             "cdaf_state": serialization.to_state_dict(self.state),
             "actor_state": serialization.to_state_dict(self.actor_state),
+            "initial_actor_params": serialization.to_state_dict(self.initial_actor_params),
+            "initial_actor_opt_state": serialization.to_state_dict(self.initial_actor_opt_state),
         }
 
     def load_state_dict(self, state_dict: Dict[str, Any]):
         self.state = serialization.from_state_dict(self.state, state_dict["cdaf_state"])
         self.actor_state = serialization.from_state_dict(self.actor_state, state_dict["actor_state"])
+        if "initial_actor_params" in state_dict:
+            self.initial_actor_params = serialization.from_state_dict(
+                self.initial_actor_params,
+                state_dict["initial_actor_params"],
+            )
+        if "initial_actor_opt_state" in state_dict:
+            self.initial_actor_opt_state = serialization.from_state_dict(
+                self.initial_actor_opt_state,
+                state_dict["initial_actor_opt_state"],
+            )
         self.state = tree_to_device(self.state, self.device)
         self.actor_state = tree_to_device(self.actor_state, self.device)
+        self.initial_actor_params = tree_to_device(self.initial_actor_params, self.device)
+        self.initial_actor_opt_state = tree_to_device(self.initial_actor_opt_state, self.device)
 
 
 def save_pickle(path: Union[str, Path], obj: Any) -> None:
@@ -1027,7 +1287,11 @@ def resolve_checkpoint_path(
 @pyrallis.wrap()
 def train(config: TrainConfig):
     config = apply_env_hyperparams(config)
-    config = finalize_checkpoint_path(config)
+    refit_only = config.mode == "refit"
+    if not refit_only:
+        config = finalize_checkpoint_path(config)
+    elif config.load_model == "":
+        raise ValueError("mode='refit' requires --load_model")
 
     jax_device = select_jax_device(config.device)
     env = gym.make(config.env)
@@ -1071,7 +1335,7 @@ def train(config: TrainConfig):
 
     max_action = float(env.action_space.high[0])
 
-    if config.checkpoints_path is not None:
+    if config.checkpoints_path is not None and not refit_only:
         print(f"Checkpoints path: {config.checkpoints_path}")
         os.makedirs(config.checkpoints_path, exist_ok=True)
         config_path = os.path.join(config.checkpoints_path, "config.yaml")
@@ -1085,7 +1349,10 @@ def train(config: TrainConfig):
     set_seed(seed, env)
 
     print("---------------------------------------")
-    print(f"Training {config.name}-JAX, Env: {config.env}, Seed: {seed}")
+    if refit_only:
+        print(f"Refitting actor for {config.name}-JAX, Env: {config.env}, Seed: {seed}")
+    else:
+        print(f"Training {config.name}-JAX, Env: {config.env}, Seed: {seed}")
     print("---------------------------------------")
 
     trainer = CDAFJAX(
@@ -1114,8 +1381,9 @@ def train(config: TrainConfig):
         device=jax_device,
     )
 
+    loaded_run_dir: Optional[Path] = None
     if config.load_model != "":
-        _, checkpoint_path = resolve_checkpoint_path(
+        loaded_run_dir, checkpoint_path = resolve_checkpoint_path(
             config.load_model,
             run_name=config.name,
             seed=config.seed,
@@ -1127,6 +1395,67 @@ def train(config: TrainConfig):
     if config.log_wandb:
         wandb_init(asdict(config))
 
+    if refit_only:
+        if loaded_run_dir is None:
+            raise ValueError("mode='refit' requires --load_model")
+
+        actor_refit_dir = loaded_run_dir / config.actor_refit_dir_name
+        actor_refit_dir.mkdir(parents=True, exist_ok=True)
+        print("---------------------------------------")
+        print(f"Actor refit from saved {ALGORITHM_NAME} checkpoint")
+        print("Q/V are frozen; only pi is optimized.")
+        print(
+            "Refit schedule uses shared fields: "
+            f"max_timesteps={config.max_timesteps}, "
+            f"batch_size={config.batch_size}, "
+            f"eval_freq={config.eval_freq}"
+        )
+        print(f"Saving actor refit outputs to: {actor_refit_dir}")
+        print("---------------------------------------")
+
+        fresh_actor_state = ActorState(
+            params=copy.deepcopy(trainer.initial_actor_params),
+            opt_state=copy.deepcopy(trainer.initial_actor_opt_state),
+        )
+        fresh_actor_state = tree_to_device(fresh_actor_state, jax_device)
+
+        refit_actor_state, refit_log = trainer.fit_actor(
+            replay_buffer=replay_buffer,
+            actor_state=fresh_actor_state,
+            steps=config.max_timesteps,
+            batch_size=config.batch_size,
+            eval_env=env,
+            eval_episodes=config.n_episodes,
+            eval_seed=config.seed,
+            eval_interval=config.eval_freq,
+            prefix="actor_refit",
+            save_dir=actor_refit_dir,
+            loaded_checkpoint=loaded_run_dir / "checkpoint.pkl",
+            log_wandb=config.log_wandb,
+        )
+
+        save_pickle(
+            actor_refit_dir / "final_actor.pkl",
+            serialization.to_state_dict(refit_actor_state.params),
+        )
+        save_logs_npz(
+            [{"loaded_checkpoint": str(loaded_run_dir / "checkpoint.pkl"), **refit_log}],
+            str(actor_refit_dir / "fit_eval_logs.npz"),
+        )
+        with open(actor_refit_dir / "refit_config.yaml", "w") as f:
+            pyrallis.dump(config, f)
+
+        if config.log_wandb and wandb.run is not None:
+            wandb.save(str(actor_refit_dir / "final_actor.pkl"), policy="now")
+            wandb.save(str(actor_refit_dir / "fit_eval_logs.npz"), policy="now")
+            wandb.save(str(actor_refit_dir / "refit_config.yaml"), policy="now")
+
+        print("---------------------------------------")
+        print("Actor refit finished")
+        print(f"Saved final actor to: {actor_refit_dir / 'final_actor.pkl'}")
+        print(f"Saved fit logs to:    {actor_refit_dir / 'fit_eval_logs.npz'}")
+        print("---------------------------------------")
+        return
 
     eval_logs: List[Dict[str, Any]] = []
     for t in range(int(config.max_timesteps)):

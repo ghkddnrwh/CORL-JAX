@@ -1,11 +1,12 @@
 
 
-first_args=(1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0 9.0 10.0)
+first_args=(0.0)
 
 # second_args=(1.0 1.5 2.0 2.5 3.0)
-second_args=(0.1)
+second_args=(0.6 0.8 1.0 1.2 1.4)
+# second_args=(0.6)
 
-third_args=(100 1000)
+third_args=(1000)
 
 fourth_args=(0.1)
 # fourth_args=(0.0 0.2 0.4 0.6 0.8 1.0)
@@ -31,34 +32,34 @@ do
         do
 
             # for i in {1..2}
-            for i in 1
+            for i in 0
             do
                 # XLA_PYTHON_CLIENT_PREALLOCATE=false
                 
 
-                # XLA_PYTHON_CLIENT_MEM_FRACTION=0.4 CUDA_VISIBLE_DEVICES=0 python algorithms/uk_offline/sa_cdaf_jax.py \
-                # --env antmaze-large-diverse-v2 \
-                # --hyperparams_path hyperparams/cdaf_jax.yml \
-                # --device gpu \
-                # --seed $i \
-                # --checkpoints_path logs/tuning/sa_cdaf_jax/init_max/increased_discount/${first_arg}/${third_arg} \
-                # --eval_actor_steps 0 \
-                # --min_weight_exponent ${first_arg} \
-                # --max_weight_exponent ${first_arg} \
-                # --delayed_update_period ${third_arg} \
-                # --discount 0.999
+                XLA_PYTHON_CLIENT_MEM_FRACTION=0.08 CUDA_VISIBLE_DEVICES=1 python algorithms/uk_offline/sa_cdaf_jax.py \
+                --env antmaze-large-diverse-v2 \
+                --hyperparams_path hyperparams/sa_cdaf_jax.yml \
+                --device gpu \
+                --seed $i \
+                --checkpoints_path logs/tuning/sa_cdaf_jax/aligned_actor/increased_discount/${first_arg}/${second_arg}/${third_arg} \
+                --min_weight_exponent ${first_arg} \
+                --max_weight_exponent ${second_arg} \
+                --policy_weight_exponent ${second_arg} \
+                --delayed_update_period ${third_arg} \
+                --discount 0.999 &
 
-                # XLA_PYTHON_CLIENT_MEM_FRACTION=0.4 CUDA_VISIBLE_DEVICES=0 python algorithms/uk_offline/cdaf_jax_coverage_margin.py \
+                # XLA_PYTHON_CLIENT_MEM_FRACTION=0.08 CUDA_VISIBLE_DEVICES=0 python algorithms/uk_offline/cdaf_jax_coverage_margin.py \
                 # --env antmaze-large-diverse-v2 \
-                # --hyperparams_path hyperparams/cdaf_jax.yml \
+                # --hyperparams_path hyperparams/cdaf_jax_coverage_margin.yml \
                 # --device gpu \
                 # --seed $i \
-                # --checkpoints_path logs/tuning/cdaf_jax_coverage_margin/init_max/increased_discount/${first_arg}/${third_arg} \
-                # --eval_actor_steps 0 \
+                # --checkpoints_path logs/tuning/cdaf_jax_coverage_margin/aligned_actor/increased_discount/${first_arg}/${second_arg}/${third_arg} \
                 # --min_weight_exponent ${first_arg} \
-                # --max_weight_exponent ${first_arg} \
+                # --max_weight_exponent ${second_arg} \
+                # --policy_weight_exponent ${second_arg} \
                 # --delayed_update_period ${third_arg} \
-                # --discount 0.999 
+                # --discount 0.999 &
 
                 # XLA_PYTHON_CLIENT_MEM_FRACTION=0.3 CUDA_VISIBLE_DEVICES=1 python algorithms/uk_offline/cdaf_jax.py \
                 # --env antmaze-large-diverse-v2 \
@@ -85,16 +86,17 @@ do
                 # --device "cuda:1" --seed $i
 
 
-                XLA_PYTHON_CLIENT_MEM_FRACTION=0.045 CUDA_VISIBLE_DEVICES=1 python algorithms/uk_offline/dave_iql_jax.py \
-                --env antmaze-large-play-v2 \
-                --hyperparams_path hyperparams/dave_iql_jax.yml \
-                --device gpu \
-                --seed $i \
-                --checkpoints_path logs/tuning/dave_iql_jax/${first_arg}/${third_arg} \
-                --beta ${first_arg} \
-                --v_filter_temperature ${first_arg} \
-                --delayed_update_freq ${third_arg} 
+                # XLA_PYTHON_CLIENT_MEM_FRACTION=0.045 CUDA_VISIBLE_DEVICES=1 python algorithms/uk_offline/dave_iql_jax.py \
+                # --env antmaze-large-play-v2 \
+                # --hyperparams_path hyperparams/dave_iql_jax.yml \
+                # --device gpu \
+                # --seed $i \
+                # --checkpoints_path logs/tuning/dave_iql_jax/${first_arg}/${third_arg} \
+                # --beta ${first_arg} \
+                # --v_filter_temperature ${first_arg} \
+                # --delayed_update_freq ${third_arg} 
             done      
         done
     done
 done
+wait

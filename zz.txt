@@ -1,92 +1,72 @@
++---------------------------------------------------------------------------------------+
 (corl) ukjo1@ccrl-Precision-7920-Tower:~/research/ssd1/offline_rl/insampling$ ps -ef | grep python
 root        3143       1  0  5월08 ?      00:00:00 /usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal
-ukjo1     169499  169455  0 13:46 ?        00:00:01 /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python-env-tools/bin/pet server
-ukjo1     215858  215857 99 15:31 pts/152  00:15:22 python algorithms/uk_offline/basic/iql_jax.py --env antmaze-large-diverse-v2 --hyperparams_path hyperparams/iql_jax.yml --device gpu --seed 0 --checkpoints_path logs/basic --log_wandb False
-ukjo1     216432  216431 99 15:31 pts/156  00:15:13 python algorithms/uk_offline/basic/iql_jax.py --env antmaze-large-play-v2 --hyperparams_path hyperparams/iql_jax.yml --device gpu --seed 0 --checkpoints_path logs/basic --log_wandb False
-kill -9 218018
-kill -9 218019
-kill -9 218020
-kill -9 218021
-kill -9 218022
-kill -9 218023
-kill -9 218024
-kill -9 218025
-kill -9 218026
-kill -9 218027
-kill -9 218028
-kill -9 218029
-kill -9 218030
-kill -9 218031
-kill -9 218032
-kill -9 218033
-kill -9 218034
-kill -9 218035
-kill -9 218036
-kill -9 218037
-kill -9 218038
-kill -9 218039
-kill -9 218040
-kill -9 218041
-kill -9 218042
-kill -9 218043
-kill -9 218044
-kill -9 218045
-kill -9 218046
-kill -9 218047
-kill -9 218048
-kill -9 218049
-kill -9 218050
-kill -9 218051
-kill -9 218052
-kill -9 218053
-kill -9 218054
-kill -9 218055
-kill -9 218056
-kill -9 218057
-kill -9 241747
-kill -9 241748
-kill -9 241749
-kill -9 241750
-kill -9 241751
-kill -9 241752
-kill -9 241753
-kill -9 241754
-kill -9 241755
-kill -9 241756
-kill -9 241757
-kill -9 241758
-kill -9 241759
-kill -9 241760
-kill -9 241761
-kill -9 241762
-kill -9 241763
-kill -9 241764
-kill -9 241765
-kill -9 241766
-kill -9 241767
-kill -9 241768
-kill -9 241769
-kill -9 241770
-kill -9 241771
-kill -9 241772
-kill -9 241773
-kill -9 241774
-kill -9 241775
-kill -9 241776
-kill -9 241777
-kill -9 241778
-kill -9 241779
-kill -9 241780
-kill -9 241781
-kill -9 241782
-kill -9 241783
-kill -9 241784
-kill -9 241785
-kill -9 241786
-ukjo1     297670  110930  0 15:44 pts/148  00:00:00 grep --color=auto python
-ukjo1    3904749 3904157  0 08:55 ?        00:00:01 /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python-env-tools/bin/pet server
-ukjo1    3905196 3904699  0 08:55 ?        00:00:01 /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python-env-tools/bin/pet server
-ukjo1    3906334 3904699  0 08:55 ?        00:00:00 /home/ukjo1/anaconda3/envs/action_robust/bin/python /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python_files/run-jedi-language-server.py
-ukjo1    3906431 3904158  0 08:55 ?        00:00:01 /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python-env-tools/bin/pet server
-ukjo1    3906955 3904158  0 08:55 ?        00:00:00 /home/ukjo1/anaconda3/envs/for_git/bin/python /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python_files/run-jedi-language-server.py
-ukjo1    3906968 3906955  0 08:55 ?        00:00:00 /home/ukjo1/anaconda3/envs/for_git/bin/python /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python_files/lib/jedilsp/jedi/inference/compiled/subprocess/__main__.py /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python_files/lib/jedilsp 3.9.21
+ukjo1    1384472 1384354  0 11:16 ?        00:00:01 /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python-env-tools/bin/pet server
+ukjo1    1384688 1384343  0 11:16 ?        00:00:02 /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python-env-tools/bin/pet server
+ukjo1    1385042 1384404  0 11:16 ?        00:00:01 /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python-env-tools/bin/pet server
+ukjo1    1385270 1384393  0 11:17 ?        00:00:01 /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python-env-tools/bin/pet server
+ukjo1    1385983 1384354  0 11:17 ?        00:00:00 /home/ukjo1/anaconda3/envs/for_git/bin/python /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python_files/run-jedi-language-server.py
+ukjo1    1386170 1385983  0 11:17 ?        00:00:00 /home/ukjo1/anaconda3/envs/for_git/bin/python /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python_files/lib/jedilsp/jedi/inference/compiled/subprocess/__main__.py /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python_files/lib/jedilsp 3.9.21
+ukjo1    1386765 1384404  0 11:17 ?        00:00:00 /home/ukjo1/anaconda3/envs/action_robust/bin/python /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python_files/run-jedi-language-server.py
+ukjo1    1386794 1386765  0 11:17 ?        00:00:00 /home/ukjo1/anaconda3/envs/action_robust/bin/python /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python_files/lib/jedilsp/jedi/inference/compiled/subprocess/__main__.py /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python_files/lib/jedilsp 3.10.19
+`kill -9 1505079`
+ukjo1    1505080 1505078 99 16:04 pts/219  00:42:09 python algorithms/uk_offline/cdaf_jax_coverage_margin.py --env antmaze-large-diverse-v2 --hyperparams_path hyperparams/cdaf_jax_coverage_margin.yml --device gpu --seed 0 --checkpoints_path logs/tuning/cdaf_jax_coverage_margin/aligned_actor/increased_discount/0.0/0.6/1000 --min_weight_exponent 0.0 --max_weight_exponent 0.6 --policy_weight_exponent 0.6 --delayed_update_period 1000 --discount 0.999
+`kill -9 1505081`
+ukjo1    1505082 1505078 99 16:04 pts/219  00:41:57 python algorithms/uk_offline/cdaf_jax_coverage_margin.py --env antmaze-large-diverse-v2 --hyperparams_path hyperparams/cdaf_jax_coverage_margin.yml --device gpu --seed 0 --checkpoints_path logs/tuning/cdaf_jax_coverage_margin/aligned_actor/increased_discount/0.0/0.8/1000 --min_weight_exponent 0.0 --max_weight_exponent 0.8 --policy_weight_exponent 0.8 --delayed_update_period 1000 --discount 0.999
+`kill -9 1505083`
+ukjo1    1505084 1505078 99 16:04 pts/219  00:41:48 python algorithms/uk_offline/cdaf_jax_coverage_margin.py --env antmaze-large-diverse-v2 --hyperparams_path hyperparams/cdaf_jax_coverage_margin.yml --device gpu --seed 0 --checkpoints_path logs/tuning/cdaf_jax_coverage_margin/aligned_actor/increased_discount/0.0/1.0/1000 --min_weight_exponent 0.0 --max_weight_exponent 1.0 --policy_weight_exponent 1.0 --delayed_update_period 1000 --discount 0.999
+`kill -9 1505085`
+ukjo1    1505086 1505078 99 16:04 pts/219  00:42:11 python algorithms/uk_offline/cdaf_jax_coverage_margin.py --env antmaze-large-diverse-v2 --hyperparams_path hyperparams/cdaf_jax_coverage_margin.yml --device gpu --seed 0 --checkpoints_path logs/tuning/cdaf_jax_coverage_margin/aligned_actor/increased_discount/0.0/1.2/1000 --min_weight_exponent 0.0 --max_weight_exponent 1.2 --policy_weight_exponent 1.2 --delayed_update_period 1000 --discount 0.999
+`kill -9 1505087`
+ukjo1    1505088 1505078 99 16:04 pts/219  00:41:55 python algorithms/uk_offline/cdaf_jax_coverage_margin.py --env antmaze-large-diverse-v2 --hyperparams_path hyperparams/cdaf_jax_coverage_margin.yml --device gpu --seed 0 --checkpoints_path logs/tuning/cdaf_jax_coverage_margin/aligned_actor/increased_discount/0.0/1.4/1000 --min_weight_exponent 0.0 --max_weight_exponent 1.4 --policy_weight_exponent 1.4 --delayed_update_period 1000 --discount 0.999
+`kill -9 1512739`
+ukjo1    1512740 1512738 99 16:05 pts/221  00:42:48 python algorithms/uk_offline/cdaf_jax_coverage_margin.py --env antmaze-large-diverse-v2 --hyperparams_path hyperparams/cdaf_jax_coverage_margin.yml --device gpu --seed 0 --checkpoints_path logs/tuning/cdaf_jax_coverage_margin/aligned_actor/increased_discount/0.6/0.6/1000 --min_weight_exponent 0.6 --max_weight_exponent 0.6 --policy_weight_exponent 0.6 --delayed_update_period 1000 --discount 0.999
+ukjo1    1512923 1505081  0 16:05 pts/219  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1512929 1505081  4 16:05 pts/219  00:00:57 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+ukjo1    1512943 1505079  0 16:05 pts/219  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1512951 1505079  4 16:05 pts/219  00:00:57 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+ukjo1    1513176 1505087  0 16:05 pts/219  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1513177 1505085  0 16:05 pts/219  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1513241 1505085  4 16:05 pts/219  00:00:56 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+ukjo1    1513242 1505087  4 16:05 pts/219  00:00:58 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+ukjo1    1513251 1505083  0 16:05 pts/219  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1513258 1505083  4 16:05 pts/219  00:00:57 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+`kill -9 1514365`
+ukjo1    1514366 1514364 99 16:05 pts/224  00:41:38 python algorithms/uk_offline/cdaf_jax_coverage_margin.py --env antmaze-large-diverse-v2 --hyperparams_path hyperparams/cdaf_jax_coverage_margin.yml --device gpu --seed 0 --checkpoints_path logs/tuning/cdaf_jax_coverage_margin/aligned_actor/increased_discount/0.8/0.8/1000 --min_weight_exponent 0.8 --max_weight_exponent 0.8 --policy_weight_exponent 0.8 --delayed_update_period 1000 --discount 0.999
+`kill -9 1514812`
+ukjo1    1514813 1514809 99 16:05 pts/225  00:41:40 python algorithms/uk_offline/cdaf_jax_coverage_margin.py --env antmaze-large-diverse-v2 --hyperparams_path hyperparams/cdaf_jax_coverage_margin.yml --device gpu --seed 0 --checkpoints_path logs/tuning/cdaf_jax_coverage_margin/aligned_actor/increased_discount/1.0/1.0/1000 --min_weight_exponent 1.0 --max_weight_exponent 1.0 --policy_weight_exponent 1.0 --delayed_update_period 1000 --discount 0.999
+ukjo1    1518852 1512739  0 16:05 pts/221  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1518856 1512739  4 16:05 pts/221  00:00:55 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+ukjo1    1519310 1514365  0 16:05 pts/224  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1519326 1514365  4 16:05 pts/224  00:00:53 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+ukjo1    1519506 1514812  0 16:05 pts/225  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1519516 1514812  4 16:05 pts/225  00:00:54 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+ukjo1    1520618 1505080  0 16:06 pts/219  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1520624 1505080  4 16:06 pts/219  00:00:56 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+ukjo1    1521077 1505086  0 16:06 pts/219  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1521086 1505086  4 16:06 pts/219  00:00:57 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+ukjo1    1521219 1505082  0 16:06 pts/219  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1521221 1505082  4 16:06 pts/219  00:00:56 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+ukjo1    1521236 1505088  0 16:06 pts/219  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1521237 1505088  4 16:06 pts/219  00:00:57 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+ukjo1    1521320 1505084  0 16:06 pts/219  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1521321 1505084  4 16:06 pts/219  00:00:56 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+ukjo1    1523219 1512740  0 16:06 pts/221  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1523222 1512740  5 16:06 pts/221  00:01:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+ukjo1    1523312 1514366  0 16:06 pts/224  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1523321 1514366  5 16:06 pts/224  00:01:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+ukjo1    1523538 1514813  0 16:06 pts/225  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1523539 1514813  5 16:06 pts/225  00:01:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+`kill -9 1524912`
+ukjo1    1524913 1524911 99 16:09 pts/227  00:33:34 python algorithms/uk_offline/cdaf_jax_coverage_margin.py --env antmaze-large-diverse-v2 --hyperparams_path hyperparams/cdaf_jax_coverage_margin.yml --device gpu --seed 0 --checkpoints_path logs/tuning/cdaf_jax_coverage_margin/aligned_actor/increased_discount/1.2/1.2/1000 --min_weight_exponent 1.2 --max_weight_exponent 1.2 --policy_weight_exponent 1.2 --delayed_update_period 1000 --discount 0.999
+`kill -9 1526074`
+ukjo1    1526075 1526073 99 16:09 pts/229  00:34:04 python algorithms/uk_offline/cdaf_jax_coverage_margin.py --env antmaze-large-diverse-v2 --hyperparams_path hyperparams/cdaf_jax_coverage_margin.yml --device gpu --seed 0 --checkpoints_path logs/tuning/cdaf_jax_coverage_margin/aligned_actor/increased_discount/1.4/1.4/1000 --min_weight_exponent 1.4 --max_weight_exponent 1.4 --policy_weight_exponent 1.4 --delayed_update_period 1000 --discount 0.999
+ukjo1    1527702 1524912  0 16:09 pts/227  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1527703 1524912  4 16:09 pts/227  00:00:47 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+ukjo1    1528551 1526074  0 16:09 pts/229  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1528553 1526074  4 16:09 pts/229  00:00:46 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+ukjo1    1528949 1524913  0 16:09 pts/227  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1528950 1524913  4 16:09 pts/227  00:00:49 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+ukjo1    1529717 1526075  0 16:10 pts/229  00:00:00 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.resource_tracker import main;main(33)
+ukjo1    1529718 1526075  5 16:10 pts/229  00:00:50 /home/ukjo1/anaconda3/envs/corl/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=34, pipe_handle=38) --multiprocessing-fork
+ukjo1    1538677 1496674  0 16:26 pts/230  00:00:00 grep --color=auto python

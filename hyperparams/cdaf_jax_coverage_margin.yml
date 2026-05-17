@@ -1,10 +1,15 @@
-# Hyperparameters for SA-CDAF-JAX.
+# Hyperparameters for CDAF-JAX (Conservative Delayed Advantage Filtering)
 #
-# Only values different from TrainConfig defaults are listed here.
-# CLI arguments override values loaded from this YAML file.
+# Notes:
+# - This file follows an RL-Zoo-style format: each top-level environment id has its own config.
+# - `n_timesteps` is treated as an alias for `max_timesteps` by the CDAF runner.
+# - CLI arguments override values loaded from this YAML file.
+# - YAML anchors/merge keys are used to avoid repeating identical hyperparameters.
+# - Top-level keys beginning with `_` are anchor definitions, not environments.
 
 _common: &common
   buffer_size: 10000000
+
 
 _mujoco: &mujoco
   <<: *common
@@ -15,9 +20,12 @@ _antmaze: &antmaze
   normalize_reward: true
 
 # -----------------------------------------------------------------------------
-# MuJoCo locomotion
+# MuJoCo locomotion: 3 environments x 6 datasets
+# Environments: halfcheetah, hopper, walker2d
+# Datasets: random, medium, medium-replay, medium-expert, expert, full-replay
 # -----------------------------------------------------------------------------
 
+# HalfCheetah
 halfcheetah-random-v2:
   <<: *mujoco
 
@@ -36,6 +44,7 @@ halfcheetah-expert-v2:
 halfcheetah-full-replay-v2:
   <<: *mujoco
 
+# Hopper
 hopper-random-v2:
   <<: *mujoco
 
@@ -54,6 +63,7 @@ hopper-expert-v2:
 hopper-full-replay-v2:
   <<: *mujoco
 
+# Walker2d
 walker2d-random-v2:
   <<: *mujoco
 
@@ -73,7 +83,7 @@ walker2d-full-replay-v2:
   <<: *mujoco
 
 # -----------------------------------------------------------------------------
-# AntMaze
+# AntMaze: 6 datasets
 # -----------------------------------------------------------------------------
 
 antmaze-umaze-v2:
