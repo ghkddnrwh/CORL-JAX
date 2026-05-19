@@ -708,11 +708,12 @@ class SACDAFJAX:
                 )
 
                 # Dataset-action advantage weights for weighted BC variants.
-                # The baseline is the unified value V(s), consistent with the
-                # training-time delayed advantage Q_d(s,a)-V_d(s).
+                # Use delayed Q/V for weight computation so actor weighting is
+                # consistent with delayed advantage filtering. The policy
+                # improvement term below still uses the freshly updated online Q.
                 if actor_update_method in IQL_ACTOR_METHODS:
-                    data_q = q_apply({"params": state.q_target_params}, observations, actions)
-                    data_v = v_apply({"params": state.v_params}, observations)
+                    data_q = q_apply({"params": state.q_delayed_params}, observations, actions)
+                    data_v = v_apply({"params": state.v_delayed_params}, observations)
                     data_adv = data_q - data_v
                     policy_weight = jnp.minimum(
                         jnp.exp(policy_weight_exponent * jax.lax.stop_gradient(data_adv)),
@@ -722,8 +723,8 @@ class SACDAFJAX:
                     weight_mean = jnp.mean(policy_weight)
                     weight_max = jnp.max(policy_weight)
                 elif actor_update_method in ("weighted_bc", "td3_weighted_bc"):
-                    data_q = q_apply({"params": q_params}, observations, actions)
-                    data_v = v_apply({"params": v_params}, observations)
+                    data_q = q_apply({"params": state.q_delayed_params}, observations, actions)
+                    data_v = v_apply({"params": state.v_delayed_params}, observations)
                     data_adv = jnp.clip(data_q - data_v, -weight_logit_clip, weight_logit_clip)
                     policy_weight = jnp.exp(policy_weight_exponent * data_adv)
                     policy_weight = policy_weight / jnp.maximum(jnp.mean(policy_weight), 1e-6)
@@ -837,7 +838,14 @@ class SACDAFJAX:
         weight_logit_clip = self.weight_logit_clip
 
         @jax.jit
-        def actor_fit_step(actor_state: ActorState, q_params: Any, v_params: Any, batch: TensorBatch):
+        def actor_fit_step(
+            actor_state: ActorState,
+            q_params: Any,
+            v_params: Any,
+            weight_q_params: Any,
+            weight_v_params: Any,
+            batch: TensorBatch,
+        ):
             observations = batch["observations"]
             actions = batch["actions"]
 
@@ -851,10 +859,12 @@ class SACDAFJAX:
                 )
 
                 # Dataset-action advantage weights for weighted BC variants.
-                # Refit mode freezes Q/V and updates only actor_state.
+                # Refit mode freezes Q/V and updates only actor_state. Weight
+                # computation uses the frozen delayed Q/V checkpoint, while any
+                # TD3-style policy improvement term still uses q_params below.
                 if actor_update_method in IQL_ACTOR_METHODS:
-                    data_q = q_apply({"params": q_params}, observations, actions)
-                    data_v = v_apply({"params": v_params}, observations)
+                    data_q = q_apply({"params": weight_q_params}, observations, actions)
+                    data_v = v_apply({"params": weight_v_params}, observations)
                     data_adv = data_q - data_v
                     policy_weight = jnp.minimum(
                         jnp.exp(policy_weight_exponent * jax.lax.stop_gradient(data_adv)),
@@ -864,8 +874,8 @@ class SACDAFJAX:
                     weight_mean = jnp.mean(policy_weight)
                     weight_max = jnp.max(policy_weight)
                 elif actor_update_method in ("weighted_bc", "td3_weighted_bc"):
-                    data_q = q_apply({"params": q_params}, observations, actions)
-                    data_v = v_apply({"params": v_params}, observations)
+                    data_q = q_apply({"params": weight_q_params}, observations, actions)
+                    data_v = v_apply({"params": weight_v_params}, observations)
                     data_adv = jnp.clip(data_q - data_v, -weight_logit_clip, weight_logit_clip)
                     policy_weight = jnp.exp(policy_weight_exponent * data_adv)
                     policy_weight = policy_weight / jnp.maximum(jnp.mean(policy_weight), 1e-6)
@@ -995,18 +1005,28 @@ class SACDAFJAX:
             return actor_state, eval_fit_log
 
         best_normalized_score_mean = -np.inf
-        # IQL-style actor refit uses the target Q network for the advantage,
-        # matching algorithms/uk_offline/basic/iql_jax.py.
+        # q_params/v_params are used for TD3-style policy improvement.
+        # Dataset-action weights are computed from delayed Q/V for all weighted
+        # actor modes: weighted_bc, td3_weighted_bc, iql, and iql_awbc.
         q_params = (
             self.state.q_target_params
             if self.actor_update_method in IQL_ACTOR_METHODS
             else self.state.q_params
         )
         v_params = self.state.v_params
+        weight_q_params = self.state.q_delayed_params
+        weight_v_params = self.state.v_delayed_params
 
         for fit_step in range(1, steps + 1):
             batch = replay_buffer.sample(batch_size)
-            actor_state, step_log = self._actor_fit_step(actor_state, q_params, v_params, batch)
+            actor_state, step_log = self._actor_fit_step(
+                actor_state,
+                q_params,
+                v_params,
+                weight_q_params,
+                weight_v_params,
+                batch,
+            )
             step_log = {key: float(jax.device_get(value)) for key, value in step_log.items()}
 
             eval_fit_log[f"{prefix}/final_loss"] = step_log["loss"]

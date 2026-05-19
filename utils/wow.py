@@ -1,5 +1,6 @@
 import wandb
 api = wandb.Api()
-run = api.run("/ukjo19/ORL-SMOOTH/runs/673c7b9e-2443-4fc4-9e8f-dd52e6861697")
+run = api.run("/ukjo19/ORL-BIAS/runs/0d11fbfc-0abf-4eb3-a286-5ae6d09092a3")
+
 
 print(run.history())

@@ -8,12 +8,12 @@ second_args=(0.5)
 
 third_args=(1000)
 
-fourth_args=(0.0003)
-# fourth_args=(0.0)
+# fourth_args=(4.0 6.0 8.0 10.0)
+fourth_args=(1.0)
 
 
-# fifth_args=(0.1 0.5 1.0 2.5 5.0)
-# fifth_args=(1.2 1.4 1.6 1.8 2.0)
+# fifth_args=(0.1 0.5 1.0 2.0 4.0 6.0 8.0 10.0)
+# fifth_args=(4.0 6.0 8.0 10.0)
 fifth_args=(1.0)
 
 
@@ -55,84 +55,47 @@ do
                             #     --eval_actor_batch_size 256 \
                             #     --log_wandb False &
 
-                            # XLA_PYTHON_CLIENT_MEM_FRACTION=0.15  CUDA_VISIBLE_DEVICES=0 python algorithms/uk_offline/sa_cdaf_jax.py \
+                            # XLA_PYTHON_CLIENT_MEM_FRACTION=0.1  CUDA_VISIBLE_DEVICES=1 python algorithms/uk_offline/sa_cdaf_jax.py \
+                            #     --mode "refit" \
                             #     --env antmaze-large-diverse-v2 \
                             #     --device gpu \
                             #     --seed $i \
-                            #     --load_model logs/tuning/sa_cdaf_jax/init_max/increased_discount/${first_arg}/${third_arg} \
-                            #     --max_timesteps 0 \
-                            #     --refit_actor_steps 1000000 \
-                            #     --eval_actor_eval_freq 50000 \
-                            #     --actor_fit_method "weighted_bc" \
-                            #     --actor_refit_dir_name actor_refit/weighted_bc/${fourth_arg}/${sixth_arg} \
-                            #     --actor_lr ${fourth_arg} \
-                            #     --policy_weight_exponent ${sixth_arg} \
+                            #     --load_model logs/tuning/sa_cdaf_jax/aligned_actor/increased_discount/iql_awbc/${first_arg}/${first_arg}/${third_arg} \
+                            #     --max_timesteps 100000 \
+                            #     --eval_freq 10000 \
+                            #     --actor_update_method "weighted_bc" \
+                            #     --actor_refit_dir_name actor_refit/weighted_bc/${fourth_arg} \
+                            #     --policy_weight_exponent ${fourth_arg} \
                             #     --n_episodes 10 \
-                            #     --eval_actor_batch_size 256 \
                             #     --log_wandb False &
 
-                            # XLA_PYTHON_CLIENT_MEM_FRACTION=0.15  CUDA_VISIBLE_DEVICES=1 python algorithms/uk_offline/cdaf_jax_coverage_margin.py \
-                            #     --env antmaze-large-diverse-v2 \
-                            #     --device gpu \
-                            #     --seed $i \
-                            #     --load_model logs/tuning/cdaf_jax_coverage_margin/init_max/increased_discount/${first_arg}/${third_arg} \
-                            #     --max_timesteps 0 \
-                            #     --refit_actor_steps 1000000 \
-                            #     --eval_actor_eval_freq 50000 \
-                            #     --actor_fit_method "weighted_bc" \
-                            #     --actor_refit_dir_name actor_refit/weighted_bc/${fourth_arg}/${sixth_arg} \
-                            #     --actor_lr ${fourth_arg} \
-                            #     --policy_weight_exponent ${sixth_arg} \
-                            #     --n_episodes 10 \
-                            #     --eval_actor_batch_size 256 \
-                            #     --log_wandb False &
+                            XLA_PYTHON_CLIENT_MEM_FRACTION=0.15  CUDA_VISIBLE_DEVICES=0 python algorithms/uk_offline/cdaf_jax_coverage_margin.py \
+                                --mode "refit" \
+                                --env antmaze-large-diverse-v2 \
+                                --device gpu \
+                                --seed $i \
+                                --load_model logs/tuning/cdaf_jax_coverage_margin/aligned_actor/increased_discount/iql_awbc/${first_arg}/${first_arg}/${third_arg} \
+                                --max_timesteps 100000 \
+                                --eval_freq 10000 \
+                                --actor_update_method "td3_weighted_bc" \
+                                --actor_refit_dir_name actor_refit/td3_weighted_bc/${fourth_arg} \
+                                --policy_weight_exponent ${fourth_arg} \
+                                --n_episodes 10 \
+                                --log_wandb False &
 
-                            # XLA_PYTHON_CLIENT_MEM_FRACTION=0.15  CUDA_VISIBLE_DEVICES=0 python algorithms/uk_offline/sa_cdaf_jax.py \
-                            #     --env antmaze-large-diverse-v2 \
-                            #     --device gpu \
-                            #     --seed $i \
-                            #     --load_model logs/tuning/sa_cdaf_jax/init_max/increased_discount/${first_arg}/${third_arg} \
-                            #     --max_timesteps 0 \
-                            #     --refit_actor_steps 1000000 \
-                            #     --eval_actor_eval_freq 50000 \
-                            #     --actor_fit_method "td3_weighted_bc" \
-                            #     --actor_refit_dir_name actor_refit/td3_weighted_bc/${fourth_arg}/${fifth_arg}/${sixth_arg} \
-                            #     --actor_lr ${fourth_arg} \
-                            #     --bc_coef ${fifth_arg} \
-                            #     --policy_weight_exponent ${sixth_arg} \
-                            #     --n_episodes 10 \
-                            #     --eval_actor_batch_size 256 \
-                            #     --log_wandb False &
 
-                            # XLA_PYTHON_CLIENT_MEM_FRACTION=0.15  CUDA_VISIBLE_DEVICES=1 python algorithms/uk_offline/cdaf_jax_coverage_margin.py \
-                            #     --env antmaze-large-diverse-v2 \
-                            #     --device gpu \
-                            #     --seed $i \
-                            #     --load_model logs/tuning/cdaf_jax_coverage_margin/init_max/increased_discount/${first_arg}/${third_arg} \
-                            #     --max_timesteps 0 \
-                            #     --refit_actor_steps 1000000 \
-                            #     --eval_actor_eval_freq 50000 \
-                            #     --actor_fit_method "td3_weighted_bc" \
-                            #     --actor_refit_dir_name actor_refit/td3_weighted_bc/${fourth_arg}/${fifth_arg}/${sixth_arg} \
-                            #     --actor_lr ${fourth_arg} \
-                            #     --bc_coef ${fifth_arg} \
-                            #     --policy_weight_exponent ${sixth_arg} \
-                            #     --n_episodes 10 \
-                            #     --eval_actor_batch_size 256 \
-                            #     --log_wandb False &
-
-                            XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 CUDA_VISIBLE_DEVICES=1 python algorithms/uk_offline/basic/iql_jax.py \
-                            --env antmaze-large-diverse-v2 \
-                            --device gpu \
-                            --seed $i \
-                            --load_model logs/basic/jax \
-                            --max_timesteps 0 \
-                            --refit_actor_steps 1000000 \
-                            --refit_actor_eval_freq 50000 \
-                            --actor_refit_dir_name actor_refit/ \
-                            --n_episodes 10 \
-                            --refit_actor_batch_size 256 \
-                            --log_wandb False &
+                            # XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 CUDA_VISIBLE_DEVICES=1 python algorithms/uk_offline/basic/iql_jax.py \
+                            # --env antmaze-large-diverse-v2 \
+                            # --device gpu \
+                            # --seed $i \
+                            # --load_model logs/basic/jax \
+                            # --max_timesteps 0 \
+                            # --refit_actor_steps 1000000 \
+                            # --refit_actor_eval_freq 50000 \
+                            # --actor_refit_dir_name actor_refit/ \
+                            # --n_episodes 10 \
+                            # --refit_actor_batch_size 256 \
+                            # --log_wandb False &
 
                         done      
                     done

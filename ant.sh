@@ -1,9 +1,9 @@
 
 
-first_args=(0.0)
+first_args=(1.0 1.5 0.5)
 
 # second_args=(1.0 1.5 2.0 2.5 3.0)
-second_args=(0.6 0.8 1.0 1.2 1.4)
+second_args=(2.0)
 # second_args=(0.6)
 
 third_args=(1000)
@@ -31,8 +31,8 @@ do
         for third_arg in "${third_args[@]}"
         do
 
-            # for i in {1..2}
-            for i in 0
+            for i in {1..2}
+            # for i in 0
             do
                 # XLA_PYTHON_CLIENT_PREALLOCATE=false
                 
@@ -42,24 +42,31 @@ do
                 --hyperparams_path hyperparams/sa_cdaf_jax.yml \
                 --device gpu \
                 --seed $i \
-                --checkpoints_path logs/tuning/sa_cdaf_jax/aligned_actor/increased_discount/${first_arg}/${second_arg}/${third_arg} \
+                --checkpoints_path logs/tuning/sa_cdaf_jax/aligned_actor/increased_discount/${first_arg}/${first_arg}/${third_arg} \
                 --min_weight_exponent ${first_arg} \
-                --max_weight_exponent ${second_arg} \
-                --policy_weight_exponent ${second_arg} \
+                --max_weight_exponent ${first_arg} \
+                --policy_weight_exponent ${first_arg} \
                 --delayed_update_period ${third_arg} \
+                --actor_update_method "td3_weighted_bc" \
                 --discount 0.999 &
 
-                # XLA_PYTHON_CLIENT_MEM_FRACTION=0.08 CUDA_VISIBLE_DEVICES=0 python algorithms/uk_offline/cdaf_jax_coverage_margin.py \
-                # --env antmaze-large-diverse-v2 \
-                # --hyperparams_path hyperparams/cdaf_jax_coverage_margin.yml \
-                # --device gpu \
-                # --seed $i \
-                # --checkpoints_path logs/tuning/cdaf_jax_coverage_margin/aligned_actor/increased_discount/${first_arg}/${second_arg}/${third_arg} \
-                # --min_weight_exponent ${first_arg} \
-                # --max_weight_exponent ${second_arg} \
-                # --policy_weight_exponent ${second_arg} \
-                # --delayed_update_period ${third_arg} \
-                # --discount 0.999 &
+                sleep 1
+
+                XLA_PYTHON_CLIENT_MEM_FRACTION=0.08 CUDA_VISIBLE_DEVICES=0 python algorithms/uk_offline/cdaf_jax_coverage_margin.py \
+                --env antmaze-large-diverse-v2 \
+                --hyperparams_path hyperparams/cdaf_jax_coverage_margin.yml \
+                --device gpu \
+                --seed $i \
+                --checkpoints_path logs/tuning/cdaf_jax_coverage_margin/aligned_actor/increased_discount/${first_arg}/${first_arg}/${third_arg} \
+                --min_weight_exponent ${first_arg} \
+                --max_weight_exponent ${first_arg} \
+                --policy_weight_exponent ${first_arg} \
+                --delayed_update_period ${third_arg} \
+                --actor_update_method "td3_weighted_bc" \
+                --discount 0.999 &
+
+                sleep 1
+
 
                 # XLA_PYTHON_CLIENT_MEM_FRACTION=0.3 CUDA_VISIBLE_DEVICES=1 python algorithms/uk_offline/cdaf_jax.py \
                 # --env antmaze-large-diverse-v2 \
@@ -96,7 +103,7 @@ do
                 # --v_filter_temperature ${first_arg} \
                 # --delayed_update_freq ${third_arg} 
             done      
+            wait
         done
     done
 done
-wait

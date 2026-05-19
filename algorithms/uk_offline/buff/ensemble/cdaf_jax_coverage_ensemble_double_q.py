@@ -61,6 +61,7 @@ class TrainConfig:
     tau: float = 0.005
     qf_lr: float = 3e-4
     vf_lr: float = 3e-4
+    ensemble_size: int = 1
     delayed_update_period: int = 250
     min_weight_exponent: float = 0.0
     max_weight_exponent: float = 2.0
@@ -134,6 +135,7 @@ def validate_config(config: TrainConfig) -> None:
     assert config.coverage_high_quantile >= config.coverage_low_quantile
     assert config.adv_margin >= 0.0, "adv_margin must be >= 0"
     assert config.max_weight_exponent >= config.min_weight_exponent
+    assert config.ensemble_size > 0, "ensemble_size must be > 0"
     assert config.delayed_update_period > 0
     assert config.bc_coef >= 0.0
     assert config.mode in ("train", "refit"), "mode must be train or refit"
@@ -611,6 +613,11 @@ class CDAFState:
     v_target_params: Any
     v_delayed_params: Any
     v_opt_state: Any
+    # filter_indices[i] tells which delayed critic/value pair is used to
+    # compute the filtering advantage for V_i. For n >= 2 this is a
+    # one-to-one mapping with no self-pairing.
+    filter_key: jnp.ndarray
+    filter_indices: jnp.ndarray
 
 
 @struct.dataclass
@@ -634,6 +641,7 @@ class CDAFJAX:
         qf_lr: float = 3e-4,
         vf_lr: float = 3e-4,
         actor_lr: float = 3e-4,
+        ensemble_size: int = 1,
         discount: float = 0.99,
         tau: float = 0.005,
         delayed_update_period: int = 250,
@@ -655,6 +663,9 @@ class CDAFJAX:
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.max_steps = max_steps
+        if ensemble_size <= 0:
+            raise ValueError("ensemble_size must be > 0")
+        self.ensemble_size = int(ensemble_size)
         self.discount = discount
         self.tau = tau
         self.delayed_update_period = delayed_update_period
@@ -680,13 +691,30 @@ class CDAFJAX:
         self.actor_tx = optax.adam(actor_lr)
 
         key = jax.random.PRNGKey(seed)
-        key_actor, key_q, key_v = jax.random.split(key, 3)
+        key_actor, key_q, key_v, key_filter = jax.random.split(key, 4)
+        q_keys = jax.random.split(key_q, self.ensemble_size)
+        v_keys = jax.random.split(key_v, self.ensemble_size)
         dummy_state = jnp.zeros((1, state_dim), dtype=jnp.float32)
         dummy_action = jnp.zeros((1, action_dim), dtype=jnp.float32)
 
         actor_params = self.actor_def.init(key_actor, dummy_state)["params"]
-        q_params = self.q_def.init(key_q, dummy_state, dummy_action)["params"]
-        v_params = self.v_def.init(key_v, dummy_state)["params"]
+        q_params = tuple(
+            self.q_def.init(q_key, dummy_state, dummy_action)["params"]
+            for q_key in q_keys
+        )
+        v_params = tuple(
+            self.v_def.init(v_key, dummy_state)["params"]
+            for v_key in v_keys
+        )
+
+        if self.ensemble_size == 1:
+            filter_indices = np.asarray([0], dtype=np.int32)
+        elif self.ensemble_size == 2:
+            filter_indices = np.asarray([1, 0], dtype=np.int32)
+        else:
+            # Initial one-to-one derangement. During training this mapping is
+            # randomly re-sampled at the delayed-network update period.
+            filter_indices = (np.arange(self.ensemble_size, dtype=np.int32) + 1) % self.ensemble_size
 
         self.initial_actor_params = copy.deepcopy(actor_params)
         self.initial_actor_opt_state = self.actor_tx.init(actor_params)
@@ -701,6 +729,8 @@ class CDAFJAX:
             v_target_params=copy.deepcopy(v_params),
             v_delayed_params=copy.deepcopy(v_params),
             v_opt_state=self.v_tx.init(v_params),
+            filter_key=key_filter,
+            filter_indices=jnp.asarray(filter_indices, dtype=jnp.int32),
         )
         self.actor_state = ActorState(
             params=actor_params,
@@ -737,6 +767,38 @@ class CDAFJAX:
         policy_weight_clip = self.policy_weight_clip
         alpha = self.alpha
         bc_coef = self.bc_coef
+        ensemble_size = self.ensemble_size
+
+        def apply_q_ensemble(q_params_tuple, states, actions):
+            return jnp.stack(
+                [q_apply({"params": q_params_tuple[i]}, states, actions) for i in range(ensemble_size)],
+                axis=0,
+            )
+
+        def apply_v_ensemble(v_params_tuple, states):
+            return jnp.stack(
+                [v_apply({"params": v_params_tuple[i]}, states) for i in range(ensemble_size)],
+                axis=0,
+            )
+
+        def apply_q_mean(q_params_tuple, states, actions):
+            return jnp.mean(apply_q_ensemble(q_params_tuple, states, actions), axis=0)
+
+        def apply_v_mean(v_params_tuple, states):
+            return jnp.mean(apply_v_ensemble(v_params_tuple, states), axis=0)
+
+        def next_filter_mapping(filter_key):
+            if ensemble_size == 1:
+                return filter_key, jnp.asarray([0], dtype=jnp.int32)
+            if ensemble_size == 2:
+                return filter_key, jnp.asarray([1, 0], dtype=jnp.int32)
+
+            new_key, subkey = jax.random.split(filter_key)
+            # Random cyclic derangement. This guarantees a one-to-one mapping and
+            # prevents update head i from using its own delayed Q_i/V_i for filtering.
+            shift = jax.random.randint(subkey, shape=(), minval=1, maxval=ensemble_size)
+            filter_indices = (jnp.arange(ensemble_size, dtype=jnp.int32) + shift) % ensemble_size
+            return new_key, filter_indices.astype(jnp.int32)
 
         @jax.jit
         def train_step(state: CDAFState, actor_state: ActorState, batch: TensorBatch):
@@ -747,10 +809,10 @@ class CDAFJAX:
             next_observations = batch["next_observations"]
             dones = jnp.squeeze(batch["dones"], axis=-1)
 
-            def q_loss_fn(q_params):
-                next_v = v_apply({"params": state.v_target_params}, next_observations)
-                target_q = rewards + (1.0 - dones) * discount * next_v
-                q = q_apply({"params": q_params}, observations, actions)
+            def q_loss_fn(q_params_tuple):
+                next_v = apply_v_ensemble(state.v_target_params, next_observations)
+                target_q = rewards[None, :] + (1.0 - dones)[None, :] * discount * next_v
+                q = apply_q_ensemble(q_params_tuple, observations, actions)
                 q_loss = jnp.mean((q - jax.lax.stop_gradient(target_q)) ** 2)
                 return q_loss, (q, target_q)
 
@@ -761,8 +823,10 @@ class CDAFJAX:
             progress = jnp.minimum(total_it.astype(jnp.float32) / jnp.maximum(float(max_steps), 1.0), 1.0)
             exponent = min_weight_exponent + (max_weight_exponent - min_weight_exponent) * progress
 
-            delayed_q = q_apply({"params": state.q_delayed_params}, observations, actions)
-            delayed_v = v_apply({"params": state.v_delayed_params}, observations)
+            delayed_q_all = apply_q_ensemble(state.q_delayed_params, observations, actions)
+            delayed_v_all = apply_v_ensemble(state.v_delayed_params, observations)
+            delayed_q = jnp.take(delayed_q_all, state.filter_indices, axis=0)
+            delayed_v = jnp.take(delayed_v_all, state.filter_indices, axis=0)
             raw_delayed_adv = delayed_q - delayed_v
             delayed_adv = jnp.clip(raw_delayed_adv, -weight_logit_clip, weight_logit_clip)
 
@@ -781,18 +845,18 @@ class CDAFJAX:
             if use_coverage_aware_beta:
                 coverage_conf = jnp.clip(jnp.squeeze(batch["state_coverage_conf"], axis=-1), 0.0, 1.0)
             else:
-                coverage_conf = jnp.ones_like(beta_adv)
+                coverage_conf = jnp.ones_like(rewards)
 
             # coverage_conf c(s) gates how much we trust advantage filtering.
-            #   sparse state: c(s) ~= 0 -> beta ~= 1 -> V(s) learns from Q(s, a)
-            #   dense state:  c(s) ~= 1 -> beta ~= beta_adv -> original CDAF
-            filter_strength = coverage_conf * progress
+            #   sparse state: c(s) ~= 0 -> beta ~= 1 -> V_i(s) learns from Q_i(s, a)
+            #   dense state:  c(s) ~= 1 -> beta ~= beta_adv from the paired delayed head j
+            filter_strength = coverage_conf[None, :] * progress
             beta = 1.0 - filter_strength * (1.0 - beta_adv)
             beta = jnp.maximum(beta, beta_min)
 
-            def v_loss_fn(v_params):
-                target_v_q = q_apply({"params": state.q_target_params}, observations, actions)
-                v = v_apply({"params": v_params}, observations)
+            def v_loss_fn(v_params_tuple):
+                target_v_q = apply_q_ensemble(state.q_target_params, observations, actions)
+                v = apply_v_ensemble(v_params_tuple, observations)
                 value_residual = v - jax.lax.stop_gradient(target_v_q)
                 value_loss = jnp.mean(jax.lax.stop_gradient(beta) * value_residual ** 2)
                 return value_loss, (v, target_v_q)
@@ -811,12 +875,10 @@ class CDAFJAX:
                 )
                 bc_loss = jnp.mean(bc_per_sample)
 
-                # Dataset-action advantage weights for weighted BC variants.
-                # We use the learned CDAF value V(s) as the baseline, consistent
-                # with the training-time advantage Q(s,a)-V(s).
+                # All actor objectives use the ensemble-mean Q/V.
                 if actor_update_method in IQL_ACTOR_METHODS:
-                    data_q = q_apply({"params": state.q_target_params}, observations, actions)
-                    data_v = v_apply({"params": state.v_params}, observations)
+                    data_q = apply_q_mean(state.q_target_params, observations, actions)
+                    data_v = apply_v_mean(v_params, observations)
                     data_adv = data_q - data_v
                     policy_weight = jnp.minimum(
                         jnp.exp(policy_weight_exponent * jax.lax.stop_gradient(data_adv)),
@@ -826,8 +888,8 @@ class CDAFJAX:
                     weight_mean = jnp.mean(policy_weight)
                     weight_max = jnp.max(policy_weight)
                 elif actor_update_method in ("weighted_bc", "td3_weighted_bc"):
-                    data_q = q_apply({"params": q_params}, observations, actions)
-                    data_v = v_apply({"params": v_params}, observations)
+                    data_q = apply_q_mean(q_params, observations, actions)
+                    data_v = apply_v_mean(v_params, observations)
                     data_adv = jnp.clip(data_q - data_v, -weight_logit_clip, weight_logit_clip)
                     policy_weight = jnp.exp(policy_weight_exponent * data_adv)
                     policy_weight = policy_weight / jnp.maximum(jnp.mean(policy_weight), 1e-6)
@@ -846,7 +908,7 @@ class CDAFJAX:
                     q_for_log = data_q
                     lmbda = jnp.asarray(0.0)
                 else:
-                    q_pi = q_apply({"params": q_params}, observations, pi)
+                    q_pi = apply_q_mean(q_params, observations, pi)
                     lmbda = jax.lax.stop_gradient(alpha / jnp.maximum(jnp.mean(jnp.abs(q_pi)), 1e-6))
                     bc_regularizer = weighted_bc_loss if actor_update_method == "td3_weighted_bc" else bc_loss
                     actor_loss = -lmbda * jnp.mean(q_pi) + bc_coef * bc_regularizer
@@ -875,6 +937,12 @@ class CDAFJAX:
                 lambda _: state.v_delayed_params,
                 operand=None,
             )
+            filter_key, filter_indices = jax.lax.cond(
+                should_update_delayed,
+                lambda key: next_filter_mapping(key),
+                lambda key: (key, state.filter_indices),
+                state.filter_key,
+            )
 
             new_state = CDAFState(
                 total_it=total_it,
@@ -886,14 +954,18 @@ class CDAFJAX:
                 v_target_params=v_target_params,
                 v_delayed_params=v_delayed_params,
                 v_opt_state=v_opt_state,
+                filter_key=filter_key,
+                filter_indices=filter_indices,
             )
 
             log_dict = {
                 "q_loss": q_loss,
                 "q_mean": jnp.mean(q),
+                "q_ensemble_std_mean": jnp.mean(jnp.std(q, axis=0)),
                 "target_q_mean": jnp.mean(target_q),
                 "value_loss": value_loss,
                 "v_mean": jnp.mean(v),
+                "v_ensemble_std_mean": jnp.mean(jnp.std(v, axis=0)),
                 "target_v_q_mean": jnp.mean(target_v_q),
                 "actor_loss": actor_loss,
                 "actor_q_mean": jnp.mean(actor_q),
@@ -911,6 +983,8 @@ class CDAFJAX:
                 "coverage_conf_min": jnp.min(coverage_conf),
                 "coverage_conf_max": jnp.max(coverage_conf),
                 "filter_strength_mean": jnp.mean(filter_strength),
+                "filter_index_mean": jnp.mean(filter_indices.astype(jnp.float32)),
+                "ensemble_size": jnp.asarray(ensemble_size, dtype=jnp.float32),
                 "adv_margin": jnp.asarray(adv_margin),
                 "weight_exponent": exponent,
                 "delayed_adv_mean": jnp.mean(delayed_adv),
@@ -928,6 +1002,7 @@ class CDAFJAX:
 
         return train_step
 
+
     def _build_actor_fit_step(self):
         actor_apply = self.actor_def.apply
         q_apply = self.q_def.apply
@@ -939,6 +1014,25 @@ class CDAFJAX:
         policy_weight_exponent = self.policy_weight_exponent
         policy_weight_clip = self.policy_weight_clip
         weight_logit_clip = self.weight_logit_clip
+        ensemble_size = self.ensemble_size
+
+        def apply_q_ensemble(q_params_tuple, states, actions):
+            return jnp.stack(
+                [q_apply({"params": q_params_tuple[i]}, states, actions) for i in range(ensemble_size)],
+                axis=0,
+            )
+
+        def apply_v_ensemble(v_params_tuple, states):
+            return jnp.stack(
+                [v_apply({"params": v_params_tuple[i]}, states) for i in range(ensemble_size)],
+                axis=0,
+            )
+
+        def apply_q_mean(q_params_tuple, states, actions):
+            return jnp.mean(apply_q_ensemble(q_params_tuple, states, actions), axis=0)
+
+        def apply_v_mean(v_params_tuple, states):
+            return jnp.mean(apply_v_ensemble(v_params_tuple, states), axis=0)
 
         @jax.jit
         def actor_fit_step(actor_state: ActorState, q_params: Any, v_params: Any, batch: TensorBatch):
@@ -957,9 +1051,10 @@ class CDAFJAX:
 
                 # Refit uses fixed learned Q/V and updates only pi. Advantage weights
                 # remain fully in-sample because they are computed on dataset actions.
+                # All Q/V quantities below are ensemble means.
                 if actor_update_method in IQL_ACTOR_METHODS:
-                    data_q = q_apply({"params": q_params}, observations, actions)
-                    data_v = v_apply({"params": v_params}, observations)
+                    data_q = apply_q_mean(q_params, observations, actions)
+                    data_v = apply_v_mean(v_params, observations)
                     data_adv = data_q - data_v
                     policy_weight = jnp.minimum(
                         jnp.exp(policy_weight_exponent * jax.lax.stop_gradient(data_adv)),
@@ -969,8 +1064,8 @@ class CDAFJAX:
                     weight_mean = jnp.mean(policy_weight)
                     weight_max = jnp.max(policy_weight)
                 elif actor_update_method in ("weighted_bc", "td3_weighted_bc"):
-                    data_q = q_apply({"params": q_params}, observations, actions)
-                    data_v = v_apply({"params": v_params}, observations)
+                    data_q = apply_q_mean(q_params, observations, actions)
+                    data_v = apply_v_mean(v_params, observations)
                     data_adv = jnp.clip(data_q - data_v, -weight_logit_clip, weight_logit_clip)
                     policy_weight = jnp.exp(policy_weight_exponent * data_adv)
                     policy_weight = policy_weight / jnp.maximum(jnp.mean(policy_weight), 1e-6)
@@ -989,7 +1084,7 @@ class CDAFJAX:
                     q_for_log = data_q
                     lmbda = jnp.asarray(0.0)
                 else:
-                    q_pi = q_apply({"params": q_params}, observations, pi)
+                    q_pi = apply_q_mean(q_params, observations, pi)
                     lmbda = jax.lax.stop_gradient(alpha / jnp.maximum(jnp.mean(jnp.abs(q_pi)), 1e-6))
                     bc_regularizer = weighted_bc_loss if actor_update_method == "td3_weighted_bc" else bc_loss
                     actor_loss = -lmbda * jnp.mean(q_pi) + bc_coef * bc_regularizer
@@ -1398,6 +1493,7 @@ def train(config: TrainConfig):
         qf_lr=config.qf_lr,
         vf_lr=config.vf_lr,
         actor_lr=config.actor_lr,
+        ensemble_size=config.ensemble_size,
         discount=config.discount,
         tau=config.tau,
         delayed_update_period=config.delayed_update_period,
