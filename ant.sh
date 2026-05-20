@@ -3,12 +3,12 @@
 first_args=(1.0)
 
 # second_args=(1.0 1.5 2.0 2.5 3.0)
-second_args=(0.1)
-# second_args=(0.6)
+second_args=(0.0 0.1 0.2 0.3 0.4)
+# second_args=(0.0)
 
 third_args=(1000)
 
-fourth_args=(100 1000)
+fourth_args=(2)
 # fourth_args=(0.0 0.2 0.4 0.6 0.8 1.0)
 
 fifth_args=(0.1)
@@ -73,21 +73,37 @@ do
                     # sleep 1
 
 
-                    XLA_PYTHON_CLIENT_MEM_FRACTION=0.55 CUDA_VISIBLE_DEVICES=0 python algorithms/uk_offline/cdaf_jax.py \
+                    # XLA_PYTHON_CLIENT_MEM_FRACTION=0.55 CUDA_VISIBLE_DEVICES=0 python algorithms/uk_offline/cdaf_jax.py \
+                    # --env antmaze-large-diverse-v2 \
+                    # --hyperparams_path hyperparams/cdaf_jax.yml \
+                    # --device gpu \
+                    # --seed $i \
+                    # --checkpoints_path logs/tuning/ensemble/cdaf_jax/${fourth_arg}/${first_arg}/${second_arg}/${third_arg} \
+                    # --min_weight_exponent ${first_arg} \
+                    # --max_weight_exponent ${first_arg} \
+                    # --policy_weight_exponent ${first_arg} \
+                    # --beta_min ${second_arg} \
+                    # --delayed_update_period ${third_arg} \
+                    # --ensemble_size ${fourth_arg} \
+                    # --actor_update_method "td3_weighted_bc" \
+                    # --discount 0.999 \
+                    # --n_episodes 0
+
+
+
+                    XLA_PYTHON_CLIENT_MEM_FRACTION=0.085 CUDA_VISIBLE_DEVICES=1 python algorithms/uk_offline/dave_iql_jax.py \
                     --env antmaze-large-diverse-v2 \
-                    --hyperparams_path hyperparams/cdaf_jax.yml \
+                    --hyperparams_path hyperparams/dave_iql_jax.yml \
                     --device gpu \
                     --seed $i \
-                    --checkpoints_path logs/tuning/ensemble/cdaf_jax/${fourth_arg}/${first_arg}/${second_arg}/${third_arg} \
-                    --min_weight_exponent ${first_arg} \
-                    --max_weight_exponent ${first_arg} \
-                    --policy_weight_exponent ${first_arg} \
-                    --beta_min ${second_arg} \
+                    --checkpoints_path logs/tuning/ensemble/dave_iql_jax/${fourth_arg}/${first_arg}/${second_arg}/${third_arg} \
+                    --v_filter_exponent ${first_arg} \
+                    --v_filter_floor ${second_arg} \
                     --delayed_update_period ${third_arg} \
                     --ensemble_size ${fourth_arg} \
-                    --actor_update_method "td3_weighted_bc" \
-                    --discount 0.999 \
-                    --n_episodes 0
+                    --n_episodes 10 &
+
+                    sleep 1
 
 
 
@@ -114,8 +130,9 @@ do
                     # --v_filter_temperature ${first_arg} \
                     # --delayed_update_freq ${third_arg} 
                 done      
-                wait
             done
         done
     done
 done
+
+wait

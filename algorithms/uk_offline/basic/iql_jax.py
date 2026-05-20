@@ -40,16 +40,26 @@ class TrainConfig:
     device: str = "gpu"  # one of: cpu, gpu, tpu. JAX selects the matching backend when available.
     env: str = "halfcheetah-medium-expert-v2"
     seed: int = 0
+    # Shared by both modes:
+    #   mode="train": evaluate pi every eval_freq joint Q/V/pi training steps.
+    #   mode="refit": evaluate pi every eval_freq actor-only refit steps.
     eval_freq: int = int(25e3)
     n_episodes: int = 10
+    # Shared by both modes:
+    #   mode="train": number of joint Q/V/pi training steps.
+    #   mode="refit": number of actor-only refit steps using frozen loaded Q/V.
     max_timesteps: int = int(1e6)
     checkpoints_path: Optional[str] = None
     load_model: str = ""
+    mode: str = "train"  # one of: train, refit. refit loads Q/V and trains only pi.
     hyperparams_path: Optional[str] = "hyperparams/iql_jax.yml"
     use_hyperparams: bool = True
 
     # Dataset
     buffer_size: int = 2_000_000
+    # Shared by both modes:
+    #   mode="train": minibatch size for joint Q/V/pi updates.
+    #   mode="refit": minibatch size for actor-only refit updates.
     batch_size: int = 256
     normalize: bool = True
     normalize_reward: bool = False
@@ -65,11 +75,11 @@ class TrainConfig:
     actor_lr: float = 3e-4
     actor_dropout: Optional[float] = None
 
-    # Standalone actor refit from a saved checkpoint.
-    # Used when --load_model is provided with --max_timesteps 0.
-    refit_actor_steps: int = 50000
-    refit_actor_batch_size: int = 256
-    refit_actor_eval_freq: int = 2000
+    # Standalone actor refit output directory. Refit reuses the shared
+    # training schedule fields above:
+    #   max_timesteps -> actor-only refit steps
+    #   batch_size    -> actor-only refit batch size
+    #   eval_freq     -> actor-only refit evaluation interval
     actor_refit_dir_name: str = "actor_refit"
     refit_from_scratch: bool = True
 
@@ -92,6 +102,7 @@ def refresh_algorithm_names(config: TrainConfig) -> None:
 
 
 def validate_config(config: TrainConfig) -> None:
+    assert config.mode in ("train", "refit"), "mode must be train or refit"
     assert config.batch_size > 0
     assert config.buffer_size > 0
     assert config.eval_freq > 0
@@ -104,10 +115,9 @@ def validate_config(config: TrainConfig) -> None:
     assert config.iql_tau >= 0.0 and config.iql_tau <= 1.0
     if config.actor_dropout is not None:
         assert config.actor_dropout >= 0.0 and config.actor_dropout < 1.0
-    assert config.refit_actor_steps >= 0
-    assert config.refit_actor_batch_size > 0
-    assert config.refit_actor_eval_freq > 0
     assert config.actor_refit_dir_name != ""
+    if config.mode == "refit":
+        assert config.load_model != "", "mode='refit' requires --load_model"
 
 
 def _cli_overridden_fields(argv: Optional[List[str]] = None) -> set:
@@ -160,6 +170,10 @@ def apply_env_hyperparams(config: TrainConfig) -> TrainConfig:
     cli_overrides = _cli_overridden_fields()
     aliases = {
         "n_timesteps": "max_timesteps",
+        # Backward compatibility for old hyperparameter files.
+        "refit_actor_steps": "max_timesteps",
+        "refit_actor_batch_size": "batch_size",
+        "refit_actor_eval_freq": "eval_freq",
     }
     config_fields = set(TrainConfig.__dataclass_fields__.keys())
     applied, skipped_unknown, skipped_cli = [], [], []
@@ -1103,7 +1117,9 @@ def resolve_checkpoint_path(
 @pyrallis.wrap()
 def train(config: TrainConfig):
     config = apply_env_hyperparams(config)
-    refit_only = config.load_model != "" and int(config.max_timesteps) <= 0
+    refit_only = config.mode == "refit"
+    if refit_only and config.load_model == "":
+        raise ValueError("refit mode requires --load_model")
     if not refit_only:
         config = finalize_checkpoint_path(config)
 
@@ -1150,14 +1166,15 @@ def train(config: TrainConfig):
     set_seed(seed, env)
 
     print("---------------------------------------")
-    print(f"Training {ALGORITHM_NAME}-JAX, Env: {config.env}, Seed: {seed}")
+    run_mode_name = "Actor refit" if refit_only else "Training"
+    print(f"{run_mode_name} {ALGORITHM_NAME}-JAX, Env: {config.env}, Seed: {seed}")
     print("---------------------------------------")
 
     trainer = IQLJAX(
         max_action=max_action,
         state_dim=state_dim,
         action_dim=action_dim,
-        max_steps=max(int(config.max_timesteps), int(config.refit_actor_steps), 1),
+        max_steps=config.max_timesteps,
         qf_lr=config.qf_lr,
         vf_lr=config.vf_lr,
         actor_lr=config.actor_lr,
@@ -1187,12 +1204,19 @@ def train(config: TrainConfig):
 
     if refit_only:
         if loaded_run_dir is None:
-            raise ValueError("refit_only mode requires --load_model")
+            raise ValueError("refit mode requires --load_model")
 
         actor_refit_dir = loaded_run_dir / config.actor_refit_dir_name
         actor_refit_dir.mkdir(parents=True, exist_ok=True)
         print("---------------------------------------")
         print(f"Actor refit from saved {ALGORITHM_NAME} checkpoint")
+        print("Q/V are frozen; only pi is optimized.")
+        print(
+            "Refit schedule uses shared fields: "
+            f"max_timesteps={config.max_timesteps}, "
+            f"batch_size={config.batch_size}, "
+            f"eval_freq={config.eval_freq}"
+        )
         print(f"Saving actor refit outputs to: {actor_refit_dir}")
         print("---------------------------------------")
 
@@ -1205,12 +1229,12 @@ def train(config: TrainConfig):
         refit_actor_state, refit_log = trainer.fit_actor(
             replay_buffer=replay_buffer,
             actor_state=actor_state,
-            steps=config.refit_actor_steps,
-            batch_size=config.refit_actor_batch_size,
+            steps=config.max_timesteps,
+            batch_size=config.batch_size,
             eval_env=env,
             eval_episodes=config.n_episodes,
             eval_seed=config.seed,
-            eval_interval=config.refit_actor_eval_freq,
+            eval_interval=config.eval_freq,
             prefix="actor_refit",
             save_dir=actor_refit_dir,
             log_wandb=config.log_wandb,

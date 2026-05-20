@@ -13,49 +13,8 @@
 # - Top-level keys beginning with `_` are anchor definitions, not environments.
 
 _common: &common
-  n_timesteps: !!float 1e6
-  eval_freq: 25000
-  log_every: 500
-
-  # Dataset
   buffer_size: 10000000
-  batch_size: 256
-  normalize: true
 
-  # Bellman/value/policy learning
-  discount: 0.99
-  tau: 0.005
-  beta: 3.0
-  iql_deterministic: false
-  qf_lr: !!float 3e-4
-  vf_lr: !!float 3e-4
-  actor_lr: !!float 3e-4
-
-  # DAVE-IQL: decoupled selection + weighted-mean V learning.
-  # delayed_update_freq:
-  #   Every D gradient steps, Q_select_delay <- Q_select_target and V_delay <- V_target.
-  # v_filter_temperature:
-  #   Larger values make the V soft filter closer to uniform MSE.
-  #   Smaller values make it closer to hard advantage filtering.
-  # v_filter_clip:
-  #   Clips the exponent input for numerical stability.
-  # v_filter_floor:
-  #   Minimum contribution level. >0 means no sample is fully discarded.
-  # v_filter_baseline:
-  #   Advantage baseline used before exponentiation: mean, median, or zero.
-  delayed_update_freq: 1000
-  v_filter_temperature: 3.0
-  v_filter_clip: 3.0
-  v_filter_floor: 0.2
-  v_filter_baseline: "mean"
-
-
-  # Standalone actor refit from a saved checkpoint
-  refit_actor_steps: 50000
-  refit_actor_batch_size: 256
-  refit_actor_eval_freq: 2000
-  actor_refit_dir_name: "actor_refit"
-  refit_from_scratch: true
 
 _mujoco: &mujoco
   <<: *common
@@ -85,13 +44,7 @@ _antmaze: &antmaze
   normalize_reward: true
   beta: 10.0
 
-  # AntMaze is sparse-reward and can be sensitive to over-sharp filtering.
-  # Use a slower delay and softer V weights as a safer first setting.
-  delayed_update_freq: 2000
-  v_filter_temperature: 5.0
-  v_filter_clip: 3.0
-  v_filter_floor: 0.3
-  v_filter_baseline: "mean"
+
 
 _maze2d: &maze2d
   <<: *common
