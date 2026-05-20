@@ -8,35 +8,8 @@
 # - Top-level keys beginning with `_` are anchor definitions, not environments.
 
 _common: &common
-  n_timesteps: !!float 1e6
-  eval_freq: 25000
-
-  # Dataset
   buffer_size: 10000000
-  batch_size: 256
-  normalize: true
 
-  # CDAF value learning
-  discount: 0.99
-  tau: 0.005
-  qf_lr: !!float 3e-4
-  vf_lr: !!float 3e-4
-  delayed_update_period: 250
-  min_weight_exponent: 0.0
-  max_weight_exponent: 0.25
-  weight_logit_clip: 10.0
-  beta_min: 0.0
-
-  # TD3+BC actor fitting / refit
-  actor_lr: !!float 3e-4
-  eval_actor_steps: 2000
-  eval_actor_batch_size: 256
-  eval_actor_eval_freq: 2000
-  refit_actor_steps: 50000
-  actor_refit_dir_name: "actor_refit"
-  reset_actor_on_eval: false
-  alpha: 2.5
-  bc_coef: 1.0
 
 _mujoco: &mujoco
   <<: *common
@@ -45,7 +18,7 @@ _mujoco: &mujoco
 
 _antmaze: &antmaze
   <<: *common
-  n_episodes: 100
+  n_episodes: 10
   normalize_reward: true
 
 # -----------------------------------------------------------------------------
