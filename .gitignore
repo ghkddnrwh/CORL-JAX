@@ -147,6 +147,6 @@ dmypy.json
 wandb
 assets/
 
-
+wandb/
 logs/
 plots/
