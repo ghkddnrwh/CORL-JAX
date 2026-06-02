@@ -79,7 +79,7 @@ except ImportError:
 
 TensorBatch = Dict[str, jnp.ndarray]
 
-ALGORITHM_NAME = "DecoupledDelayedIQL"
+ALGORITHM_NAME = "DDIQL"
 ALGORITHM_FULL_NAME = "Decoupled Delayed Implicit Q-Learning"
 
 EXP_ADV_MAX = 100.0
@@ -148,8 +148,8 @@ class TrainConfig:
 
     # Logging
     project: str = "ORL-BIAS"
-    group: str = "DecoupledDelayedIQL-JAX"
-    name: str = "DecoupledDelayedIQL-JAX"
+    group: str = "DDIQL-JAX"
+    name: str = "DDIQL-JAX"
     log_wandb: bool = True
     log_every: int = 500
 
@@ -161,8 +161,8 @@ class TrainConfig:
 def refresh_algorithm_names(config: TrainConfig) -> None:
     # config.project = "ORL-BIAS"
     # config.group = f"{ALGORITHM_NAME}-JAX"
-    # config.name = f"{ALGORITHM_NAME}-JAX-{config.env}"
-    config.name = f"{config.name}-{config.env}"
+    config.name = f"{ALGORITHM_NAME}-JAX-{config.env}"
+    # config.name = f"{config.name}-{config.env}"
 
 
 def validate_config(config: TrainConfig) -> None:
@@ -683,7 +683,7 @@ class ValueFunction(nn.Module):
 
 
 @struct.dataclass
-class DecoupledDelayedIQLState:
+class DDIQLState:
     total_it: jnp.ndarray
     q_params: Any
     q_target_params: Any
@@ -705,7 +705,7 @@ class ActorState:
     key: jnp.ndarray
 
 
-class DecoupledDelayedIQLJAX:
+class DDIQLJAX:
     """Decoupled Delayed IQL in JAX/Flax.
 
     For each ensemble member i:
@@ -818,7 +818,7 @@ class DecoupledDelayedIQLJAX:
         self.initial_actor_opt_state = self.actor_tx.init(actor_params)
         self.initial_actor_key = actor_key
 
-        self.state = DecoupledDelayedIQLState(
+        self.state = DDIQLState(
             total_it=jnp.asarray(0, dtype=jnp.int32),
             q_params=q_params,
             q_target_params=copy.deepcopy(q_params),
@@ -893,7 +893,7 @@ class DecoupledDelayedIQLJAX:
             return (ensemble_indices + shift) % jnp.asarray(ensemble_size, dtype=jnp.int32)
 
         @jax.jit
-        def train_step(state: DecoupledDelayedIQLState, batch: TensorBatch):
+        def train_step(state: DDIQLState, batch: TensorBatch):
             total_it = state.total_it + jnp.asarray(1, dtype=jnp.int32)
             observations = batch["observations"]
             actions = batch["actions"]
@@ -989,7 +989,7 @@ class DecoupledDelayedIQLJAX:
                 operand=(q_target_params, v_params),
             )
 
-            new_state = DecoupledDelayedIQLState(
+            new_state = DDIQLState(
                 total_it=total_it,
                 q_params=q_params,
                 q_target_params=q_target_params,
@@ -1106,7 +1106,7 @@ class DecoupledDelayedIQLJAX:
             return actor_apply_fn({"params": actor_params}, observations, training=training)
 
         @jax.jit
-        def actor_refit_step(actor_state: ActorState, iql_state: DecoupledDelayedIQLState, batch: TensorBatch):
+        def actor_refit_step(actor_state: ActorState, iql_state: DDIQLState, batch: TensorBatch):
             observations = batch["observations"]
             actions = batch["actions"]
 
@@ -1483,7 +1483,7 @@ def resolve_checkpoint_path(
     run_name: Optional[str] = None,
     seed: Optional[int] = None,
 ) -> Tuple[Path, Path]:
-    """Return (run_dir, checkpoint_path) for a saved DecoupledDelayedIQL-JAX checkpoint.
+    """Return (run_dir, checkpoint_path) for a saved DDIQL-JAX checkpoint.
 
     Supported load_model formats:
 
@@ -1713,7 +1713,7 @@ def train(config: TrainConfig):
     )
     print("---------------------------------------")
 
-    trainer = DecoupledDelayedIQLJAX(
+    trainer = DDIQLJAX(
         max_action=max_action,
         state_dim=state_dim,
         action_dim=action_dim,
@@ -1962,7 +1962,7 @@ if __name__ == "__main__":
 
 # TensorBatch = Dict[str, jnp.ndarray]
 
-# ALGORITHM_NAME = "DecoupledDelayedIQL"
+# ALGORITHM_NAME = "DDIQL"
 # ALGORITHM_FULL_NAME = "Decoupled Delayed Implicit Q-Learning"
 
 # EXP_ADV_MAX = 100.0
@@ -2031,8 +2031,8 @@ if __name__ == "__main__":
 
 #     # Logging
 #     project: str = "ORL-BIAS"
-#     group: str = "DecoupledDelayedIQL-JAX"
-#     name: str = "DecoupledDelayedIQL-JAX"
+#     group: str = "DDIQL-JAX"
+#     name: str = "DDIQL-JAX"
 #     log_wandb: bool = True
 #     log_every: int = 500
 
@@ -2565,7 +2565,7 @@ if __name__ == "__main__":
 
 
 # @struct.dataclass
-# class DecoupledDelayedIQLState:
+# class DDIQLState:
 #     total_it: jnp.ndarray
 #     q_params: Any
 #     q_target_params: Any
@@ -2587,7 +2587,7 @@ if __name__ == "__main__":
 #     key: jnp.ndarray
 
 
-# class DecoupledDelayedIQLJAX:
+# class DDIQLJAX:
 #     """Decoupled Delayed IQL in JAX/Flax.
 
 #     For each ensemble member i:
@@ -2700,7 +2700,7 @@ if __name__ == "__main__":
 #         self.initial_actor_opt_state = self.actor_tx.init(actor_params)
 #         self.initial_actor_key = actor_key
 
-#         self.state = DecoupledDelayedIQLState(
+#         self.state = DDIQLState(
 #             total_it=jnp.asarray(0, dtype=jnp.int32),
 #             q_params=q_params,
 #             q_target_params=copy.deepcopy(q_params),
@@ -2775,7 +2775,7 @@ if __name__ == "__main__":
 #             return (ensemble_indices + shift) % jnp.asarray(ensemble_size, dtype=jnp.int32)
 
 #         @jax.jit
-#         def train_step(state: DecoupledDelayedIQLState, batch: TensorBatch):
+#         def train_step(state: DDIQLState, batch: TensorBatch):
 #             total_it = state.total_it + jnp.asarray(1, dtype=jnp.int32)
 #             observations = batch["observations"]
 #             actions = batch["actions"]
@@ -2871,7 +2871,7 @@ if __name__ == "__main__":
 #                 operand=(q_target_params, v_params),
 #             )
 
-#             new_state = DecoupledDelayedIQLState(
+#             new_state = DDIQLState(
 #                 total_it=total_it,
 #                 q_params=q_params,
 #                 q_target_params=q_target_params,
@@ -2988,7 +2988,7 @@ if __name__ == "__main__":
 #             return actor_apply_fn({"params": actor_params}, observations, training=training)
 
 #         @jax.jit
-#         def actor_refit_step(actor_state: ActorState, iql_state: DecoupledDelayedIQLState, batch: TensorBatch):
+#         def actor_refit_step(actor_state: ActorState, iql_state: DDIQLState, batch: TensorBatch):
 #             observations = batch["observations"]
 #             actions = batch["actions"]
 
@@ -3263,7 +3263,7 @@ if __name__ == "__main__":
 #     run_name: Optional[str] = None,
 #     seed: Optional[int] = None,
 # ) -> Tuple[Path, Path]:
-#     """Return (run_dir, checkpoint_path) for a saved DecoupledDelayedIQL-JAX checkpoint.
+#     """Return (run_dir, checkpoint_path) for a saved DDIQL-JAX checkpoint.
 
 #     Supported load_model formats:
 
@@ -3405,7 +3405,7 @@ if __name__ == "__main__":
 #     )
 #     print("---------------------------------------")
 
-#     trainer = DecoupledDelayedIQLJAX(
+#     trainer = DDIQLJAX(
 #         max_action=max_action,
 #         state_dim=state_dim,
 #         action_dim=action_dim,
