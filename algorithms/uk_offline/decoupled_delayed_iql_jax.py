@@ -496,13 +496,12 @@ def set_seed(seed: int, env: Optional[gym.Env] = None):
 
 def wandb_init(config: dict) -> None:
     run = wandb.init(
-        project=project,
-        group=group,
-        name=name,
-        id=str(uuid.uuid4()),
         config=config,
+        project=config["project"],
+        group=config["group"],
+        name=config["name"],
+        id=str(uuid.uuid4()),
     )
-
     run.log_code(".")
 
 
