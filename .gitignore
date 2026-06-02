@@ -150,3 +150,5 @@ assets/
 wandb/
 logs/
 plots/
+
+/*.sh
