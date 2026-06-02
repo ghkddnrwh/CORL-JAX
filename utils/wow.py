@@ -1,6 +1,10 @@
 import wandb
+import pandas as pd
+
+import wandb
 api = wandb.Api()
-run = api.run("/ukjo19/ORL-BIAS/runs/0d11fbfc-0abf-4eb3-a286-5ae6d09092a3")
+run = api.run("/ukjo19/ORL-SMOOTH/runs/b9ce3fbd-bb94-4226-9ffa-5224774d7eb2")
 
-
-print(run.history())
+history = run.history()
+df = pd.DataFrame(history)
+df.to_csv("logs/wandb_logs/relocate_human.csv", index=False)

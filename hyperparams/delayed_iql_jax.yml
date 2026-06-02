@@ -30,8 +30,6 @@ _common: &common
   qf_lr: !!float 3e-4
   vf_lr: !!float 3e-4
   actor_lr: !!float 3e-4
-  hidden_dim: 256
-  n_hidden: 2
 
   # Standalone actor refit output directory. Refit reuses max_timesteps, batch_size, and eval_freq.
   actor_refit_dir_name: "actor_refit"
@@ -61,7 +59,7 @@ _antmaze: &antmaze
 
 _maze2d: &maze2d
   <<: *common
-  n_episodes: 10
+  n_episodes: 100
   normalize_reward: false
 
 _adroit: &adroit
@@ -70,17 +68,6 @@ _adroit: &adroit
   normalize_reward: false
   iql_tau: 0.8
   actor_dropout: 0.1
-
-
-_kitchen: &kitchen
-  <<: *common
-  n_episodes: 10
-  normalize_reward: false
-
-  beta: 0.5
-  iql_tau: 0.7
-  actor_dropout: 0.1
-
 
 # -----------------------------------------------------------------------------
 # MuJoCo locomotion: 3 environments x 6 datasets
@@ -234,16 +221,3 @@ relocate-cloned-v1:
 
 relocate-expert-v1:
   <<: *adroit
-
-# -----------------------------------------------------------------------------
-# Kitchen manipulation: 3 datasets
-# -----------------------------------------------------------------------------
-
-kitchen-complete-v0:
-  <<: *kitchen
-
-kitchen-partial-v0:
-  <<: *kitchen
-
-kitchen-mixed-v0:
-  <<: *kitchen

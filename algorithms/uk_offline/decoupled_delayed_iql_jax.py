@@ -1,14 +1,22 @@
-# JAX/Flax IQL implementation with CDAF_JAX-style experiment plumbing.
-# Algorithmic losses mirror the provided PyTorch IQL code; checkpointing,
-# hyperparameter merging, logging, and path handling follow the CDAF_JAX style.
+# JAX/Flax Decoupled Delayed IQL implementation with CDAF_JAX-style experiment plumbing.
 #
-# Current plumbing:
+# Decoupled Delayed IQL idea:
+#   - Use an ensemble of N paired Q_i and V_i networks.
+#   - Remove the original twin-Q min operator entirely.
+#   - Q_i is always bootstrapped from its own V_i.
+#   - V_i is regressed to its own Q_i, but its asymmetric expectile weight is
+#     computed from a delayed, decoupled pair j(i): Q_j_delayed - V_j_delayed.
+#   - If N=1, j(i)=i. If N=2, the two members filter each other. If N>=3,
+#     the one-to-one filtering assignment cycles whenever delayed networks refresh.
+#   - Actor updates always use ensemble-mean Q and ensemble-mean V.
+#
+# Experiment plumbing:
 #   - Explicit mode switch: mode="train" or mode="refit".
 #   - Refit mode uses shared schedule fields:
 #       max_timesteps -> actor-only refit steps
 #       batch_size    -> actor-only refit batch size
 #       eval_freq     -> actor-only refit evaluation interval
-#   - No backward-compatibility aliases for old refit_* keys.
+#   - Hyperparameter YAML keys must exactly match TrainConfig field names.
 
 import copy
 import os
@@ -71,8 +79,8 @@ except ImportError:
 
 TensorBatch = Dict[str, jnp.ndarray]
 
-ALGORITHM_NAME = "IQL"
-ALGORITHM_FULL_NAME = "Implicit Q-Learning"
+ALGORITHM_NAME = "DecoupledDelayedIQL"
+ALGORITHM_FULL_NAME = "Decoupled Delayed Implicit Q-Learning"
 
 EXP_ADV_MAX = 100.0
 LOG_STD_MIN = -20.0
@@ -100,7 +108,7 @@ class TrainConfig:
     checkpoints_path: Optional[str] = None
     load_model: str = ""
     mode: str = "train"  # one of: train, refit. refit loads Q/V and trains only pi.
-    hyperparams_path: Optional[str] = "hyperparams/iql_jax.yml"
+    hyperparams_path: Optional[str] = "hyperparams/decoupled_delayed_iql_jax.yml"
     use_hyperparams: bool = True
 
     # Dataset
@@ -127,6 +135,10 @@ class TrainConfig:
     hidden_dim: int = 256
     n_hidden: int = 2
 
+    # Decoupled delayed ensemble learning
+    ensemble_size: int = 2
+    delayed_update_period: int = 250
+
     # Standalone actor refit output directory.
     # Refit reuses the shared training schedule fields above:
     #   max_timesteps -> actor-only refit steps
@@ -135,9 +147,9 @@ class TrainConfig:
     actor_refit_dir_name: str = "actor_refit"
 
     # Logging
-    project: str = "ORL-SMOOTH"
-    group: str = "IQL-JAX"
-    name: str = "IQL-JAX"
+    project: str = "ORL-BIAS"
+    group: str = "DecoupledDelayedIQL-JAX"
+    name: str = "DecoupledDelayedIQL-JAX"
     log_wandb: bool = True
     log_every: int = 500
 
@@ -147,9 +159,10 @@ class TrainConfig:
 
 
 def refresh_algorithm_names(config: TrainConfig) -> None:
-    config.project = "ORL-SMOOTH"
-    config.group = f"{ALGORITHM_NAME}-JAX"
-    config.name = f"{ALGORITHM_NAME}-JAX-{config.env}"
+    # config.project = "ORL-BIAS"
+    # config.group = f"{ALGORITHM_NAME}-JAX"
+    # config.name = f"{ALGORITHM_NAME}-JAX-{config.env}"
+    config.name = f"{config.name}-{config.env}"
 
 
 def validate_config(config: TrainConfig) -> None:
@@ -164,6 +177,8 @@ def validate_config(config: TrainConfig) -> None:
     assert config.tau >= 0.0 and config.tau <= 1.0
     assert config.beta >= 0.0
     assert config.iql_tau >= 0.0 and config.iql_tau <= 1.0
+    assert config.ensemble_size >= 1
+    assert config.delayed_update_period > 0
     if config.actor_dropout is not None:
         assert config.actor_dropout >= 0.0 and config.actor_dropout < 1.0
     assert config.hidden_dim > 0
@@ -247,7 +262,7 @@ def apply_env_hyperparams(config: TrainConfig) -> TrainConfig:
     if skipped_cli:
         print(f"Kept CLI overrides for: {', '.join(skipped_cli)}")
     if skipped_unknown:
-        print(f"Ignored unknown hyperparameter keys for IQL: {', '.join(skipped_unknown)}")
+        print(f"Ignored unknown hyperparameter keys for {ALGORITHM_NAME}: {', '.join(skipped_unknown)}")
     return config
 
 
@@ -276,6 +291,31 @@ def tree_to_device(tree, device):
 
 def soft_update(params, target_params, tau: float):
     return optax.incremental_update(params, target_params, tau)
+
+
+def stack_ensemble_params(params_list: List[Any]) -> Any:
+    """Stack a list of Flax parameter PyTrees along a leading ensemble axis."""
+    return jax.tree_util.tree_map(lambda *xs: jnp.stack(xs, axis=0), *params_list)
+
+
+def cycle_filter_indices(ensemble_size: int, shift: Union[int, jnp.ndarray]) -> jnp.ndarray:
+    """Return deterministic cycle-shift mapping i -> j for decoupled filtering.
+
+    n=1: [0]
+    n=2: shift 1 gives [1, 0]
+    n>=3: shift cycles through 1, 2, ..., n-1.
+
+    For n>=2 and shift in {1, ..., n-1}, this is one-to-one and never maps
+    an ensemble member to itself.
+    """
+    if ensemble_size == 1:
+        return jnp.zeros((1,), dtype=jnp.int32)
+    indices = jnp.arange(ensemble_size, dtype=jnp.int32)
+    return (indices + jnp.asarray(shift, dtype=jnp.int32)) % jnp.asarray(ensemble_size, dtype=jnp.int32)
+
+
+def initial_filter_indices(ensemble_size: int) -> jnp.ndarray:
+    return cycle_filter_indices(ensemble_size, shift=1)
 
 
 def compute_mean_std(states: np.ndarray, eps: float) -> Tuple[np.ndarray, np.ndarray]:
@@ -628,17 +668,6 @@ class QFunction(nn.Module):
         return jnp.squeeze(x, axis=-1)
 
 
-class TwinQ(nn.Module):
-    hidden_dim: int = 256
-    n_hidden: int = 2
-
-    @nn.compact
-    def __call__(self, state: jnp.ndarray, action: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        q1 = QFunction(hidden_dim=self.hidden_dim, n_hidden=self.n_hidden, name="q1")(state, action)
-        q2 = QFunction(hidden_dim=self.hidden_dim, n_hidden=self.n_hidden, name="q2")(state, action)
-        return q1, q2
-
-
 class ValueFunction(nn.Module):
     hidden_dim: int = 256
     n_hidden: int = 2
@@ -654,13 +683,16 @@ class ValueFunction(nn.Module):
 
 
 @struct.dataclass
-class IQLState:
+class DecoupledDelayedIQLState:
     total_it: jnp.ndarray
     q_params: Any
     q_target_params: Any
+    q_delayed_params: Any
     q_opt_state: Any
     v_params: Any
+    v_delayed_params: Any
     v_opt_state: Any
+    filter_indices: jnp.ndarray
     actor_params: Any
     actor_opt_state: Any
     actor_key: jnp.ndarray
@@ -673,11 +705,21 @@ class ActorState:
     key: jnp.ndarray
 
 
-class IQLJAX:
-    """Implicit Q-Learning in JAX/Flax.
+class DecoupledDelayedIQLJAX:
+    """Decoupled Delayed IQL in JAX/Flax.
 
-    The value, Q, and actor update equations mirror the provided PyTorch IQL code.
-    Experiment-management code follows the CDAF_JAX file style.
+    For each ensemble member i:
+
+        Q_i target: r + gamma * V_i(s')
+        V_i target: Q_i_target(s, a)
+        V_i weight: |tau - 1[Q_j_delayed(s, a) - V_j_delayed(s) < 0]|
+
+    where j = filter_indices[i]. The mapping i -> j is one-to-one, never self
+    for N>=2, and cycles with delayed-network updates for N>=3.
+
+    Actor AWBC uses ensemble means:
+
+        adv_actor = mean_i Q_i_target(s, a) - mean_i V_i(s)
     """
 
     def __init__(
@@ -693,6 +735,8 @@ class IQLJAX:
         tau: float = 0.005,
         beta: float = 3.0,
         iql_tau: float = 0.7,
+        ensemble_size: int = 2,
+        delayed_update_period: int = 250,
         iql_deterministic: bool = False,
         actor_dropout: Optional[float] = None,
         hidden_dim: int = 256,
@@ -708,12 +752,18 @@ class IQLJAX:
         self.tau = tau
         self.beta = beta
         self.iql_tau = iql_tau
+        self.ensemble_size = int(ensemble_size)
+        self.delayed_update_period = int(delayed_update_period)
         self.iql_deterministic = iql_deterministic
         self.actor_dropout = actor_dropout
         self.hidden_dim = int(hidden_dim)
         self.n_hidden = int(n_hidden)
         self.device = device if device is not None else jax.devices()[0]
 
+        if self.ensemble_size < 1:
+            raise ValueError("ensemble_size must be >= 1")
+        if self.delayed_update_period <= 0:
+            raise ValueError("delayed_update_period must be > 0")
         if self.hidden_dim <= 0:
             raise ValueError("hidden_dim must be > 0")
         if self.n_hidden <= 0:
@@ -733,7 +783,7 @@ class IQLJAX:
                 n_hidden=self.n_hidden,
                 dropout=actor_dropout,
             )
-        self.q_def = TwinQ(hidden_dim=self.hidden_dim, n_hidden=self.n_hidden)
+        self.q_def = QFunction(hidden_dim=self.hidden_dim, n_hidden=self.n_hidden)
         self.v_def = ValueFunction(hidden_dim=self.hidden_dim, n_hidden=self.n_hidden)
 
         self.q_tx = optax.adam(qf_lr)
@@ -746,25 +796,38 @@ class IQLJAX:
         self.actor_tx = optax.adam(actor_lr_schedule)
 
         key = jax.random.PRNGKey(seed)
-        key_actor, key_q, key_v, actor_key = jax.random.split(key, 4)
+        init_keys = jax.random.split(key, 2 + 2 * self.ensemble_size)
+        key_actor = init_keys[0]
+        actor_key = init_keys[1]
+        q_keys = init_keys[2 : 2 + self.ensemble_size]
+        v_keys = init_keys[2 + self.ensemble_size :]
         dummy_state = jnp.zeros((1, state_dim), dtype=jnp.float32)
         dummy_action = jnp.zeros((1, action_dim), dtype=jnp.float32)
 
         actor_params = self.actor_def.init(key_actor, dummy_state, training=False)["params"]
-        q_params = self.q_def.init(key_q, dummy_state, dummy_action)["params"]
-        v_params = self.v_def.init(key_v, dummy_state)["params"]
+        q_params = stack_ensemble_params([
+            self.q_def.init(q_key, dummy_state, dummy_action)["params"]
+            for q_key in q_keys
+        ])
+        v_params = stack_ensemble_params([
+            self.v_def.init(v_key, dummy_state)["params"]
+            for v_key in v_keys
+        ])
 
         self.initial_actor_params = copy.deepcopy(actor_params)
         self.initial_actor_opt_state = self.actor_tx.init(actor_params)
         self.initial_actor_key = actor_key
 
-        self.state = IQLState(
+        self.state = DecoupledDelayedIQLState(
             total_it=jnp.asarray(0, dtype=jnp.int32),
             q_params=q_params,
             q_target_params=copy.deepcopy(q_params),
+            q_delayed_params=copy.deepcopy(q_params),
             q_opt_state=self.q_tx.init(q_params),
             v_params=v_params,
+            v_delayed_params=copy.deepcopy(v_params),
             v_opt_state=self.v_tx.init(v_params),
+            filter_indices=initial_filter_indices(self.ensemble_size),
             actor_params=actor_params,
             actor_opt_state=copy.deepcopy(self.initial_actor_opt_state),
             actor_key=actor_key,
@@ -797,9 +860,18 @@ class IQLJAX:
         tau = self.tau
         beta = self.beta
         iql_tau = self.iql_tau
+        ensemble_size = self.ensemble_size
+        delayed_update_period = self.delayed_update_period
         iql_deterministic = self.iql_deterministic
         use_dropout = self.actor_dropout is not None
         actor_apply_fn = self.actor_def.apply
+        ensemble_indices = jnp.arange(ensemble_size, dtype=jnp.int32)
+
+        def apply_q_ensemble(params: Any, states: jnp.ndarray, actions: jnp.ndarray) -> jnp.ndarray:
+            return jax.vmap(lambda p: q_apply({"params": p}, states, actions))(params)
+
+        def apply_v_ensemble(params: Any, states: jnp.ndarray) -> jnp.ndarray:
+            return jax.vmap(lambda p: v_apply({"params": p}, states))(params)
 
         def apply_actor(actor_params: Any, observations: jnp.ndarray, training: bool, rng: Optional[jnp.ndarray] = None):
             if use_dropout and training:
@@ -811,8 +883,17 @@ class IQLJAX:
                 )
             return actor_apply_fn({"params": actor_params}, observations, training=training)
 
+        def cycle_shift_for_update(total_it_: jnp.ndarray) -> jnp.ndarray:
+            if ensemble_size == 1:
+                return jnp.zeros((1,), dtype=jnp.int32)
+            delayed_round = total_it_ // jnp.asarray(delayed_update_period, dtype=jnp.int32)
+            shift = jnp.asarray(1, dtype=jnp.int32) + (
+                delayed_round % jnp.asarray(ensemble_size - 1, dtype=jnp.int32)
+            )
+            return (ensemble_indices + shift) % jnp.asarray(ensemble_size, dtype=jnp.int32)
+
         @jax.jit
-        def train_step(state: IQLState, batch: TensorBatch):
+        def train_step(state: DecoupledDelayedIQLState, batch: TensorBatch):
             total_it = state.total_it + jnp.asarray(1, dtype=jnp.int32)
             observations = batch["observations"]
             actions = batch["actions"]
@@ -820,34 +901,44 @@ class IQLJAX:
             next_observations = batch["next_observations"]
             dones = jnp.squeeze(batch["dones"], axis=-1)
 
-            # Values used by multiple losses are computed from the old state, matching
-            # the sequencing of the provided PyTorch implementation.
-            next_v = v_apply({"params": state.v_params}, next_observations)
-            target_q_for_backup = rewards + (1.0 - dones) * discount * next_v
-            target_q1, target_q2 = q_apply({"params": state.q_target_params}, observations, actions)
-            target_q_for_v = jnp.minimum(target_q1, target_q2)
-            old_v = v_apply({"params": state.v_params}, observations)
-            adv = target_q_for_v - old_v
-            exp_adv = jnp.minimum(jnp.exp(beta * jax.lax.stop_gradient(adv)), EXP_ADV_MAX)
+            # Old-state quantities used by multiple losses, mirroring IQL-style sequencing.
+            next_v_all = apply_v_ensemble(state.v_params, next_observations)  # [N, B]
+            target_q_for_backup = rewards[None, :] + (1.0 - dones[None, :]) * discount * next_v_all
+            target_v_q_all = apply_q_ensemble(state.q_target_params, observations, actions)  # [N, B]
+            old_v_all = apply_v_ensemble(state.v_params, observations)  # [N, B]
+
+            # Decoupled delayed filtering weights: target member i uses delayed member j(i).
+            delayed_q_all = apply_q_ensemble(state.q_delayed_params, observations, actions)  # [N, B]
+            delayed_v_all = apply_v_ensemble(state.v_delayed_params, observations)  # [N, B]
+            delayed_adv_all = delayed_q_all - delayed_v_all
+            delayed_adv_for_filter = delayed_adv_all[state.filter_indices, :]  # [N, B]
+            delayed_value_weight = jnp.abs(
+                iql_tau - (delayed_adv_for_filter < 0.0).astype(jnp.float32)
+            )
+
+            # Actor advantage uses ensemble-mean Q and V, not min.
+            data_q_mean = jnp.mean(target_v_q_all, axis=0)
+            data_v_mean = jnp.mean(old_v_all, axis=0)
+            actor_adv = data_q_mean - data_v_mean
+            exp_adv = jnp.minimum(jnp.exp(beta * jax.lax.stop_gradient(actor_adv)), EXP_ADV_MAX)
 
             def v_loss_fn(v_params):
-                v = v_apply({"params": v_params}, observations)
-                value_adv = jax.lax.stop_gradient(target_q_for_v) - v
-                value_weight = jnp.abs(iql_tau - (value_adv < 0.0).astype(jnp.float32))
-                value_loss = jnp.mean(value_weight * value_adv ** 2)
-                return value_loss, v
+                v_all = apply_v_ensemble(v_params, observations)  # [N, B]
+                value_residual = jax.lax.stop_gradient(target_v_q_all) - v_all
+                value_loss = jnp.mean(jax.lax.stop_gradient(delayed_value_weight) * value_residual ** 2)
+                return value_loss, v_all
 
-            (value_loss, v), v_grads = jax.value_and_grad(v_loss_fn, has_aux=True)(state.v_params)
+            (value_loss, v_all), v_grads = jax.value_and_grad(v_loss_fn, has_aux=True)(state.v_params)
             v_updates, v_opt_state = v_tx.update(v_grads, state.v_opt_state, state.v_params)
             v_params = optax.apply_updates(state.v_params, v_updates)
 
             def q_loss_fn(q_params):
-                q1, q2 = q_apply({"params": q_params}, observations, actions)
+                q_all = apply_q_ensemble(q_params, observations, actions)  # [N, B]
                 target = jax.lax.stop_gradient(target_q_for_backup)
-                q_loss = 0.5 * (jnp.mean((q1 - target) ** 2) + jnp.mean((q2 - target) ** 2))
-                return q_loss, (q1, q2)
+                q_loss = jnp.mean((q_all - target) ** 2)
+                return q_loss, q_all
 
-            (q_loss, (q1, q2)), q_grads = jax.value_and_grad(q_loss_fn, has_aux=True)(state.q_params)
+            (q_loss, q_all), q_grads = jax.value_and_grad(q_loss_fn, has_aux=True)(state.q_params)
             q_updates, q_opt_state = q_tx.update(q_grads, state.q_opt_state, state.q_params)
             q_params = optax.apply_updates(state.q_params, q_updates)
             q_target_params = soft_update(q_params, state.q_target_params, tau)
@@ -880,13 +971,34 @@ class IQLJAX:
             )
             actor_params = optax.apply_updates(state.actor_params, actor_updates)
 
-            new_state = IQLState(
+            should_update_delayed = (total_it % jnp.asarray(delayed_update_period, dtype=jnp.int32)) == 0
+
+            def update_delayed(carry):
+                q_target_params_, v_params_ = carry
+                filter_indices_ = cycle_shift_for_update(total_it)
+                return q_target_params_, v_params_, filter_indices_
+
+            def keep_delayed(carry):
+                _q_target_params_, _v_params_ = carry
+                return state.q_delayed_params, state.v_delayed_params, state.filter_indices
+
+            q_delayed_params, v_delayed_params, filter_indices = jax.lax.cond(
+                should_update_delayed,
+                update_delayed,
+                keep_delayed,
+                operand=(q_target_params, v_params),
+            )
+
+            new_state = DecoupledDelayedIQLState(
                 total_it=total_it,
                 q_params=q_params,
                 q_target_params=q_target_params,
+                q_delayed_params=q_delayed_params,
                 q_opt_state=q_opt_state,
                 v_params=v_params,
+                v_delayed_params=v_delayed_params,
                 v_opt_state=v_opt_state,
+                filter_indices=filter_indices,
                 actor_params=actor_params,
                 actor_opt_state=actor_opt_state,
                 actor_key=actor_key,
@@ -894,19 +1006,37 @@ class IQLJAX:
 
             log_dict = {
                 "q_loss": q_loss,
-                "q1_mean": jnp.mean(q1),
-                "q2_mean": jnp.mean(q2),
+                "q_mean": jnp.mean(q_all),
+                "q_std": jnp.std(q_all),
                 "target_q_mean": jnp.mean(target_q_for_backup),
                 "value_loss": value_loss,
-                "v_mean": jnp.mean(v),
-                "adv_mean": jnp.mean(adv),
-                "adv_min": jnp.min(adv),
-                "adv_max": jnp.max(adv),
-                "exp_adv_mean": jnp.mean(exp_adv),
+                "v_mean": jnp.mean(v_all),
+                "v_std": jnp.std(v_all),
+                "target_v_q_mean": jnp.mean(target_v_q_all),
                 "actor_loss": actor_loss,
                 "bc_loss_mean": jnp.mean(bc_losses),
                 "policy_mean": jnp.mean(policy_mean),
                 "policy_log_std_mean": log_std_mean,
+                "actor_adv_mean": jnp.mean(actor_adv),
+                "actor_adv_min": jnp.min(actor_adv),
+                "actor_adv_max": jnp.max(actor_adv),
+                "exp_adv_mean": jnp.mean(exp_adv),
+                "exp_adv_max": jnp.max(exp_adv),
+                "delayed_adv_mean": jnp.mean(delayed_adv_for_filter),
+                "delayed_adv_min": jnp.min(delayed_adv_for_filter),
+                "delayed_adv_max": jnp.max(delayed_adv_for_filter),
+                "delayed_weight_mean": jnp.mean(delayed_value_weight),
+                "delayed_weight_min": jnp.min(delayed_value_weight),
+                "delayed_weight_max": jnp.max(delayed_value_weight),
+                "delayed_negative_adv_frac": jnp.mean((delayed_adv_for_filter < 0.0).astype(jnp.float32)),
+                "delayed_update": should_update_delayed.astype(jnp.float32),
+                "ensemble_size": jnp.asarray(ensemble_size, dtype=jnp.float32),
+                "filter_index_mean": jnp.mean(filter_indices.astype(jnp.float32)),
+                "filter_shift": jnp.where(
+                    jnp.asarray(ensemble_size, dtype=jnp.int32) > 1,
+                    filter_indices[0],
+                    jnp.asarray(0, dtype=jnp.int32),
+                ).astype(jnp.float32),
             }
             return new_state, log_dict
 
@@ -959,6 +1089,12 @@ class IQLJAX:
         use_dropout = self.actor_dropout is not None
         actor_apply_fn = self.actor_def.apply
 
+        def apply_q_ensemble(params: Any, states: jnp.ndarray, actions: jnp.ndarray) -> jnp.ndarray:
+            return jax.vmap(lambda p: q_apply({"params": p}, states, actions))(params)
+
+        def apply_v_ensemble(params: Any, states: jnp.ndarray) -> jnp.ndarray:
+            return jax.vmap(lambda p: v_apply({"params": p}, states))(params)
+
         def apply_actor(actor_params: Any, observations: jnp.ndarray, training: bool, rng: Optional[jnp.ndarray] = None):
             if use_dropout and training:
                 return actor_apply_fn(
@@ -970,13 +1106,15 @@ class IQLJAX:
             return actor_apply_fn({"params": actor_params}, observations, training=training)
 
         @jax.jit
-        def actor_refit_step(actor_state: ActorState, iql_state: IQLState, batch: TensorBatch):
+        def actor_refit_step(actor_state: ActorState, iql_state: DecoupledDelayedIQLState, batch: TensorBatch):
             observations = batch["observations"]
             actions = batch["actions"]
 
-            q1, q2 = q_apply({"params": iql_state.q_target_params}, observations, actions)
-            target_q = jnp.minimum(q1, q2)
-            v = v_apply({"params": iql_state.v_params}, observations)
+            # Actor refit uses frozen trained ensemble-mean Q_target and V.
+            q_all = apply_q_ensemble(iql_state.q_target_params, observations, actions)
+            v_all = apply_v_ensemble(iql_state.v_params, observations)
+            target_q = jnp.mean(q_all, axis=0)
+            v = jnp.mean(v_all, axis=0)
             adv = target_q - v
             exp_adv = jnp.minimum(jnp.exp(beta * jax.lax.stop_gradient(adv)), EXP_ADV_MAX)
 
@@ -1053,6 +1191,7 @@ class IQLJAX:
         save_dir: Optional[Union[str, Path]] = None,
         log_wandb: bool = False,
         log_extra: Optional[Dict[str, Any]] = None,
+        log_interval: int = 500,
     ) -> Tuple[ActorState, Dict[str, Any]]:
         refit_log: Dict[str, Any] = {
             f"{prefix}/final_loss": np.nan,
@@ -1079,6 +1218,7 @@ class IQLJAX:
             f"{prefix}/inner_success_rate": [],
             f"{prefix}/inner_success_std": [],
         }
+
         if steps <= 0:
             return actor_state, refit_log
 
@@ -1086,7 +1226,23 @@ class IQLJAX:
         save_dir_path = Path(save_dir) if save_dir is not None else None
         if save_dir_path is not None:
             save_dir_path.mkdir(parents=True, exist_ok=True)
+
         log_extra = {} if log_extra is None else dict(log_extra)
+        log_interval = int(log_interval)
+        if log_interval <= 0:
+            log_interval = 1
+
+        def _wandb_log_scalar_dict(payload: Dict[str, Any], step: int) -> None:
+            if not (log_wandb and wandb.run is not None):
+                return
+
+            scalar_payload = {}
+            for key, value in payload.items():
+                if is_scalar_value(value):
+                    scalar_payload[key] = to_python_scalar(value)
+
+            if scalar_payload:
+                wandb.log(scalar_payload, step=int(step))
 
         def save_refit_snapshot(
             current_actor_state: ActorState,
@@ -1102,9 +1258,12 @@ class IQLJAX:
                 "refit_step": int(fit_step),
                 **current_refit_log,
             }
+
             logs_path = save_dir_path / "fit_eval_logs.npz"
             latest_actor_path = save_dir_path / "latest_actor.pkl"
+
             actor_payload = serialization.to_state_dict(current_actor_state.params)
+
             save_pickle(latest_actor_path, actor_payload)
             save_logs_npz([logs_payload], str(logs_path))
 
@@ -1120,12 +1279,39 @@ class IQLJAX:
         for fit_step in range(1, steps + 1):
             batch = replay_buffer.sample(batch_size)
             actor_state, step_log = self._actor_refit_step(actor_state, self.state, batch)
-            step_log = {key: float(jax.device_get(value)) for key, value in step_log.items()}
+            step_log = {
+                key: float(jax.device_get(value))
+                for key, value in step_log.items()
+            }
 
             refit_log[f"{prefix}/final_loss"] = step_log["loss"]
             refit_log[f"{prefix}/final_bc_loss"] = step_log["bc_loss"]
             refit_log[f"{prefix}/final_adv_mean"] = step_log["adv_mean"]
             refit_log[f"{prefix}/final_exp_adv_mean"] = step_log["exp_adv_mean"]
+
+            should_log_step = (
+                log_wandb
+                and wandb.run is not None
+                and (fit_step % log_interval == 0 or fit_step == 1 or fit_step == steps)
+            )
+            if should_log_step:
+                _wandb_log_scalar_dict(
+                    {
+                        f"{prefix}/step": fit_step,
+                        f"{prefix}/loss": step_log["loss"],
+                        f"{prefix}/bc_loss": step_log["bc_loss"],
+                        f"{prefix}/adv_mean": step_log["adv_mean"],
+                        f"{prefix}/adv_min": step_log["adv_min"],
+                        f"{prefix}/adv_max": step_log["adv_max"],
+                        f"{prefix}/exp_adv_mean": step_log["exp_adv_mean"],
+                        f"{prefix}/exp_adv_max": step_log["exp_adv_max"],
+                        f"{prefix}/target_q_mean": step_log["target_q_mean"],
+                        f"{prefix}/v_mean": step_log["v_mean"],
+                        f"{prefix}/policy_mean": step_log["policy_mean"],
+                        f"{prefix}/policy_log_std_mean": step_log["policy_log_std_mean"],
+                    },
+                    step=fit_step,
+                )
 
             should_eval = (
                 eval_env is not None
@@ -1133,6 +1319,7 @@ class IQLJAX:
                 and eval_interval > 0
                 and (fit_step % eval_interval == 0 or fit_step == steps)
             )
+
             if should_eval:
                 eval_scores, eval_successes = self.eval_actor(
                     eval_env,
@@ -1144,33 +1331,82 @@ class IQLJAX:
 
                 eval_score_mean = float(np.mean(eval_scores))
                 eval_score_std = float(np.std(eval_scores))
-                normalized_eval_score_mean, normalized_eval_score_std = mean_std_or_nan(normalized_eval_scores)
+                normalized_eval_score_mean, normalized_eval_score_std = mean_std_or_nan(
+                    normalized_eval_scores
+                )
                 success_rate, success_std = mean_std_or_nan(eval_successes)
 
                 refit_log[f"{prefix}/inner_eval_steps"].append(int(fit_step))
                 refit_log[f"{prefix}/inner_score_mean"].append(eval_score_mean)
                 refit_log[f"{prefix}/inner_score_std"].append(eval_score_std)
-                refit_log[f"{prefix}/inner_d4rl_normalized_score_mean"].append(normalized_eval_score_mean)
-                refit_log[f"{prefix}/inner_d4rl_normalized_score_std"].append(normalized_eval_score_std)
+                refit_log[f"{prefix}/inner_d4rl_normalized_score_mean"].append(
+                    normalized_eval_score_mean
+                )
+                refit_log[f"{prefix}/inner_d4rl_normalized_score_std"].append(
+                    normalized_eval_score_std
+                )
                 refit_log[f"{prefix}/inner_success_rate"].append(success_rate)
                 refit_log[f"{prefix}/inner_success_std"].append(success_std)
+
                 refit_log[f"{prefix}/final_score_mean"] = eval_score_mean
                 refit_log[f"{prefix}/final_score_std"] = eval_score_std
-                refit_log[f"{prefix}/final_d4rl_normalized_score_mean"] = normalized_eval_score_mean
-                refit_log[f"{prefix}/final_d4rl_normalized_score_std"] = normalized_eval_score_std
+                refit_log[f"{prefix}/final_d4rl_normalized_score_mean"] = (
+                    normalized_eval_score_mean
+                )
+                refit_log[f"{prefix}/final_d4rl_normalized_score_std"] = (
+                    normalized_eval_score_std
+                )
                 refit_log[f"{prefix}/final_success_rate"] = success_rate
                 refit_log[f"{prefix}/final_success_std"] = success_std
 
-                eval_metric_mean = success_rate if np.isfinite(success_rate) else normalized_eval_score_mean
-                is_best = np.isfinite(eval_metric_mean) and eval_metric_mean > best_eval_metric_mean
+                eval_metric_mean = (
+                    success_rate
+                    if np.isfinite(success_rate)
+                    else normalized_eval_score_mean
+                )
+                is_best = (
+                    np.isfinite(eval_metric_mean)
+                    and eval_metric_mean > best_eval_metric_mean
+                )
+
                 if is_best:
                     best_eval_metric_mean = eval_metric_mean
                     refit_log[f"{prefix}/best_score_mean"] = eval_score_mean
                     refit_log[f"{prefix}/best_score_std"] = eval_score_std
-                    refit_log[f"{prefix}/best_d4rl_normalized_score_mean"] = normalized_eval_score_mean
-                    refit_log[f"{prefix}/best_d4rl_normalized_score_std"] = normalized_eval_score_std
+                    refit_log[f"{prefix}/best_d4rl_normalized_score_mean"] = (
+                        normalized_eval_score_mean
+                    )
+                    refit_log[f"{prefix}/best_d4rl_normalized_score_std"] = (
+                        normalized_eval_score_std
+                    )
                     refit_log[f"{prefix}/best_success_rate"] = success_rate
                     refit_log[f"{prefix}/best_success_std"] = success_std
+
+                _wandb_log_scalar_dict(
+                    {
+                        f"{prefix}/eval_score_mean": eval_score_mean,
+                        f"{prefix}/eval_score_std": eval_score_std,
+                        f"{prefix}/eval_d4rl_normalized_score_mean": normalized_eval_score_mean,
+                        f"{prefix}/eval_d4rl_normalized_score_std": normalized_eval_score_std,
+                        f"{prefix}/eval_success_rate": success_rate,
+                        f"{prefix}/eval_success_std": success_std,
+                        f"{prefix}/best_score_mean": refit_log[f"{prefix}/best_score_mean"],
+                        f"{prefix}/best_score_std": refit_log[f"{prefix}/best_score_std"],
+                        f"{prefix}/best_d4rl_normalized_score_mean": refit_log[
+                            f"{prefix}/best_d4rl_normalized_score_mean"
+                        ],
+                        f"{prefix}/best_d4rl_normalized_score_std": refit_log[
+                            f"{prefix}/best_d4rl_normalized_score_std"
+                        ],
+                        f"{prefix}/best_success_rate": refit_log[
+                            f"{prefix}/best_success_rate"
+                        ],
+                        f"{prefix}/best_success_std": refit_log[
+                            f"{prefix}/best_success_std"
+                        ],
+                    },
+                    step=fit_step,
+                )
 
                 save_refit_snapshot(
                     current_actor_state=actor_state,
@@ -1180,28 +1416,37 @@ class IQLJAX:
                 )
 
                 print(
-                    f"[{prefix}:iql_awbc] step {fit_step}/{steps}: "
-                    f"loss={step_log['loss']:.4f}, bc={step_log['bc_loss']:.4f}, "
-                    f"adv={step_log['adv_mean']:.4f}, exp_adv={step_log['exp_adv_mean']:.4f}, "
-                    f"eval_mean={eval_score_mean:.3f}, eval_std={eval_score_std:.3f}, "
+                    f"[{prefix}:decoupled_delayed_iql_awbc] step {fit_step}/{steps}: "
+                    f"loss={step_log['loss']:.4f}, "
+                    f"bc={step_log['bc_loss']:.4f}, "
+                    f"adv={step_log['adv_mean']:.4f}, "
+                    f"exp_adv={step_log['exp_adv_mean']:.4f}, "
+                    f"eval_mean={eval_score_mean:.3f}, "
+                    f"eval_std={eval_score_std:.3f}, "
                     f"d4rl_normalized_mean={normalized_eval_score_mean:.3f}, "
                     f"d4rl_normalized_std={normalized_eval_score_std:.3f}, "
-                    f"success_rate={success_rate:.3f}"
+                    f"success_rate={success_rate:.3f}, "
+                    f"is_best={is_best}"
                 )
 
         return actor_state, refit_log
 
     def state_dict(self) -> Dict[str, Any]:
         return {
-            "iql_state": serialization.to_state_dict(self.state),
+            "decoupled_delayed_iql_state": serialization.to_state_dict(self.state),
             "initial_actor_params": serialization.to_state_dict(self.initial_actor_params),
             "initial_actor_opt_state": serialization.to_state_dict(self.initial_actor_opt_state),
             "initial_actor_key": serialization.to_state_dict(self.initial_actor_key),
             "iql_deterministic": self.iql_deterministic,
+            "ensemble_size": self.ensemble_size,
+            "delayed_update_period": self.delayed_update_period,
         }
 
     def load_state_dict(self, state_dict: Dict[str, Any]):
-        self.state = serialization.from_state_dict(self.state, state_dict["iql_state"])
+        self.state = serialization.from_state_dict(
+            self.state,
+            state_dict["decoupled_delayed_iql_state"],
+        )
         if "initial_actor_params" in state_dict:
             self.initial_actor_params = serialization.from_state_dict(
                 self.initial_actor_params,
@@ -1238,7 +1483,7 @@ def resolve_checkpoint_path(
     run_name: Optional[str] = None,
     seed: Optional[int] = None,
 ) -> Tuple[Path, Path]:
-    """Return (run_dir, checkpoint_path) for a saved IQL-JAX checkpoint.
+    """Return (run_dir, checkpoint_path) for a saved DecoupledDelayedIQL-JAX checkpoint.
 
     Supported load_model formats:
 
@@ -1313,13 +1558,101 @@ def resolve_checkpoint_path(
     return checkpoint_path.parent, checkpoint_path
 
 
+def load_run_config_for_refit(
+    current_config: TrainConfig,
+    loaded_run_dir: Union[str, Path],
+) -> TrainConfig:
+    """Load saved config.yaml from the checkpoint run dir for refit mode.
+
+    Priority:
+        saved run config.yaml < explicit CLI flags
+
+    This reconstructs the original training env/model/preprocessing settings,
+    while allowing any CLI-provided field to override the saved config.
+    """
+    loaded_run_dir = Path(loaded_run_dir)
+    saved_config_path = loaded_run_dir / "config.yaml"
+
+    if not saved_config_path.exists():
+        raise FileNotFoundError(
+            f"mode='refit' expects saved run config at: {saved_config_path}"
+        )
+
+    with open(saved_config_path, "r") as f:
+        saved_raw = yaml.safe_load(f) or {}
+
+    config_fields = set(TrainConfig.__dataclass_fields__.keys())
+
+    saved_kwargs = {
+        key: _coerce_hparam_value(value)
+        for key, value in saved_raw.items()
+        if key in config_fields
+    }
+
+    # 1. Start from the original saved training config.
+    loaded_config = TrainConfig(**saved_kwargs)
+
+    # 2. Override with explicitly provided CLI fields.
+    cli_overrides = _cli_overridden_fields()
+    current_config_dict = asdict(current_config)
+
+    applied_cli_overrides = []
+    for key in sorted(cli_overrides):
+        if key not in config_fields:
+            continue
+        setattr(loaded_config, key, current_config_dict[key])
+        applied_cli_overrides.append(key)
+
+    # 3. These must be forced for refit regardless of saved training config.
+    loaded_config.mode = "refit"
+    loaded_config.load_model = current_config.load_model
+
+    # In refit mode, do not reuse the original training checkpoint output path.
+    # Actor refit outputs are saved under loaded_run_dir / actor_refit_dir_name.
+    loaded_config.checkpoints_path = None
+
+    refresh_algorithm_names(loaded_config)
+    validate_config(loaded_config)
+
+    print(f"Loaded saved run config for refit from: {saved_config_path}")
+
+    if applied_cli_overrides:
+        print(
+            "Applied explicit CLI overrides on top of saved config: "
+            + ", ".join(applied_cli_overrides)
+        )
+
+    return loaded_config
+
+
 @pyrallis.wrap()
 def train(config: TrainConfig):
-    config = apply_env_hyperparams(config)
     refit_only = config.mode == "refit"
-    if refit_only and config.load_model == "":
-        raise ValueError("refit mode requires --load_model")
-    if not refit_only:
+
+    loaded_run_dir: Optional[Path] = None
+    checkpoint_path: Optional[Path] = None
+
+    if refit_only:
+        if config.load_model == "":
+            raise ValueError("refit mode requires --load_model")
+
+        # First resolve the checkpoint using the current CLI config.
+        # This lets --load_model be either checkpoint.pkl, a run dir, or a parent dir.
+        loaded_run_dir, checkpoint_path = resolve_checkpoint_path(
+            config.load_model,
+            run_name=config.name,
+            seed=config.seed,
+        )
+
+        # Then replace config with the original saved run config,
+        # while preserving refit-specific CLI/runtime fields.
+        config = load_run_config_for_refit(
+            current_config=config,
+            loaded_run_dir=loaded_run_dir,
+        )
+
+    else:
+        config = apply_env_hyperparams(config)
         config = finalize_checkpoint_path(config)
 
     jax_device = select_jax_device(config.device)
@@ -1374,9 +1707,13 @@ def train(config: TrainConfig):
     print("---------------------------------------")
     run_mode_name = "Actor refit" if refit_only else "Training"
     print(f"{run_mode_name} {ALGORITHM_NAME}-JAX, Env: {config.env}, Seed: {seed}")
+    print(
+        f"ensemble_size={config.ensemble_size}, "
+        f"delayed_update_period={config.delayed_update_period}"
+    )
     print("---------------------------------------")
 
-    trainer = IQLJAX(
+    trainer = DecoupledDelayedIQLJAX(
         max_action=max_action,
         state_dim=state_dim,
         action_dim=action_dim,
@@ -1388,6 +1725,8 @@ def train(config: TrainConfig):
         tau=config.tau,
         beta=config.beta,
         iql_tau=config.iql_tau,
+        ensemble_size=config.ensemble_size,
+        delayed_update_period=config.delayed_update_period,
         iql_deterministic=config.iql_deterministic,
         actor_dropout=config.actor_dropout,
         hidden_dim=config.hidden_dim,
@@ -1396,13 +1735,14 @@ def train(config: TrainConfig):
         device=jax_device,
     )
 
-    loaded_run_dir: Optional[Path] = None
     if config.load_model != "":
-        loaded_run_dir, checkpoint_path = resolve_checkpoint_path(
-            config.load_model,
-            run_name=config.name,
-            seed=config.seed,
-        )
+        if checkpoint_path is None or loaded_run_dir is None:
+            loaded_run_dir, checkpoint_path = resolve_checkpoint_path(
+                config.load_model,
+                run_name=config.name,
+                seed=config.seed,
+            )
+
         print(f"Loading checkpoint from: {checkpoint_path}")
         checkpoint = load_pickle(checkpoint_path)
         trainer.load_state_dict(checkpoint)
@@ -1444,6 +1784,7 @@ def train(config: TrainConfig):
             save_dir=actor_refit_dir,
             log_wandb=config.log_wandb,
             log_extra={"loaded_checkpoint": loaded_checkpoint_for_log},
+            log_interval=config.log_every,
         )
 
         save_pickle(
@@ -1540,10 +1881,25 @@ def train(config: TrainConfig):
 if __name__ == "__main__":
     train()
 
-
-# # JAX/Flax IQL implementation with CDAF_JAX-style experiment plumbing.
-# # Algorithmic losses mirror the provided PyTorch IQL code; checkpointing,
-# # hyperparameter merging, logging, and path handling follow the CDAF_JAX style.
+# # JAX/Flax Decoupled Delayed IQL implementation with CDAF_JAX-style experiment plumbing.
+# #
+# # Decoupled Delayed IQL idea:
+# #   - Use an ensemble of N paired Q_i and V_i networks.
+# #   - Remove the original twin-Q min operator entirely.
+# #   - Q_i is always bootstrapped from its own V_i.
+# #   - V_i is regressed to its own Q_i, but its asymmetric expectile weight is
+# #     computed from a delayed, decoupled pair j(i): Q_j_delayed - V_j_delayed.
+# #   - If N=1, j(i)=i. If N=2, the two members filter each other. If N>=3,
+# #     the one-to-one filtering assignment cycles whenever delayed networks refresh.
+# #   - Actor updates always use ensemble-mean Q and ensemble-mean V.
+# #
+# # Experiment plumbing:
+# #   - Explicit mode switch: mode="train" or mode="refit".
+# #   - Refit mode uses shared schedule fields:
+# #       max_timesteps -> actor-only refit steps
+# #       batch_size    -> actor-only refit batch size
+# #       eval_freq     -> actor-only refit evaluation interval
+# #   - Hyperparameter YAML keys must exactly match TrainConfig field names.
 
 # import copy
 # import os
@@ -1555,22 +1911,59 @@ if __name__ == "__main__":
 # from pathlib import Path
 # from typing import Any, Dict, List, Optional, Tuple, Union
 
-# import d4rl
 # import gym
 # import jax
 # import jax.numpy as jnp
 # import numpy as np
+
+# try:
+#     import scipy.linalg as scipy_linalg
+
+#     if not hasattr(scipy_linalg, "tril"):
+#         scipy_linalg.tril = np.tril
+#     if not hasattr(scipy_linalg, "triu"):
+#         scipy_linalg.triu = np.triu
+# except ImportError:
+#     pass
+
 # import optax
 # import pyrallis
-# import wandb
 # import yaml
+
+# try:
+#     import wandb
+# except ImportError:
+#     class _UnavailableWandb:
+#         run = None
+
+#         def init(self, *args, **kwargs):
+#             raise ImportError(
+#                 "wandb is unavailable in this environment; run with --log_wandb False "
+#                 "or install wandb with its dependencies."
+#             )
+
+#         def save(self, *args, **kwargs):
+#             return None
+
+#         def log(self, *args, **kwargs):
+#             return None
+
+#     wandb = _UnavailableWandb()
+
 # from flax import linen as nn
 # from flax import serialization, struct
 
+# d4rl = None
+
+# try:
+#     import ogbench
+# except ImportError:
+#     ogbench = None
+
 # TensorBatch = Dict[str, jnp.ndarray]
 
-# ALGORITHM_NAME = "IQL"
-# ALGORITHM_FULL_NAME = "Implicit Q-Learning"
+# ALGORITHM_NAME = "DecoupledDelayedIQL"
+# ALGORITHM_FULL_NAME = "Decoupled Delayed Implicit Q-Learning"
 
 # EXP_ADV_MAX = 100.0
 # LOG_STD_MIN = -20.0
@@ -1583,17 +1976,32 @@ if __name__ == "__main__":
 #     device: str = "gpu"  # one of: cpu, gpu, tpu. JAX selects the matching backend when available.
 #     env: str = "halfcheetah-medium-expert-v2"
 #     seed: int = 0
+
+#     # Shared by both modes:
+#     #   mode="train": evaluate pi every eval_freq joint Q/V/pi training steps.
+#     #   mode="refit": evaluate pi every eval_freq actor-only refit steps.
 #     eval_freq: int = int(25e3)
 #     n_episodes: int = 10
+
+#     # Shared by both modes:
+#     #   mode="train": number of joint Q/V/pi training steps.
+#     #   mode="refit": number of actor-only refit steps using frozen loaded Q/V.
 #     max_timesteps: int = int(1e6)
+
 #     checkpoints_path: Optional[str] = None
 #     load_model: str = ""
-#     hyperparams_path: Optional[str] = "hyperparams/iql_jax.yml"
+#     mode: str = "train"  # one of: train, refit. refit loads Q/V and trains only pi.
+#     hyperparams_path: Optional[str] = "hyperparams/decoupled_delayed_iql_jax.yml"
 #     use_hyperparams: bool = True
 
 #     # Dataset
 #     buffer_size: int = 2_000_000
+
+#     # Shared by both modes:
+#     #   mode="train": minibatch size for joint Q/V/pi updates.
+#     #   mode="refit": minibatch size for actor-only refit updates.
 #     batch_size: int = 256
+
 #     normalize: bool = True
 #     normalize_reward: bool = False
 
@@ -1607,19 +2015,24 @@ if __name__ == "__main__":
 #     qf_lr: float = 3e-4
 #     actor_lr: float = 3e-4
 #     actor_dropout: Optional[float] = None
+#     hidden_dim: int = 256
+#     n_hidden: int = 2
 
-#     # Standalone actor refit from a saved checkpoint.
-#     # Used when --load_model is provided with --max_timesteps 0.
-#     refit_actor_steps: int = 50000
-#     refit_actor_batch_size: int = 256
-#     refit_actor_eval_freq: int = 2000
+#     # Decoupled delayed ensemble learning
+#     ensemble_size: int = 2
+#     delayed_update_period: int = 250
+
+#     # Standalone actor refit output directory.
+#     # Refit reuses the shared training schedule fields above:
+#     #   max_timesteps -> actor-only refit steps
+#     #   batch_size    -> actor-only refit batch size
+#     #   eval_freq     -> actor-only refit evaluation interval
 #     actor_refit_dir_name: str = "actor_refit"
-#     refit_from_scratch: bool = True
 
 #     # Logging
-#     project: str = "ORL-SMOOTH"
-#     group: str = "IQL-JAX"
-#     name: str = "IQL-JAX"
+#     project: str = "ORL-BIAS"
+#     group: str = "DecoupledDelayedIQL-JAX"
+#     name: str = "DecoupledDelayedIQL-JAX"
 #     log_wandb: bool = True
 #     log_every: int = 500
 
@@ -1629,12 +2042,13 @@ if __name__ == "__main__":
 
 
 # def refresh_algorithm_names(config: TrainConfig) -> None:
-#     config.project = "ORL-SMOOTH"
+#     config.project = "ORL-BIAS"
 #     config.group = f"{ALGORITHM_NAME}-JAX"
 #     config.name = f"{ALGORITHM_NAME}-JAX-{config.env}"
 
 
 # def validate_config(config: TrainConfig) -> None:
+#     assert config.mode in ("train", "refit"), "mode must be train or refit"
 #     assert config.batch_size > 0
 #     assert config.buffer_size > 0
 #     assert config.eval_freq > 0
@@ -1645,12 +2059,15 @@ if __name__ == "__main__":
 #     assert config.tau >= 0.0 and config.tau <= 1.0
 #     assert config.beta >= 0.0
 #     assert config.iql_tau >= 0.0 and config.iql_tau <= 1.0
+#     assert config.ensemble_size >= 1
+#     assert config.delayed_update_period > 0
 #     if config.actor_dropout is not None:
 #         assert config.actor_dropout >= 0.0 and config.actor_dropout < 1.0
-#     assert config.refit_actor_steps >= 0
-#     assert config.refit_actor_batch_size > 0
-#     assert config.refit_actor_eval_freq > 0
+#     assert config.hidden_dim > 0
+#     assert config.n_hidden > 0
 #     assert config.actor_refit_dir_name != ""
+#     if config.mode == "refit":
+#         assert config.load_model != "", "mode='refit' requires --load_model"
 
 
 # def _cli_overridden_fields(argv: Optional[List[str]] = None) -> set:
@@ -1673,13 +2090,12 @@ if __name__ == "__main__":
 
 
 # def apply_env_hyperparams(config: TrainConfig) -> TrainConfig:
-#     """Load RL-Zoo-style env-specific hyperparameters and merge them into config.
+#     """Load env-specific hyperparameters and merge them into config.
 
 #     Priority is:
 #         dataclass defaults < hyperparams YAML < explicit CLI flags
 
-#     Supported alias:
-#         n_timesteps -> max_timesteps
+#     Hyperparameter YAML keys must exactly match TrainConfig field names.
 #     """
 #     if not config.use_hyperparams or config.hyperparams_path is None:
 #         refresh_algorithm_names(config)
@@ -1701,22 +2117,24 @@ if __name__ == "__main__":
 
 #     env_hyperparams = all_hyperparams[config.env] or {}
 #     cli_overrides = _cli_overridden_fields()
-#     aliases = {
-#         "n_timesteps": "max_timesteps",
-#     }
+#     aliases = {"n_timesteps": "max_timesteps"}
 #     config_fields = set(TrainConfig.__dataclass_fields__.keys())
 #     applied, skipped_unknown, skipped_cli = [], [], []
+#     applied_fields = set()
 
 #     for raw_key, raw_value in env_hyperparams.items():
 #         key = aliases.get(raw_key, raw_key)
 #         if key not in config_fields:
 #             skipped_unknown.append(raw_key)
 #             continue
+#         if key in applied_fields:
+#             continue
 #         if key in cli_overrides or raw_key in cli_overrides:
 #             skipped_cli.append(raw_key)
 #             continue
 #         setattr(config, key, _coerce_hparam_value(raw_value))
 #         applied.append(f"{raw_key}->{key}" if raw_key != key else key)
+#         applied_fields.add(key)
 
 #     refresh_algorithm_names(config)
 #     validate_config(config)
@@ -1726,7 +2144,7 @@ if __name__ == "__main__":
 #     if skipped_cli:
 #         print(f"Kept CLI overrides for: {', '.join(skipped_cli)}")
 #     if skipped_unknown:
-#         print(f"Ignored unknown hyperparameter keys for IQL: {', '.join(skipped_unknown)}")
+#         print(f"Ignored unknown hyperparameter keys for {ALGORITHM_NAME}: {', '.join(skipped_unknown)}")
 #     return config
 
 
@@ -1757,6 +2175,31 @@ if __name__ == "__main__":
 #     return optax.incremental_update(params, target_params, tau)
 
 
+# def stack_ensemble_params(params_list: List[Any]) -> Any:
+#     """Stack a list of Flax parameter PyTrees along a leading ensemble axis."""
+#     return jax.tree_util.tree_map(lambda *xs: jnp.stack(xs, axis=0), *params_list)
+
+
+# def cycle_filter_indices(ensemble_size: int, shift: Union[int, jnp.ndarray]) -> jnp.ndarray:
+#     """Return deterministic cycle-shift mapping i -> j for decoupled filtering.
+
+#     n=1: [0]
+#     n=2: shift 1 gives [1, 0]
+#     n>=3: shift cycles through 1, 2, ..., n-1.
+
+#     For n>=2 and shift in {1, ..., n-1}, this is one-to-one and never maps
+#     an ensemble member to itself.
+#     """
+#     if ensemble_size == 1:
+#         return jnp.zeros((1,), dtype=jnp.int32)
+#     indices = jnp.arange(ensemble_size, dtype=jnp.int32)
+#     return (indices + jnp.asarray(shift, dtype=jnp.int32)) % jnp.asarray(ensemble_size, dtype=jnp.int32)
+
+
+# def initial_filter_indices(ensemble_size: int) -> jnp.ndarray:
+#     return cycle_filter_indices(ensemble_size, shift=1)
+
+
 # def compute_mean_std(states: np.ndarray, eps: float) -> Tuple[np.ndarray, np.ndarray]:
 #     mean = states.mean(0)
 #     std = states.std(0) + eps
@@ -1767,22 +2210,109 @@ if __name__ == "__main__":
 #     return (states - mean) / std
 
 
+# class TransformEnv:
+#     def __init__(
+#         self,
+#         env: gym.Env,
+#         state_mean: Union[np.ndarray, float],
+#         state_std: Union[np.ndarray, float],
+#         reward_scale: float,
+#     ):
+#         self.env = env
+#         self.state_mean = state_mean
+#         self.state_std = state_std
+#         self.reward_scale = reward_scale
+#         self.observation_space = env.observation_space
+#         self.action_space = env.action_space
+
+#     def __getattr__(self, name: str):
+#         return getattr(self.env, name)
+
+#     def _normalize_state(self, state):
+#         return (state - self.state_mean) / self.state_std
+
+#     def _scale_reward(self, reward):
+#         return self.reward_scale * reward
+
+#     def reset(self, *args, **kwargs):
+#         reset_out = self.env.reset(*args, **kwargs)
+#         if isinstance(reset_out, tuple) and len(reset_out) == 2:
+#             state, info = reset_out
+#             return self._normalize_state(state), info
+#         return self._normalize_state(reset_out)
+
+#     def step(self, action):
+#         step_out = self.env.step(action)
+#         if isinstance(step_out, tuple) and len(step_out) == 5:
+#             state, reward, terminated, truncated, info = step_out
+#             return self._normalize_state(state), self._scale_reward(reward), terminated, truncated, info
+#         state, reward, done, info = step_out
+#         return self._normalize_state(state), self._scale_reward(reward), done, info
+
+#     def seed(self, seed: int):
+#         if hasattr(self.env, "seed"):
+#             return self.env.seed(seed)
+#         return self.env.reset(seed=seed)
+
+
 # def wrap_env(
 #     env: gym.Env,
 #     state_mean: Union[np.ndarray, float] = 0.0,
 #     state_std: Union[np.ndarray, float] = 1.0,
 #     reward_scale: float = 1.0,
 # ) -> gym.Env:
-#     def normalize_state(state):
-#         return (state - state_mean) / state_std
+#     return TransformEnv(env, state_mean=state_mean, state_std=state_std, reward_scale=reward_scale)
 
-#     def scale_reward(reward):
-#         return reward_scale * reward
 
-#     env = gym.wrappers.TransformObservation(env, normalize_state)
-#     if reward_scale != 1.0:
-#         env = gym.wrappers.TransformReward(env, scale_reward)
-#     return env
+# def is_ogbench_env(env_name: str) -> bool:
+#     return "singletask" in env_name or "oraclerep" in env_name
+
+
+# def load_env_and_dataset(env_name: str) -> Tuple[gym.Env, Dict[str, np.ndarray], str]:
+#     if is_ogbench_env(env_name):
+#         if ogbench is None:
+#             raise ImportError(
+#                 "OGBench environment requested, but the `ogbench` package is not installed."
+#             )
+#         env, train_dataset, _ = ogbench.make_env_and_datasets(env_name)
+#         return env, train_dataset, "ogbench"
+
+#     global d4rl
+#     if d4rl is None:
+#         try:
+#             import d4rl as d4rl_module
+#         except Exception as exc:
+#             raise ImportError(
+#                 "D4RL environment requested, but the `d4rl` package could not be imported."
+#             ) from exc
+#         d4rl = d4rl_module
+#     env = gym.make(env_name)
+#     return env, d4rl.qlearning_dataset(env), "d4rl"
+
+
+# def reset_env(env: gym.Env, seed: Optional[int] = None):
+#     if seed is not None:
+#         try:
+#             reset_out = env.reset(seed=seed)
+#         except TypeError:
+#             if hasattr(env, "seed"):
+#                 env.seed(seed)
+#             reset_out = env.reset()
+#     else:
+#         reset_out = env.reset()
+
+#     if isinstance(reset_out, tuple) and len(reset_out) == 2:
+#         return reset_out[0]
+#     return reset_out
+
+
+# def step_env(env: gym.Env, action: np.ndarray):
+#     step_out = env.step(action)
+#     if isinstance(step_out, tuple) and len(step_out) == 5:
+#         next_state, reward, terminated, truncated, info = step_out
+#         return next_state, reward, bool(terminated or truncated), info
+#     next_state, reward, done, info = step_out
+#     return next_state, reward, bool(done), info
 
 
 # class ReplayBuffer:
@@ -1814,7 +2344,8 @@ if __name__ == "__main__":
 #         self._actions[:n_transitions] = data["actions"].astype(np.float32)
 #         self._rewards[:n_transitions] = data["rewards"][..., None].astype(np.float32)
 #         self._next_states[:n_transitions] = data["next_observations"].astype(np.float32)
-#         self._dones[:n_transitions] = data["terminals"][..., None].astype(np.float32)
+#         done_values = 1.0 - data["masks"] if "masks" in data else data["terminals"]
+#         self._dones[:n_transitions] = done_values[..., None].astype(np.float32)
 #         self._size += n_transitions
 #         self._pointer = min(self._size, n_transitions)
 #         print(f"Dataset size: {n_transitions}")
@@ -1833,8 +2364,13 @@ if __name__ == "__main__":
 
 # def set_seed(seed: int, env: Optional[gym.Env] = None):
 #     if env is not None:
-#         env.seed(seed)
-#         env.action_space.seed(seed)
+#         try:
+#             env.reset(seed=seed)
+#         except TypeError:
+#             if hasattr(env, "seed"):
+#                 env.seed(seed)
+#         if hasattr(env.action_space, "seed"):
+#             env.action_space.seed(seed)
 #     os.environ["PYTHONHASHSEED"] = str(seed)
 #     np.random.seed(seed)
 #     random.seed(seed)
@@ -1897,10 +2433,29 @@ if __name__ == "__main__":
 
 
 # def normalize_episode_scores(env: gym.Env, eval_scores: np.ndarray) -> np.ndarray:
+#     if not hasattr(env, "get_normalized_score"):
+#         return np.full_like(np.asarray(eval_scores, dtype=np.float32), np.nan, dtype=np.float32)
 #     return np.asarray(
 #         [env.get_normalized_score(float(score)) * 100.0 for score in eval_scores],
 #         dtype=np.float32,
 #     )
+
+
+# def mean_std_or_nan(values: np.ndarray) -> Tuple[float, float]:
+#     values = np.asarray(values, dtype=np.float32)
+#     finite_values = values[np.isfinite(values)]
+#     if finite_values.size == 0:
+#         return np.nan, np.nan
+#     return float(np.mean(finite_values)), float(np.std(finite_values))
+
+
+# def extract_success(info: Any) -> float:
+#     if not isinstance(info, dict) or "success" not in info:
+#         return np.nan
+#     success = np.asarray(info["success"])
+#     if success.size == 0:
+#         return np.nan
+#     return float(success.reshape(-1)[0])
 
 
 # def return_reward_range(dataset, max_episode_steps):
@@ -1995,17 +2550,6 @@ if __name__ == "__main__":
 #         return jnp.squeeze(x, axis=-1)
 
 
-# class TwinQ(nn.Module):
-#     hidden_dim: int = 256
-#     n_hidden: int = 2
-
-#     @nn.compact
-#     def __call__(self, state: jnp.ndarray, action: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
-#         q1 = QFunction(hidden_dim=self.hidden_dim, n_hidden=self.n_hidden, name="q1")(state, action)
-#         q2 = QFunction(hidden_dim=self.hidden_dim, n_hidden=self.n_hidden, name="q2")(state, action)
-#         return q1, q2
-
-
 # class ValueFunction(nn.Module):
 #     hidden_dim: int = 256
 #     n_hidden: int = 2
@@ -2021,13 +2565,16 @@ if __name__ == "__main__":
 
 
 # @struct.dataclass
-# class IQLState:
+# class DecoupledDelayedIQLState:
 #     total_it: jnp.ndarray
 #     q_params: Any
 #     q_target_params: Any
+#     q_delayed_params: Any
 #     q_opt_state: Any
 #     v_params: Any
+#     v_delayed_params: Any
 #     v_opt_state: Any
+#     filter_indices: jnp.ndarray
 #     actor_params: Any
 #     actor_opt_state: Any
 #     actor_key: jnp.ndarray
@@ -2040,11 +2587,21 @@ if __name__ == "__main__":
 #     key: jnp.ndarray
 
 
-# class IQLJAX:
-#     """Implicit Q-Learning in JAX/Flax.
+# class DecoupledDelayedIQLJAX:
+#     """Decoupled Delayed IQL in JAX/Flax.
 
-#     The value, Q, and actor update equations mirror the provided PyTorch IQL code.
-#     Experiment-management code follows the CDAF_JAX file style.
+#     For each ensemble member i:
+
+#         Q_i target: r + gamma * V_i(s')
+#         V_i target: Q_i_target(s, a)
+#         V_i weight: |tau - 1[Q_j_delayed(s, a) - V_j_delayed(s) < 0]|
+
+#     where j = filter_indices[i]. The mapping i -> j is one-to-one, never self
+#     for N>=2, and cycles with delayed-network updates for N>=3.
+
+#     Actor AWBC uses ensemble means:
+
+#         adv_actor = mean_i Q_i_target(s, a) - mean_i V_i(s)
 #     """
 
 #     def __init__(
@@ -2060,59 +2617,99 @@ if __name__ == "__main__":
 #         tau: float = 0.005,
 #         beta: float = 3.0,
 #         iql_tau: float = 0.7,
+#         ensemble_size: int = 2,
+#         delayed_update_period: int = 250,
 #         iql_deterministic: bool = False,
 #         actor_dropout: Optional[float] = None,
+#         hidden_dim: int = 256,
+#         n_hidden: int = 2,
 #         seed: int = 0,
 #         device: Any = None,
 #     ):
 #         self.max_action = max_action
 #         self.state_dim = state_dim
 #         self.action_dim = action_dim
-#         self.max_steps = max_steps
+#         self.max_steps = max(int(max_steps), 1)
 #         self.discount = discount
 #         self.tau = tau
 #         self.beta = beta
 #         self.iql_tau = iql_tau
+#         self.ensemble_size = int(ensemble_size)
+#         self.delayed_update_period = int(delayed_update_period)
 #         self.iql_deterministic = iql_deterministic
 #         self.actor_dropout = actor_dropout
+#         self.hidden_dim = int(hidden_dim)
+#         self.n_hidden = int(n_hidden)
 #         self.device = device if device is not None else jax.devices()[0]
 
+#         if self.ensemble_size < 1:
+#             raise ValueError("ensemble_size must be >= 1")
+#         if self.delayed_update_period <= 0:
+#             raise ValueError("delayed_update_period must be > 0")
+#         if self.hidden_dim <= 0:
+#             raise ValueError("hidden_dim must be > 0")
+#         if self.n_hidden <= 0:
+#             raise ValueError("n_hidden must be > 0")
+
 #         if iql_deterministic:
-#             self.actor_def = DeterministicPolicy(action_dim=action_dim, dropout=actor_dropout)
+#             self.actor_def = DeterministicPolicy(
+#                 action_dim=action_dim,
+#                 hidden_dim=self.hidden_dim,
+#                 n_hidden=self.n_hidden,
+#                 dropout=actor_dropout,
+#             )
 #         else:
-#             self.actor_def = GaussianPolicy(action_dim=action_dim, dropout=actor_dropout)
-#         self.q_def = TwinQ()
-#         self.v_def = ValueFunction()
+#             self.actor_def = GaussianPolicy(
+#                 action_dim=action_dim,
+#                 hidden_dim=self.hidden_dim,
+#                 n_hidden=self.n_hidden,
+#                 dropout=actor_dropout,
+#             )
+#         self.q_def = QFunction(hidden_dim=self.hidden_dim, n_hidden=self.n_hidden)
+#         self.v_def = ValueFunction(hidden_dim=self.hidden_dim, n_hidden=self.n_hidden)
 
 #         self.q_tx = optax.adam(qf_lr)
 #         self.v_tx = optax.adam(vf_lr)
 #         actor_lr_schedule = optax.cosine_decay_schedule(
 #             init_value=actor_lr,
-#             decay_steps=max(int(max_steps), 1),
+#             decay_steps=self.max_steps,
 #             alpha=0.0,
 #         )
 #         self.actor_tx = optax.adam(actor_lr_schedule)
 
 #         key = jax.random.PRNGKey(seed)
-#         key_actor, key_q, key_v, actor_key = jax.random.split(key, 4)
+#         init_keys = jax.random.split(key, 2 + 2 * self.ensemble_size)
+#         key_actor = init_keys[0]
+#         actor_key = init_keys[1]
+#         q_keys = init_keys[2 : 2 + self.ensemble_size]
+#         v_keys = init_keys[2 + self.ensemble_size :]
 #         dummy_state = jnp.zeros((1, state_dim), dtype=jnp.float32)
 #         dummy_action = jnp.zeros((1, action_dim), dtype=jnp.float32)
 
 #         actor_params = self.actor_def.init(key_actor, dummy_state, training=False)["params"]
-#         q_params = self.q_def.init(key_q, dummy_state, dummy_action)["params"]
-#         v_params = self.v_def.init(key_v, dummy_state)["params"]
+#         q_params = stack_ensemble_params([
+#             self.q_def.init(q_key, dummy_state, dummy_action)["params"]
+#             for q_key in q_keys
+#         ])
+#         v_params = stack_ensemble_params([
+#             self.v_def.init(v_key, dummy_state)["params"]
+#             for v_key in v_keys
+#         ])
 
 #         self.initial_actor_params = copy.deepcopy(actor_params)
 #         self.initial_actor_opt_state = self.actor_tx.init(actor_params)
 #         self.initial_actor_key = actor_key
 
-#         self.state = IQLState(
+#         self.state = DecoupledDelayedIQLState(
 #             total_it=jnp.asarray(0, dtype=jnp.int32),
 #             q_params=q_params,
 #             q_target_params=copy.deepcopy(q_params),
+#             q_delayed_params=copy.deepcopy(q_params),
 #             q_opt_state=self.q_tx.init(q_params),
 #             v_params=v_params,
+#             v_delayed_params=copy.deepcopy(v_params),
 #             v_opt_state=self.v_tx.init(v_params),
+#             filter_indices=initial_filter_indices(self.ensemble_size),
 #             actor_params=actor_params,
 #             actor_opt_state=copy.deepcopy(self.initial_actor_opt_state),
 #             actor_key=actor_key,
@@ -2145,9 +2742,18 @@ if __name__ == "__main__":
 #         tau = self.tau
 #         beta = self.beta
 #         iql_tau = self.iql_tau
+#         ensemble_size = self.ensemble_size
+#         delayed_update_period = self.delayed_update_period
 #         iql_deterministic = self.iql_deterministic
 #         use_dropout = self.actor_dropout is not None
 #         actor_apply_fn = self.actor_def.apply
+#         ensemble_indices = jnp.arange(ensemble_size, dtype=jnp.int32)
+
+#         def apply_q_ensemble(params: Any, states: jnp.ndarray, actions: jnp.ndarray) -> jnp.ndarray:
+#             return jax.vmap(lambda p: q_apply({"params": p}, states, actions))(params)
+
+#         def apply_v_ensemble(params: Any, states: jnp.ndarray) -> jnp.ndarray:
+#             return jax.vmap(lambda p: v_apply({"params": p}, states))(params)
 
 #         def apply_actor(actor_params: Any, observations: jnp.ndarray, training: bool, rng: Optional[jnp.ndarray] = None):
 #             if use_dropout and training:
@@ -2159,8 +2765,17 @@ if __name__ == "__main__":
 #                 )
 #             return actor_apply_fn({"params": actor_params}, observations, training=training)
 
+#         def cycle_shift_for_update(total_it_: jnp.ndarray) -> jnp.ndarray:
+#             if ensemble_size == 1:
+#                 return jnp.zeros((1,), dtype=jnp.int32)
+#             delayed_round = total_it_ // jnp.asarray(delayed_update_period, dtype=jnp.int32)
+#             shift = jnp.asarray(1, dtype=jnp.int32) + (
+#                 delayed_round % jnp.asarray(ensemble_size - 1, dtype=jnp.int32)
+#             )
+#             return (ensemble_indices + shift) % jnp.asarray(ensemble_size, dtype=jnp.int32)
+
 #         @jax.jit
-#         def train_step(state: IQLState, batch: TensorBatch):
+#         def train_step(state: DecoupledDelayedIQLState, batch: TensorBatch):
 #             total_it = state.total_it + jnp.asarray(1, dtype=jnp.int32)
 #             observations = batch["observations"]
 #             actions = batch["actions"]
@@ -2168,34 +2783,44 @@ if __name__ == "__main__":
 #             next_observations = batch["next_observations"]
 #             dones = jnp.squeeze(batch["dones"], axis=-1)
 
-#             # Values used by multiple losses are computed from the old state, matching
-#             # the sequencing of the provided PyTorch implementation.
-#             next_v = v_apply({"params": state.v_params}, next_observations)
-#             target_q_for_backup = rewards + (1.0 - dones) * discount * next_v
-#             target_q1, target_q2 = q_apply({"params": state.q_target_params}, observations, actions)
-#             target_q_for_v = jnp.minimum(target_q1, target_q2)
-#             old_v = v_apply({"params": state.v_params}, observations)
-#             adv = target_q_for_v - old_v
-#             exp_adv = jnp.minimum(jnp.exp(beta * jax.lax.stop_gradient(adv)), EXP_ADV_MAX)
+#             # Old-state quantities used by multiple losses, mirroring IQL-style sequencing.
+#             next_v_all = apply_v_ensemble(state.v_params, next_observations)  # [N, B]
+#             target_q_for_backup = rewards[None, :] + (1.0 - dones[None, :]) * discount * next_v_all
+#             target_v_q_all = apply_q_ensemble(state.q_target_params, observations, actions)  # [N, B]
+#             old_v_all = apply_v_ensemble(state.v_params, observations)  # [N, B]
+
+#             # Decoupled delayed filtering weights: target member i uses delayed member j(i).
+#             delayed_q_all = apply_q_ensemble(state.q_delayed_params, observations, actions)  # [N, B]
+#             delayed_v_all = apply_v_ensemble(state.v_delayed_params, observations)  # [N, B]
+#             delayed_adv_all = delayed_q_all - delayed_v_all
+#             delayed_adv_for_filter = delayed_adv_all[state.filter_indices, :]  # [N, B]
+#             delayed_value_weight = jnp.abs(
+#                 iql_tau - (delayed_adv_for_filter < 0.0).astype(jnp.float32)
+#             )
+
+#             # Actor advantage uses ensemble-mean Q and V, not min.
+#             data_q_mean = jnp.mean(target_v_q_all, axis=0)
+#             data_v_mean = jnp.mean(old_v_all, axis=0)
+#             actor_adv = data_q_mean - data_v_mean
+#             exp_adv = jnp.minimum(jnp.exp(beta * jax.lax.stop_gradient(actor_adv)), EXP_ADV_MAX)
 
 #             def v_loss_fn(v_params):
-#                 v = v_apply({"params": v_params}, observations)
-#                 value_adv = jax.lax.stop_gradient(target_q_for_v) - v
-#                 value_weight = jnp.abs(iql_tau - (value_adv < 0.0).astype(jnp.float32))
-#                 value_loss = jnp.mean(value_weight * value_adv ** 2)
-#                 return value_loss, v
+#                 v_all = apply_v_ensemble(v_params, observations)  # [N, B]
+#                 value_residual = jax.lax.stop_gradient(target_v_q_all) - v_all
+#                 value_loss = jnp.mean(jax.lax.stop_gradient(delayed_value_weight) * value_residual ** 2)
+#                 return value_loss, v_all
 
-#             (value_loss, v), v_grads = jax.value_and_grad(v_loss_fn, has_aux=True)(state.v_params)
+#             (value_loss, v_all), v_grads = jax.value_and_grad(v_loss_fn, has_aux=True)(state.v_params)
 #             v_updates, v_opt_state = v_tx.update(v_grads, state.v_opt_state, state.v_params)
 #             v_params = optax.apply_updates(state.v_params, v_updates)
 
 #             def q_loss_fn(q_params):
-#                 q1, q2 = q_apply({"params": q_params}, observations, actions)
+#                 q_all = apply_q_ensemble(q_params, observations, actions)  # [N, B]
 #                 target = jax.lax.stop_gradient(target_q_for_backup)
-#                 q_loss = 0.5 * (jnp.mean((q1 - target) ** 2) + jnp.mean((q2 - target) ** 2))
-#                 return q_loss, (q1, q2)
+#                 q_loss = jnp.mean((q_all - target) ** 2)
+#                 return q_loss, q_all
 
-#             (q_loss, (q1, q2)), q_grads = jax.value_and_grad(q_loss_fn, has_aux=True)(state.q_params)
+#             (q_loss, q_all), q_grads = jax.value_and_grad(q_loss_fn, has_aux=True)(state.q_params)
 #             q_updates, q_opt_state = q_tx.update(q_grads, state.q_opt_state, state.q_params)
 #             q_params = optax.apply_updates(state.q_params, q_updates)
 #             q_target_params = soft_update(q_params, state.q_target_params, tau)
@@ -2228,13 +2853,34 @@ if __name__ == "__main__":
 #             )
 #             actor_params = optax.apply_updates(state.actor_params, actor_updates)
 
-#             new_state = IQLState(
+#             should_update_delayed = (total_it % jnp.asarray(delayed_update_period, dtype=jnp.int32)) == 0
+
+#             def update_delayed(carry):
+#                 q_target_params_, v_params_ = carry
+#                 filter_indices_ = cycle_shift_for_update(total_it)
+#                 return q_target_params_, v_params_, filter_indices_
+
+#             def keep_delayed(carry):
+#                 _q_target_params_, _v_params_ = carry
+#                 return state.q_delayed_params, state.v_delayed_params, state.filter_indices
+
+#             q_delayed_params, v_delayed_params, filter_indices = jax.lax.cond(
+#                 should_update_delayed,
+#                 update_delayed,
+#                 keep_delayed,
+#                 operand=(q_target_params, v_params),
+#             )
+
+#             new_state = DecoupledDelayedIQLState(
 #                 total_it=total_it,
 #                 q_params=q_params,
 #                 q_target_params=q_target_params,
+#                 q_delayed_params=q_delayed_params,
 #                 q_opt_state=q_opt_state,
 #                 v_params=v_params,
+#                 v_delayed_params=v_delayed_params,
 #                 v_opt_state=v_opt_state,
+#                 filter_indices=filter_indices,
 #                 actor_params=actor_params,
 #                 actor_opt_state=actor_opt_state,
 #                 actor_key=actor_key,
@@ -2242,19 +2888,37 @@ if __name__ == "__main__":
 
 #             log_dict = {
 #                 "q_loss": q_loss,
-#                 "q1_mean": jnp.mean(q1),
-#                 "q2_mean": jnp.mean(q2),
+#                 "q_mean": jnp.mean(q_all),
+#                 "q_std": jnp.std(q_all),
 #                 "target_q_mean": jnp.mean(target_q_for_backup),
 #                 "value_loss": value_loss,
-#                 "v_mean": jnp.mean(v),
-#                 "adv_mean": jnp.mean(adv),
-#                 "adv_min": jnp.min(adv),
-#                 "adv_max": jnp.max(adv),
-#                 "exp_adv_mean": jnp.mean(exp_adv),
+#                 "v_mean": jnp.mean(v_all),
+#                 "v_std": jnp.std(v_all),
+#                 "target_v_q_mean": jnp.mean(target_v_q_all),
 #                 "actor_loss": actor_loss,
 #                 "bc_loss_mean": jnp.mean(bc_losses),
 #                 "policy_mean": jnp.mean(policy_mean),
 #                 "policy_log_std_mean": log_std_mean,
+#                 "actor_adv_mean": jnp.mean(actor_adv),
+#                 "actor_adv_min": jnp.min(actor_adv),
+#                 "actor_adv_max": jnp.max(actor_adv),
+#                 "exp_adv_mean": jnp.mean(exp_adv),
+#                 "exp_adv_max": jnp.max(exp_adv),
+#                 "delayed_adv_mean": jnp.mean(delayed_adv_for_filter),
+#                 "delayed_adv_min": jnp.min(delayed_adv_for_filter),
+#                 "delayed_adv_max": jnp.max(delayed_adv_for_filter),
+#                 "delayed_weight_mean": jnp.mean(delayed_value_weight),
+#                 "delayed_weight_min": jnp.min(delayed_value_weight),
+#                 "delayed_weight_max": jnp.max(delayed_value_weight),
+#                 "delayed_negative_adv_frac": jnp.mean((delayed_adv_for_filter < 0.0).astype(jnp.float32)),
+#                 "delayed_update": should_update_delayed.astype(jnp.float32),
+#                 "ensemble_size": jnp.asarray(ensemble_size, dtype=jnp.float32),
+#                 "filter_index_mean": jnp.mean(filter_indices.astype(jnp.float32)),
+#                 "filter_shift": jnp.where(
+#                     jnp.asarray(ensemble_size, dtype=jnp.int32) > 1,
+#                     filter_indices[0],
+#                     jnp.asarray(0, dtype=jnp.int32),
+#                 ).astype(jnp.float32),
 #             }
 #             return new_state, log_dict
 
@@ -2271,18 +2935,32 @@ if __name__ == "__main__":
 #         action = jnp.clip(self.max_action * action, -self.max_action, self.max_action)
 #         return np.asarray(jax.device_get(action))[0]
 
-#     def eval_actor(self, env: gym.Env, actor_params: Any, n_episodes: int, seed: int) -> np.ndarray:
-#         env.seed(seed)
+#     def eval_actor(
+#         self,
+#         env: gym.Env,
+#         actor_params: Any,
+#         n_episodes: int,
+#         seed: int,
+#     ) -> Tuple[np.ndarray, np.ndarray]:
 #         episode_rewards = []
-#         for _ in range(n_episodes):
-#             state, done = env.reset(), False
+#         episode_successes = []
+#         for episode_idx in range(n_episodes):
+#             state, done = reset_env(env, seed=seed if episode_idx == 0 else None), False
 #             episode_reward = 0.0
+#             episode_success = np.nan
 #             while not done:
 #                 action = self.actor_act(actor_params, state)
-#                 state, reward, done, _ = env.step(action)
+#                 state, reward, done, info = step_env(env, action)
 #                 episode_reward += reward
+#                 step_success = extract_success(info)
+#                 if np.isfinite(step_success):
+#                     episode_success = step_success
 #             episode_rewards.append(episode_reward)
-#         return np.asarray(episode_rewards, dtype=np.float32)
+#             episode_successes.append(episode_success)
+#         return (
+#             np.asarray(episode_rewards, dtype=np.float32),
+#             np.asarray(episode_successes, dtype=np.float32),
+#         )
 
 #     def _build_actor_refit_step(self):
 #         q_apply = self.q_def.apply
@@ -2292,6 +2970,12 @@ if __name__ == "__main__":
 #         iql_deterministic = self.iql_deterministic
 #         use_dropout = self.actor_dropout is not None
 #         actor_apply_fn = self.actor_def.apply
+
+#         def apply_q_ensemble(params: Any, states: jnp.ndarray, actions: jnp.ndarray) -> jnp.ndarray:
+#             return jax.vmap(lambda p: q_apply({"params": p}, states, actions))(params)
+
+#         def apply_v_ensemble(params: Any, states: jnp.ndarray) -> jnp.ndarray:
+#             return jax.vmap(lambda p: v_apply({"params": p}, states))(params)
 
 #         def apply_actor(actor_params: Any, observations: jnp.ndarray, training: bool, rng: Optional[jnp.ndarray] = None):
 #             if use_dropout and training:
@@ -2304,13 +2988,15 @@ if __name__ == "__main__":
 #             return actor_apply_fn({"params": actor_params}, observations, training=training)
 
 #         @jax.jit
-#         def actor_refit_step(actor_state: ActorState, iql_state: IQLState, batch: TensorBatch):
+#         def actor_refit_step(actor_state: ActorState, iql_state: DecoupledDelayedIQLState, batch: TensorBatch):
 #             observations = batch["observations"]
 #             actions = batch["actions"]
 
-#             q1, q2 = q_apply({"params": iql_state.q_target_params}, observations, actions)
-#             target_q = jnp.minimum(q1, q2)
-#             v = v_apply({"params": iql_state.v_params}, observations)
+#             # Actor refit uses frozen trained ensemble-mean Q_target and V.
+#             q_all = apply_q_ensemble(iql_state.q_target_params, observations, actions)
+#             v_all = apply_v_ensemble(iql_state.v_params, observations)
+#             target_q = jnp.mean(q_all, axis=0)
+#             v = jnp.mean(v_all, axis=0)
 #             adv = target_q - v
 #             exp_adv = jnp.minimum(jnp.exp(beta * jax.lax.stop_gradient(adv)), EXP_ADV_MAX)
 
@@ -2373,16 +3059,6 @@ if __name__ == "__main__":
 #             self.device,
 #         )
 
-#     def make_loaded_actor_state(self) -> ActorState:
-#         return tree_to_device(
-#             ActorState(
-#                 params=copy.deepcopy(self.state.actor_params),
-#                 opt_state=copy.deepcopy(self.state.actor_opt_state),
-#                 key=copy.deepcopy(self.state.actor_key),
-#             ),
-#             self.device,
-#         )
-
 #     def fit_actor(
 #         self,
 #         replay_buffer: ReplayBuffer,
@@ -2394,6 +3070,9 @@ if __name__ == "__main__":
 #         eval_seed: int = 0,
 #         eval_interval: int = 0,
 #         prefix: str = "actor_refit",
+#         save_dir: Optional[Union[str, Path]] = None,
+#         log_wandb: bool = False,
+#         log_extra: Optional[Dict[str, Any]] = None,
 #     ) -> Tuple[ActorState, Dict[str, Any]]:
 #         refit_log: Dict[str, Any] = {
 #             f"{prefix}/final_loss": np.nan,
@@ -2404,20 +3083,59 @@ if __name__ == "__main__":
 #             f"{prefix}/final_score_std": np.nan,
 #             f"{prefix}/final_d4rl_normalized_score_mean": np.nan,
 #             f"{prefix}/final_d4rl_normalized_score_std": np.nan,
+#             f"{prefix}/final_success_rate": np.nan,
+#             f"{prefix}/final_success_std": np.nan,
 #             f"{prefix}/best_score_mean": np.nan,
 #             f"{prefix}/best_score_std": np.nan,
 #             f"{prefix}/best_d4rl_normalized_score_mean": np.nan,
 #             f"{prefix}/best_d4rl_normalized_score_std": np.nan,
+#             f"{prefix}/best_success_rate": np.nan,
+#             f"{prefix}/best_success_std": np.nan,
 #             f"{prefix}/inner_eval_steps": [],
 #             f"{prefix}/inner_score_mean": [],
 #             f"{prefix}/inner_score_std": [],
 #             f"{prefix}/inner_d4rl_normalized_score_mean": [],
 #             f"{prefix}/inner_d4rl_normalized_score_std": [],
+#             f"{prefix}/inner_success_rate": [],
+#             f"{prefix}/inner_success_std": [],
 #         }
 #         if steps <= 0:
 #             return actor_state, refit_log
 
-#         best_normalized_score_mean = -np.inf
+#         best_eval_metric_mean = -np.inf
+#         save_dir_path = Path(save_dir) if save_dir is not None else None
+#         if save_dir_path is not None:
+#             save_dir_path.mkdir(parents=True, exist_ok=True)
+#         log_extra = {} if log_extra is None else dict(log_extra)
+
+#         def save_refit_snapshot(
+#             current_actor_state: ActorState,
+#             current_refit_log: Dict[str, Any],
+#             fit_step: int,
+#             is_best: bool,
+#         ) -> None:
+#             if save_dir_path is None:
+#                 return
+
+#             logs_payload = {
+#                 **log_extra,
+#                 "refit_step": int(fit_step),
+#                 **current_refit_log,
+#             }
+#             logs_path = save_dir_path / "fit_eval_logs.npz"
+#             latest_actor_path = save_dir_path / "latest_actor.pkl"
+#             actor_payload = serialization.to_state_dict(current_actor_state.params)
+#             save_pickle(latest_actor_path, actor_payload)
+#             save_logs_npz([logs_payload], str(logs_path))
+
+#             if is_best:
+#                 save_pickle(save_dir_path / "best_actor.pkl", actor_payload)
+
+#             if log_wandb and wandb.run is not None:
+#                 wandb.save(str(logs_path), policy="now")
+#                 wandb.save(str(latest_actor_path), policy="now")
+#                 if is_best:
+#                     wandb.save(str(save_dir_path / "best_actor.pkl"), policy="now")
 
 #         for fit_step in range(1, steps + 1):
 #             batch = replay_buffer.sample(batch_size)
@@ -2436,7 +3154,7 @@ if __name__ == "__main__":
 #                 and (fit_step % eval_interval == 0 or fit_step == steps)
 #             )
 #             if should_eval:
-#                 eval_scores = self.eval_actor(
+#                 eval_scores, eval_successes = self.eval_actor(
 #                     eval_env,
 #                     actor_state.params,
 #                     n_episodes=eval_episodes,
@@ -2446,48 +3164,69 @@ if __name__ == "__main__":
 
 #                 eval_score_mean = float(np.mean(eval_scores))
 #                 eval_score_std = float(np.std(eval_scores))
-#                 normalized_eval_score_mean = float(np.mean(normalized_eval_scores))
-#                 normalized_eval_score_std = float(np.std(normalized_eval_scores))
+#                 normalized_eval_score_mean, normalized_eval_score_std = mean_std_or_nan(normalized_eval_scores)
+#                 success_rate, success_std = mean_std_or_nan(eval_successes)
 
 #                 refit_log[f"{prefix}/inner_eval_steps"].append(int(fit_step))
 #                 refit_log[f"{prefix}/inner_score_mean"].append(eval_score_mean)
 #                 refit_log[f"{prefix}/inner_score_std"].append(eval_score_std)
 #                 refit_log[f"{prefix}/inner_d4rl_normalized_score_mean"].append(normalized_eval_score_mean)
 #                 refit_log[f"{prefix}/inner_d4rl_normalized_score_std"].append(normalized_eval_score_std)
+#                 refit_log[f"{prefix}/inner_success_rate"].append(success_rate)
+#                 refit_log[f"{prefix}/inner_success_std"].append(success_std)
 #                 refit_log[f"{prefix}/final_score_mean"] = eval_score_mean
 #                 refit_log[f"{prefix}/final_score_std"] = eval_score_std
 #                 refit_log[f"{prefix}/final_d4rl_normalized_score_mean"] = normalized_eval_score_mean
 #                 refit_log[f"{prefix}/final_d4rl_normalized_score_std"] = normalized_eval_score_std
+#                 refit_log[f"{prefix}/final_success_rate"] = success_rate
+#                 refit_log[f"{prefix}/final_success_std"] = success_std
 
-#                 if normalized_eval_score_mean > best_normalized_score_mean:
-#                     best_normalized_score_mean = normalized_eval_score_mean
+#                 eval_metric_mean = success_rate if np.isfinite(success_rate) else normalized_eval_score_mean
+#                 is_best = np.isfinite(eval_metric_mean) and eval_metric_mean > best_eval_metric_mean
+#                 if is_best:
+#                     best_eval_metric_mean = eval_metric_mean
 #                     refit_log[f"{prefix}/best_score_mean"] = eval_score_mean
 #                     refit_log[f"{prefix}/best_score_std"] = eval_score_std
 #                     refit_log[f"{prefix}/best_d4rl_normalized_score_mean"] = normalized_eval_score_mean
 #                     refit_log[f"{prefix}/best_d4rl_normalized_score_std"] = normalized_eval_score_std
+#                     refit_log[f"{prefix}/best_success_rate"] = success_rate
+#                     refit_log[f"{prefix}/best_success_std"] = success_std
+
+#                 save_refit_snapshot(
+#                     current_actor_state=actor_state,
+#                     current_refit_log=refit_log,
+#                     fit_step=fit_step,
+#                     is_best=is_best,
+#                 )
 
 #                 print(
-#                     f"[{prefix}:iql_awbc] step {fit_step}/{steps}: "
+#                     f"[{prefix}:decoupled_delayed_iql_awbc] step {fit_step}/{steps}: "
 #                     f"loss={step_log['loss']:.4f}, bc={step_log['bc_loss']:.4f}, "
 #                     f"adv={step_log['adv_mean']:.4f}, exp_adv={step_log['exp_adv_mean']:.4f}, "
 #                     f"eval_mean={eval_score_mean:.3f}, eval_std={eval_score_std:.3f}, "
-#                     f"D4RL_mean={normalized_eval_score_mean:.3f}, "
-#                     f"D4RL_std={normalized_eval_score_std:.3f}"
+#                     f"d4rl_normalized_mean={normalized_eval_score_mean:.3f}, "
+#                     f"d4rl_normalized_std={normalized_eval_score_std:.3f}, "
+#                     f"success_rate={success_rate:.3f}"
 #                 )
 
 #         return actor_state, refit_log
 
 #     def state_dict(self) -> Dict[str, Any]:
 #         return {
-#             "iql_state": serialization.to_state_dict(self.state),
+#             "decoupled_delayed_iql_state": serialization.to_state_dict(self.state),
 #             "initial_actor_params": serialization.to_state_dict(self.initial_actor_params),
 #             "initial_actor_opt_state": serialization.to_state_dict(self.initial_actor_opt_state),
 #             "initial_actor_key": serialization.to_state_dict(self.initial_actor_key),
 #             "iql_deterministic": self.iql_deterministic,
+#             "ensemble_size": self.ensemble_size,
+#             "delayed_update_period": self.delayed_update_period,
 #         }
 
 #     def load_state_dict(self, state_dict: Dict[str, Any]):
-#         self.state = serialization.from_state_dict(self.state, state_dict["iql_state"])
+#         self.state = serialization.from_state_dict(
+#             self.state,
+#             state_dict["decoupled_delayed_iql_state"],
+#         )
 #         if "initial_actor_params" in state_dict:
 #             self.initial_actor_params = serialization.from_state_dict(
 #                 self.initial_actor_params,
@@ -2524,7 +3263,7 @@ if __name__ == "__main__":
 #     run_name: Optional[str] = None,
 #     seed: Optional[int] = None,
 # ) -> Tuple[Path, Path]:
-#     """Return (run_dir, checkpoint_path) for a saved IQL-JAX checkpoint.
+#     """Return (run_dir, checkpoint_path) for a saved DecoupledDelayedIQL-JAX checkpoint.
 
 #     Supported load_model formats:
 
@@ -2602,19 +3341,28 @@ if __name__ == "__main__":
 # @pyrallis.wrap()
 # def train(config: TrainConfig):
 #     config = apply_env_hyperparams(config)
-#     refit_only = config.load_model != "" and int(config.max_timesteps) <= 0
+#     refit_only = config.mode == "refit"
+#     if refit_only and config.load_model == "":
+#         raise ValueError("refit mode requires --load_model")
 #     if not refit_only:
 #         config = finalize_checkpoint_path(config)
 
 #     jax_device = select_jax_device(config.device)
-#     env = gym.make(config.env)
+#     env, dataset, dataset_backend = load_env_and_dataset(config.env)
+
+#     if len(env.observation_space.shape) != 1 or len(env.action_space.shape) != 1:
+#         raise ValueError(
+#             f"{ALGORITHM_NAME}-JAX currently supports vector observations/actions only; "
+#             f"got observation_space={env.observation_space}, action_space={env.action_space}."
+#         )
 
 #     state_dim = env.observation_space.shape[0]
 #     action_dim = env.action_space.shape[0]
 
-#     dataset = d4rl.qlearning_dataset(env)
-#     if config.normalize_reward:
+#     if config.normalize_reward and dataset_backend == "d4rl":
 #         modify_reward(dataset, config.env)
+#     elif config.normalize_reward:
+#         print("Skipping D4RL reward normalization for non-D4RL dataset.")
 
 #     if config.normalize:
 #         state_mean, state_std = compute_mean_std(dataset["observations"], eps=1e-3)
@@ -2649,14 +3397,19 @@ if __name__ == "__main__":
 #     set_seed(seed, env)
 
 #     print("---------------------------------------")
-#     print(f"Training {ALGORITHM_NAME}-JAX, Env: {config.env}, Seed: {seed}")
+#     run_mode_name = "Actor refit" if refit_only else "Training"
+#     print(f"{run_mode_name} {ALGORITHM_NAME}-JAX, Env: {config.env}, Seed: {seed}")
+#     print(
+#         f"ensemble_size={config.ensemble_size}, "
+#         f"delayed_update_period={config.delayed_update_period}"
+#     )
 #     print("---------------------------------------")
 
-#     trainer = IQLJAX(
+#     trainer = DecoupledDelayedIQLJAX(
 #         max_action=max_action,
 #         state_dim=state_dim,
 #         action_dim=action_dim,
-#         max_steps=max(int(config.max_timesteps), int(config.refit_actor_steps), 1),
+#         max_steps=max(int(config.max_timesteps), 1),
 #         qf_lr=config.qf_lr,
 #         vf_lr=config.vf_lr,
 #         actor_lr=config.actor_lr,
@@ -2664,8 +3417,12 @@ if __name__ == "__main__":
 #         tau=config.tau,
 #         beta=config.beta,
 #         iql_tau=config.iql_tau,
+#         ensemble_size=config.ensemble_size,
+#         delayed_update_period=config.delayed_update_period,
 #         iql_deterministic=config.iql_deterministic,
 #         actor_dropout=config.actor_dropout,
+#         hidden_dim=config.hidden_dim,
+#         n_hidden=config.n_hidden,
 #         seed=seed,
 #         device=jax_device,
 #     )
@@ -2686,30 +3443,38 @@ if __name__ == "__main__":
 
 #     if refit_only:
 #         if loaded_run_dir is None:
-#             raise ValueError("refit_only mode requires --load_model")
+#             raise ValueError("refit mode requires --load_model")
 
 #         actor_refit_dir = loaded_run_dir / config.actor_refit_dir_name
 #         actor_refit_dir.mkdir(parents=True, exist_ok=True)
 #         print("---------------------------------------")
 #         print(f"Actor refit from saved {ALGORITHM_NAME} checkpoint")
+#         print("Q/V are frozen; only pi is optimized.")
+#         print(
+#             "Refit schedule uses shared fields: "
+#             f"max_timesteps={config.max_timesteps}, "
+#             f"batch_size={config.batch_size}, "
+#             f"eval_freq={config.eval_freq}"
+#         )
 #         print(f"Saving actor refit outputs to: {actor_refit_dir}")
 #         print("---------------------------------------")
 
-#         actor_state = (
-#             trainer.make_initial_actor_state()
-#             if config.refit_from_scratch
-#             else trainer.make_loaded_actor_state()
-#         )
+#         actor_state = trainer.make_initial_actor_state()
+#         loaded_checkpoint_for_log = str(loaded_run_dir / "checkpoint.pkl")
+
 #         refit_actor_state, refit_log = trainer.fit_actor(
 #             replay_buffer=replay_buffer,
 #             actor_state=actor_state,
-#             steps=config.refit_actor_steps,
-#             batch_size=config.refit_actor_batch_size,
+#             steps=config.max_timesteps,
+#             batch_size=config.batch_size,
 #             eval_env=env,
 #             eval_episodes=config.n_episodes,
 #             eval_seed=config.seed,
-#             eval_interval=config.refit_actor_eval_freq,
+#             eval_interval=config.eval_freq,
 #             prefix="actor_refit",
+#             save_dir=actor_refit_dir,
+#             log_wandb=config.log_wandb,
+#             log_extra={"loaded_checkpoint": loaded_checkpoint_for_log},
 #         )
 
 #         save_pickle(
@@ -2717,7 +3482,7 @@ if __name__ == "__main__":
 #             serialization.to_state_dict(refit_actor_state.params),
 #         )
 #         save_logs_npz(
-#             [{"loaded_checkpoint": str(loaded_run_dir / "checkpoint.pkl"), **refit_log}],
+#             [{"loaded_checkpoint": loaded_checkpoint_for_log, **refit_log}],
 #             str(actor_refit_dir / "fit_eval_logs.npz"),
 #         )
 #         with open(actor_refit_dir / "refit_config.yaml", "w") as f:
@@ -2745,28 +3510,34 @@ if __name__ == "__main__":
 
 #         if (t + 1) % config.eval_freq == 0:
 #             print(f"Time steps: {t + 1}")
-#             eval_scores = trainer.eval_actor(
+#             eval_scores, eval_successes = trainer.eval_actor(
 #                 env,
 #                 trainer.state.actor_params,
 #                 n_episodes=config.n_episodes,
 #                 seed=config.seed,
 #             )
 #             normalized_eval_scores = normalize_episode_scores(env, eval_scores)
+#             normalized_eval_score_mean, normalized_eval_score_std = mean_std_or_nan(normalized_eval_scores)
+#             success_rate, success_std = mean_std_or_nan(eval_successes)
 
 #             eval_log: Dict[str, Any] = {
 #                 "timestep": int(t + 1),
 #                 "eval/reward_mean": float(np.mean(eval_scores)),
 #                 "eval/reward_std": float(np.std(eval_scores)),
-#                 "eval/normalized_score_mean": float(np.mean(normalized_eval_scores)),
-#                 "eval/normalized_score_std": float(np.std(normalized_eval_scores)),
+#                 "eval/d4rl_normalized_score_mean": normalized_eval_score_mean,
+#                 "eval/d4rl_normalized_score_std": normalized_eval_score_std,
+#                 "eval/success_rate": success_rate,
+#                 "eval/success_std": success_std,
 #             }
 #             eval_logs.append(eval_log.copy())
 
 #             print(
 #                 f"Evaluation over {config.n_episodes} episodes: "
 #                 f"reward={eval_log['eval/reward_mean']:.3f} ± {eval_log['eval/reward_std']:.3f}, "
-#                 f"D4RL={eval_log['eval/normalized_score_mean']:.3f} ± "
-#                 f"{eval_log['eval/normalized_score_std']:.3f}"
+#                 f"d4rl_normalized={eval_log['eval/d4rl_normalized_score_mean']:.3f} ± "
+#                 f"{eval_log['eval/d4rl_normalized_score_std']:.3f}, "
+#                 f"success_rate={eval_log['eval/success_rate']:.3f} ± "
+#                 f"{eval_log['eval/success_std']:.3f}"
 #             )
 
 #             if config.log_wandb:

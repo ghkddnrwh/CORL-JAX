@@ -1,0 +1,291 @@
+# Hyperparameters for ReBRAC-JAX.
+#
+# Notes:
+# - This file follows the same RL-Zoo-style format as the IQL-JAX YAML:
+#   each top-level environment id has its own config.
+# - Values are converted from the original ReBRAC per-environment YAML files.
+# - Original schedule mapping:
+#     num_epochs: 1000 and num_updates_on_epoch: 1000 -> max_timesteps: 1000000
+#     eval_every * num_updates_on_epoch -> eval_freq
+#     eval_episodes -> n_episodes
+#     train_seed -> seed
+# - CLI arguments override values loaded from this YAML file.
+# - YAML anchors/merge keys are used to avoid repeating identical hyperparameters.
+# - Top-level keys beginning with `_` are anchor definitions, not environments.
+
+_common: &common
+  max_timesteps: 1000000
+  eval_freq: 25000
+  log_every: 500
+  seed: 0
+  eval_seed: 42
+
+  # Network / target updates
+  hidden_dim: 256
+  actor_n_hiddens: 3
+  critic_n_hiddens: 3
+  actor_ln: false
+  critic_ln: true
+  gamma: 0.99
+  tau: 0.005
+
+  # ReBRAC target-policy smoothing and delayed actor updates
+  policy_noise: 0.2
+  noise_clip: 0.5
+  policy_freq: 2
+  normalize_q: true
+
+  # Dataset normalization
+  normalize_states: false
+
+_mujoco: &mujoco
+  <<: *common
+  n_episodes: 10
+  batch_size: 1024
+  normalize_reward: false
+  actor_learning_rate: 0.001
+  critic_learning_rate: 0.001
+
+_antmaze: &antmaze
+  <<: *common
+  eval_freq: 25000
+  n_episodes: 100
+  batch_size: 256
+  normalize_reward: true
+  gamma: 0.999
+  actor_learning_rate: 0.0003
+  critic_learning_rate: 0.00005
+
+_maze2d: &maze2d
+  <<: *common
+  n_episodes: 100
+  batch_size: 256
+  normalize_reward: false
+  actor_learning_rate: 0.0003
+  critic_learning_rate: 0.0003
+  actor_bc_coef: 0.003
+  critic_bc_coef: 0.001
+
+_adroit: &adroit
+  <<: *common
+  n_episodes: 10
+  batch_size: 256
+  normalize_reward: false
+  actor_learning_rate: 0.0003
+  critic_learning_rate: 0.0003
+
+# -----------------------------------------------------------------------------
+# MuJoCo locomotion: 3 environments x 6 datasets
+# Environments: halfcheetah, hopper, walker2d
+# Datasets: random, medium, medium-replay, medium-expert, expert, full-replay
+# -----------------------------------------------------------------------------
+
+# HalfCheetah
+halfcheetah-random-v2:
+  <<: *mujoco
+  actor_bc_coef: 0.001
+  critic_bc_coef: 0.1
+
+halfcheetah-medium-v2:
+  <<: *mujoco
+  actor_bc_coef: 0.001
+  critic_bc_coef: 0.01
+
+halfcheetah-medium-replay-v2:
+  <<: *mujoco
+  actor_bc_coef: 0.01
+  critic_bc_coef: 0.001
+
+halfcheetah-medium-expert-v2:
+  <<: *mujoco
+  actor_bc_coef: 0.01
+  critic_bc_coef: 0.1
+
+halfcheetah-expert-v2:
+  <<: *mujoco
+  actor_bc_coef: 0.01
+  critic_bc_coef: 0.01
+
+halfcheetah-full-replay-v2:
+  <<: *mujoco
+  actor_bc_coef: 0.001
+  critic_bc_coef: 0.1
+
+# Hopper
+hopper-random-v2:
+  <<: *mujoco
+  actor_bc_coef: 0.001
+  critic_bc_coef: 0.01
+
+hopper-medium-v2:
+  <<: *mujoco
+  actor_bc_coef: 0.01
+  critic_bc_coef: 0.01
+
+hopper-medium-replay-v2:
+  <<: *mujoco
+  actor_bc_coef: 0.05
+  critic_bc_coef: 0.5
+
+hopper-medium-expert-v2:
+  <<: *mujoco
+  actor_bc_coef: 0.1
+  critic_bc_coef: 0.01
+
+hopper-expert-v2:
+  <<: *mujoco
+  actor_bc_coef: 0.1
+  critic_bc_coef: 0.1
+
+hopper-full-replay-v2:
+  <<: *mujoco
+  actor_bc_coef: 0.01
+  critic_bc_coef: 0.01
+
+# Walker2d
+walker2d-random-v2:
+  <<: *mujoco
+  actor_bc_coef: 0.01
+  critic_bc_coef: 0.0
+
+walker2d-medium-v2:
+  <<: *mujoco
+  actor_bc_coef: 0.05
+  critic_bc_coef: 0.1
+
+walker2d-medium-replay-v2:
+  <<: *mujoco
+  actor_bc_coef: 0.05
+  critic_bc_coef: 0.01
+
+walker2d-medium-expert-v2:
+  <<: *mujoco
+  actor_bc_coef: 0.01
+  critic_bc_coef: 0.01
+
+walker2d-expert-v2:
+  <<: *mujoco
+  actor_bc_coef: 0.01
+  critic_bc_coef: 0.5
+
+walker2d-full-replay-v2:
+  <<: *mujoco
+  actor_bc_coef: 0.01
+  critic_bc_coef: 0.01
+
+# -----------------------------------------------------------------------------
+# AntMaze: 6 datasets
+# -----------------------------------------------------------------------------
+
+antmaze-umaze-v2:
+  <<: *antmaze
+  actor_bc_coef: 0.003
+  critic_bc_coef: 0.002
+
+antmaze-umaze-diverse-v2:
+  <<: *antmaze
+  actor_bc_coef: 0.003
+  critic_bc_coef: 0.001
+
+antmaze-medium-play-v2:
+  <<: *antmaze
+  actor_bc_coef: 0.001
+  critic_bc_coef: 0.0005
+
+antmaze-medium-diverse-v2:
+  <<: *antmaze
+  actor_bc_coef: 0.001
+  critic_bc_coef: 0.0
+
+antmaze-large-play-v2:
+  <<: *antmaze
+  actor_bc_coef: 0.002
+  critic_bc_coef: 0.001
+
+antmaze-large-diverse-v2:
+  <<: *antmaze
+  actor_bc_coef: 0.002
+  critic_bc_coef: 0.002
+
+# -----------------------------------------------------------------------------
+# Maze2D: 3 datasets from the original ReBRAC config package
+# -----------------------------------------------------------------------------
+
+maze2d-umaze-v1:
+  <<: *maze2d
+
+maze2d-medium-v1:
+  <<: *maze2d
+
+maze2d-large-v1:
+  <<: *maze2d
+
+# -----------------------------------------------------------------------------
+# Adroit manipulation: 4 environments x 3 datasets
+# Environments: pen, door, hammer, relocate
+# Datasets: human, cloned, expert
+# -----------------------------------------------------------------------------
+
+# Pen
+pen-human-v1:
+  <<: *adroit
+  actor_bc_coef: 0.1
+  critic_bc_coef: 0.5
+
+pen-cloned-v1:
+  <<: *adroit
+  actor_bc_coef: 0.05
+  critic_bc_coef: 0.5
+
+pen-expert-v1:
+  <<: *adroit
+  actor_bc_coef: 0.01
+  critic_bc_coef: 0.01
+
+# Door
+door-human-v1:
+  <<: *adroit
+  actor_bc_coef: 0.1
+  critic_bc_coef: 0.1
+
+door-cloned-v1:
+  <<: *adroit
+  actor_bc_coef: 0.01
+  critic_bc_coef: 0.1
+
+door-expert-v1:
+  <<: *adroit
+  actor_bc_coef: 0.05
+  critic_bc_coef: 0.01
+
+# Hammer
+hammer-human-v1:
+  <<: *adroit
+  actor_bc_coef: 0.01
+  critic_bc_coef: 0.5
+
+hammer-cloned-v1:
+  <<: *adroit
+  actor_bc_coef: 0.1
+  critic_bc_coef: 0.5
+
+hammer-expert-v1:
+  <<: *adroit
+  actor_bc_coef: 0.01
+  critic_bc_coef: 0.01
+
+# Relocate
+relocate-human-v1:
+  <<: *adroit
+  actor_bc_coef: 0.1
+  critic_bc_coef: 0.01
+
+relocate-cloned-v1:
+  <<: *adroit
+  actor_bc_coef: 0.1
+  critic_bc_coef: 0.01
+
+relocate-expert-v1:
+  <<: *adroit
+  actor_bc_coef: 0.05
+  critic_bc_coef: 0.01
