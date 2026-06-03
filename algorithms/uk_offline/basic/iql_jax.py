@@ -455,14 +455,14 @@ def set_seed(seed: int, env: Optional[gym.Env] = None):
 
 
 def wandb_init(config: dict) -> None:
-    wandb.init(
+    run = wandb.init(
         config=config,
         project=config["project"],
         group=config["group"],
         name=config["name"],
         id=str(uuid.uuid4()),
     )
-    wandb.run.save()
+    run.log_code(".")
 
 
 def is_scalar_value(value: Any) -> bool:
