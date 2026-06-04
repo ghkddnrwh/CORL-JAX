@@ -1313,13 +1313,99 @@ def resolve_checkpoint_path(
     return checkpoint_path.parent, checkpoint_path
 
 
+def load_run_config_for_refit(
+    current_config: TrainConfig,
+    loaded_run_dir: Union[str, Path],
+) -> TrainConfig:
+    """Load saved config.yaml from the checkpoint run dir for refit mode.
+
+    Priority:
+        saved run config.yaml < explicit CLI flags
+
+    This reconstructs the original training env/model/preprocessing settings,
+    while allowing any CLI-provided field to override the saved config.
+    """
+    loaded_run_dir = Path(loaded_run_dir)
+    saved_config_path = loaded_run_dir / "config.yaml"
+
+    if not saved_config_path.exists():
+        raise FileNotFoundError(
+            f"mode='refit' expects saved run config at: {saved_config_path}"
+        )
+
+    with open(saved_config_path, "r") as f:
+        saved_raw = yaml.safe_load(f) or {}
+
+    config_fields = set(TrainConfig.__dataclass_fields__.keys())
+    saved_kwargs = {
+        key: _coerce_hparam_value(value)
+        for key, value in saved_raw.items()
+        if key in config_fields
+    }
+
+    # 1. Start from the original saved training config.
+    loaded_config = TrainConfig(**saved_kwargs)
+
+    # 2. Override with explicitly provided CLI fields.
+    cli_overrides = _cli_overridden_fields()
+    current_config_dict = asdict(current_config)
+
+    applied_cli_overrides = []
+    for key in sorted(cli_overrides):
+        if key not in config_fields:
+            continue
+        setattr(loaded_config, key, current_config_dict[key])
+        applied_cli_overrides.append(key)
+
+    # 3. These must be forced for refit regardless of saved training config.
+    loaded_config.mode = "refit"
+    loaded_config.load_model = current_config.load_model
+
+    # In refit mode, do not reuse the original training checkpoint output path.
+    # Actor refit outputs are saved under loaded_run_dir / actor_refit_dir_name.
+    loaded_config.checkpoints_path = None
+
+    refresh_algorithm_names(loaded_config)
+    validate_config(loaded_config)
+
+    print(f"Loaded saved run config for refit from: {saved_config_path}")
+    if applied_cli_overrides:
+        print(
+            "Applied explicit CLI overrides on top of saved config: "
+            + ", ".join(applied_cli_overrides)
+        )
+
+    return loaded_config
+
+
 @pyrallis.wrap()
 def train(config: TrainConfig):
-    config = apply_env_hyperparams(config)
     refit_only = config.mode == "refit"
-    if refit_only and config.load_model == "":
-        raise ValueError("refit mode requires --load_model")
-    if not refit_only:
+
+    loaded_run_dir: Optional[Path] = None
+    checkpoint_path: Optional[Path] = None
+
+    if refit_only:
+        if config.load_model == "":
+            raise ValueError("refit mode requires --load_model")
+
+        # First resolve the checkpoint using the current CLI config.
+        # This lets --load_model be either checkpoint.pkl, a run dir, or a parent dir.
+        loaded_run_dir, checkpoint_path = resolve_checkpoint_path(
+            config.load_model,
+            run_name=config.name,
+            seed=config.seed,
+        )
+
+        # Then replace config with the original saved run config,
+        # while preserving refit-specific CLI/runtime fields.
+        config = load_run_config_for_refit(
+            current_config=config,
+            loaded_run_dir=loaded_run_dir,
+        )
+
+    else:
+        config = apply_env_hyperparams(config)
         config = finalize_checkpoint_path(config)
 
     jax_device = select_jax_device(config.device)
@@ -1396,13 +1482,13 @@ def train(config: TrainConfig):
         device=jax_device,
     )
 
-    loaded_run_dir: Optional[Path] = None
     if config.load_model != "":
-        loaded_run_dir, checkpoint_path = resolve_checkpoint_path(
-            config.load_model,
-            run_name=config.name,
-            seed=config.seed,
-        )
+        if checkpoint_path is None or loaded_run_dir is None:
+            loaded_run_dir, checkpoint_path = resolve_checkpoint_path(
+                config.load_model,
+                run_name=config.name,
+                seed=config.seed,
+            )
         print(f"Loading checkpoint from: {checkpoint_path}")
         checkpoint = load_pickle(checkpoint_path)
         trainer.load_state_dict(checkpoint)
