@@ -1,25 +1,18 @@
-(corl) ukjo1@ccrl-Precision-7920-Tower:~/research/ssd1/offline_rl/insampling$ ps -ef | grep python
-root        3222       1  0  5월22 ?      00:00:00 /usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal
-ukjo1    3534774 3413473 99 09:14 pts/357  12:50:40 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-medium-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 2 --checkpoints_path logs/basic/iql_jax/ogbench/original --n_episodes 10
-ukjo1    3534902 3413473 99 09:14 pts/357  12:53:51 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-medium-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 2 --checkpoints_path logs/basic/iql_jax/ogbench/0.999 --discount 0.999 --n_episodes 10
-ukjo1    3536369 3534774  0 09:14 ?        00:03:51 /home/ukjo1/anaconda3/envs/ogbench/lib/python3.10/site-packages/wandb/bin/wandb-core --port-filename /tmp/tmpfkp9iyth/port-3534774.txt --pid 3534774
-ukjo1    3536418 3536369  0 09:14 ?        00:00:24 /home/ukjo1/anaconda3/envs/ogbench/lib/python3.10/site-packages/wandb/bin/wandb-xpu --portfile /tmp/wandb-xpu-portfile-255726328 --parent-pid 3536369
-ukjo1    3536528 3534902  0 09:14 ?        00:04:04 /home/ukjo1/anaconda3/envs/ogbench/lib/python3.10/site-packages/wandb/bin/wandb-core --port-filename /tmp/tmp5o_k8r5v/port-3534902.txt --pid 3534902
-ukjo1    3536562 3536528  0 09:14 ?        00:00:24 /home/ukjo1/anaconda3/envs/ogbench/lib/python3.10/site-packages/wandb/bin/wandb-xpu --portfile /tmp/wandb-xpu-portfile-2560486679 --parent-pid 3536528
-ukjo1    3542965 3415348 99 11:17 pts/359  10:31:20 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-large-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 2 --checkpoints_path logs/basic/iql_jax/ogbench/original --n_episodes 10
-ukjo1    3543093 3415348 99 11:17 pts/359  10:28:39 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-large-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 2 --checkpoints_path logs/basic/iql_jax/ogbench/0.999 --discount 0.999 --n_episodes 10
-ukjo1    3544533 3542965  0 11:17 ?        00:03:21 /home/ukjo1/anaconda3/envs/ogbench/lib/python3.10/site-packages/wandb/bin/wandb-core --port-filename /tmp/tmpo1l1ad3j/port-3542965.txt --pid 3542965
-ukjo1    3544577 3544533  0 11:17 ?        00:00:19 /home/ukjo1/anaconda3/envs/ogbench/lib/python3.10/site-packages/wandb/bin/wandb-xpu --portfile /tmp/wandb-xpu-portfile-1623657890 --parent-pid 3544533
-ukjo1    3544719 3543093  0 11:17 ?        00:03:03 /home/ukjo1/anaconda3/envs/ogbench/lib/python3.10/site-packages/wandb/bin/wandb-core --port-filename /tmp/tmp4ofc6lqy/port-3543093.txt --pid 3543093
-ukjo1    3544755 3544719  0 11:17 ?        00:00:19 /home/ukjo1/anaconda3/envs/ogbench/lib/python3.10/site-packages/wandb/bin/wandb-xpu --portfile /tmp/wandb-xpu-portfile-1313254260 --parent-pid 3544719
-ukjo1    3557883 3557783  0 12:41 ?        00:00:01 /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python-env-tools/bin/pet server
-ukjo1    3559081 3557783  0 12:41 ?        00:00:00 /home/ukjo1/anaconda3/envs/for_git/bin/python /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python_files/run-jedi-language-server.py
-ukjo1    3559088 3559081  0 12:41 ?        00:00:00 /home/ukjo1/anaconda3/envs/for_git/bin/python /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python_files/lib/jedilsp/jedi/inference/compiled/subprocess/__main__.py /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python_files/lib/jedilsp 3.9.21
-ukjo1    3571975 3571960  0 16:40 ?        00:00:01 /home/ukjo1/.vscode-server/extensions/ms-python.python-2026.4.0-linux-x64/python-env-tools/bin/pet server
-ukjo1    3595432 3592595 99 20:46 pts/388  00:01:22 python algorithms/uk_offline/basic/iql_jax.py --env puzzle-4x4-play-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 1 --checkpoints_path logs/basic/iql_jax/ogbench/0.9999 --discount 0.9999 --n_episodes 10
-ukjo1    3596054 3593649 99 20:46 pts/390  00:01:12 python algorithms/uk_offline/basic/iql_jax.py --env puzzle-4x4-play-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 3 --checkpoints_path logs/basic/iql_jax/ogbench/0.9999 --discount 0.9999 --n_episodes 10
-ukjo1    3597042 3595432  3 20:46 ?        00:00:00 /home/ukjo1/anaconda3/envs/ogbench/lib/python3.10/site-packages/wandb/bin/wandb-core --port-filename /tmp/tmph6dqcjpp/port-3595432.txt --pid 3595432
-ukjo1    3597093 3597042  0 20:46 ?        00:00:00 /home/ukjo1/anaconda3/envs/ogbench/lib/python3.10/site-packages/wandb/bin/wandb-xpu --portfile /tmp/wandb-xpu-portfile-1504590967 --parent-pid 3597042
-ukjo1    3597473 3596054  3 20:46 ?        00:00:00 /home/ukjo1/anaconda3/envs/ogbench/lib/python3.10/site-packages/wandb/bin/wandb-core --port-filename /tmp/tmp49vgn1ys/port-3596054.txt --pid 3596054
-ukjo1    3597509 3597473  0 20:46 ?        00:00:00 /home/ukjo1/anaconda3/envs/ogbench/lib/python3.10/site-packages/wandb/bin/wandb-xpu --portfile /tmp/wandb-xpu-portfile-2503268474 --parent-pid 3597473
-ukjo1    3597921 3574042  0 20:46 pts/386  00:00:00 grep --color=auto python
+ukjo1    3655289 3415348 99 01:32 pts/359  12:47:45 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-large-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 3 --checkpoints_path logs/basic/iql_jax/ogbench/original --n_episodes 10
+ukjo1    3655417 3415348 99 01:32 pts/359  12:46:47 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-large-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 3 --checkpoints_path logs/basic/iql_jax/ogbench/0.999 --discount 0.999 --n_episodes 10
+ukjo1    3663768 3606315 99 09:16 pts/402  04:10:47 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-medium-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 1 --checkpoints_path logs/basic/iql_jax/ogbench/0.9999 --discount 0.9999 --n_episodes 10
+ukjo1    3674701 3600123 99 09:54 pts/392  03:30:28 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-medium-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 3 --checkpoints_path logs/basic/iql_jax/ogbench/0.9999 --discount 0.9999 --n_episodes 10
+ukjo1    3717064 3605357 99 10:46 pts/400  02:31:32 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-large-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 1 --checkpoints_path logs/basic/iql_jax/ogbench/0.9999 --discount 0.9999 --n_episodes 10
+ukjo1    3755939 3599399 99 11:04 pts/390  02:11:17 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-large-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 3 --checkpoints_path logs/basic/iql_jax/ogbench/0.9999 --discount 0.9999 --n_episodes 10
+kill -9 3823333
+kill -9 3823470
+kill -9 3824552
+kill -9 3824726
+kill -9 3827170
+kill -9 3827470
+kill -9 3830164
+kill -9 3830500
+kill -9 3832349
+kill -9 3832538
+kill -9 3833967
+kill -9 3834117

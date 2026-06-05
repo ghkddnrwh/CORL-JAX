@@ -379,9 +379,15 @@ def main():
     seeds = args.seeds
     last_n_evals = args.last_n_evals
 
-    env_id_list = ["antmaze"]
+    env_id_list = [
+        # "antmaze",
+        # "antsoccer",
+        "humanoidmaze",
+    ]
     dataset_list = [
-        "large-navigate-singletask-v0",
+        # "large-navigate-singletask-v0",
+        # "arena-navigate-singletask-v0",
+        "medium-navigate-singletask-v0",
     ]
 
     # 현재 경로 기준:

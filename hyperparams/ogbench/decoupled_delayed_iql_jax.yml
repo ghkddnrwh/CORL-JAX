@@ -14,7 +14,7 @@
 _ogbench_common: &ogbench_common
   max_timesteps: !!float 1e6
   n_timesteps: !!float 1e6
-  eval_freq: 25000
+  eval_freq: 100000
   log_every: 500
 
   # Dataset
@@ -38,7 +38,7 @@ _ogbench_common: &ogbench_common
   ensemble_size: 2
   delayed_update_period: 250
 
-  n_episodes: 10
+  n_episodes: 50
   normalize_reward: false
 
   # Standalone actor refit output directory. Refit reuses max_timesteps, batch_size, and eval_freq.

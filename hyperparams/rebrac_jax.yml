@@ -26,7 +26,7 @@ _common: &common
   critic_n_hiddens: 3
   actor_ln: false
   critic_ln: true
-  gamma: 0.99
+  discount: 0.99
   tau: 0.005
 
   # ReBRAC target-policy smoothing and delayed actor updates
@@ -52,7 +52,7 @@ _antmaze: &antmaze
   n_episodes: 100
   batch_size: 256
   normalize_reward: true
-  gamma: 0.999
+  discount: 0.999
   actor_learning_rate: 0.0003
   critic_learning_rate: 0.00005
 

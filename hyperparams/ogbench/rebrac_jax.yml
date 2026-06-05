@@ -8,7 +8,7 @@
 # - State-based tasks use 1e6 gradient steps; visual tasks use 5e5 steps.
 #
 # Compatibility notes:
-# - This ReBRAC runner uses `gamma` rather than `discount`.
+# - This ReBRAC runner uses `discount` rather than `discount`.
 # - This ReBRAC runner uses `normalize_states` rather than IQL's `normalize`.
 # - Earlier logs showed some runners ignored `n_timesteps`; therefore this file includes
 #   both `max_timesteps` and `n_timesteps`. Remove one if your runner warns about it.
@@ -18,7 +18,7 @@
 _ogbench_common: &ogbench_common
   max_timesteps: !!float 1e6
   n_timesteps: !!float 1e6
-  eval_freq: 25000
+  eval_freq: 100000
   log_every: 500
 
   # Dataset
@@ -27,7 +27,7 @@ _ogbench_common: &ogbench_common
   normalize_reward: false
 
   # ReBRAC / TD3+BC-style actor-critic learning
-  gamma: 0.99
+  discount: 0.99
   tau: 0.005
   actor_learning_rate: !!float 3e-4
   critic_learning_rate: !!float 3e-4
@@ -42,15 +42,15 @@ _ogbench_common: &ogbench_common
   policy_freq: 2
   normalize_q: true
 
-  n_episodes: 10
+  n_episodes: 50
   eval_seed: 42
 
   # Standalone actor refit output directory. Refit reuses max_timesteps, batch_size, and eval_freq.
   actor_refit_dir_name: "actor_refit"
 
-_ogbench_gamma_0995: &ogbench_gamma_0995
+_ogbench_discount_0995: &ogbench_discount_0995
   <<: *ogbench_common
-  gamma: 0.995
+  discount: 0.995
 
 _ogbench_visual_common: &ogbench_visual_common
   <<: *ogbench_common
@@ -91,7 +91,7 @@ antmaze-large-navigate-singletask-task5-v0:
 
 
 _ogb_antmaze_giant: &ogb_antmaze_giant
-  <<: *ogbench_gamma_0995
+  <<: *ogbench_discount_0995
   actor_bc_coef: 0.003
   critic_bc_coef: 0.01
 
@@ -116,7 +116,7 @@ antmaze-giant-navigate-singletask-task5-v0:
 
 
 _ogb_humanoidmaze_medium: &ogb_humanoidmaze_medium
-  <<: *ogbench_gamma_0995
+  <<: *ogbench_discount_0995
   actor_bc_coef: 0.01
   critic_bc_coef: 0.01
 
@@ -141,7 +141,7 @@ humanoidmaze-medium-navigate-singletask-task5-v0:
 
 
 _ogb_humanoidmaze_large: &ogb_humanoidmaze_large
-  <<: *ogbench_gamma_0995
+  <<: *ogbench_discount_0995
   actor_bc_coef: 0.01
   critic_bc_coef: 0.01
 
@@ -166,7 +166,7 @@ humanoidmaze-large-navigate-singletask-task5-v0:
 
 
 _ogb_antsoccer_arena: &ogb_antsoccer_arena
-  <<: *ogbench_gamma_0995
+  <<: *ogbench_discount_0995
   actor_bc_coef: 0.01
   critic_bc_coef: 0.01
 
