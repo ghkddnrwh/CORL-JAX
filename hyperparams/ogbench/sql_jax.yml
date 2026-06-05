@@ -14,7 +14,7 @@
 _ogbench_common: &ogbench_common
   max_timesteps: !!float 1e6
   n_timesteps: !!float 1e6
-  eval_freq: 25000
+  eval_freq: 100000
   log_every: 500
 
   # Dataset
@@ -25,8 +25,8 @@ _ogbench_common: &ogbench_common
   # IQL value/Q/actor learning
   discount: 0.99
   tau: 0.005
-  beta: 10.0          # AWR inverse temperature alpha in the FQL paper
-  iql_tau: 0.9        # IQL expectile
+  alpha_pi: 10.0          # AWR inverse temperature alpha in the FQL paper
+  alpha_v: 10.0          # AWR inverse temperature alpha in the FQL paper
   iql_deterministic: false
   qf_lr: !!float 3e-4
   vf_lr: !!float 3e-4
@@ -34,7 +34,7 @@ _ogbench_common: &ogbench_common
   hidden_dim: 256
   n_hidden: 2
 
-  n_episodes: 10
+  n_episodes: 50
   normalize_reward: false
 
   # Standalone actor refit output directory. Refit reuses max_timesteps, batch_size, and eval_freq.
@@ -61,7 +61,8 @@ _ogb_antmaze_large: &ogb_antmaze_large
   <<: *ogbench_common
   hidden_dim: 512
   n_hidden: 4
-  beta: 10.0
+  alpha_pi: 10.0
+  alpha_v: 10.0
 
 # antmaze-large-navigate: default alias maps to task1
 antmaze-large-navigate-singletask-v0:
@@ -87,7 +88,8 @@ _ogb_antmaze_giant: &ogb_antmaze_giant
   <<: *ogbench_discount_0995
   hidden_dim: 512
   n_hidden: 4
-  beta: 10.0
+  alpha_pi: 10.0
+  alpha_v: 10.0
 
 # antmaze-giant-navigate: default alias maps to task1
 antmaze-giant-navigate-singletask-v0:
@@ -113,7 +115,8 @@ _ogb_humanoidmaze_medium: &ogb_humanoidmaze_medium
   <<: *ogbench_discount_0995
   hidden_dim: 512
   n_hidden: 4
-  beta: 10.0
+  alpha_pi: 10.0
+  alpha_v: 10.0
 
 # humanoidmaze-medium-navigate: default alias maps to task1
 humanoidmaze-medium-navigate-singletask-v0:
@@ -139,7 +142,8 @@ _ogb_humanoidmaze_large: &ogb_humanoidmaze_large
   <<: *ogbench_discount_0995
   hidden_dim: 512
   n_hidden: 4
-  beta: 10.0
+  alpha_pi: 10.0
+  alpha_v: 10.0
 
 # humanoidmaze-large-navigate: default alias maps to task1
 humanoidmaze-large-navigate-singletask-v0:
@@ -166,7 +170,8 @@ _ogb_antsoccer_arena: &ogb_antsoccer_arena
   <<: *ogbench_discount_0995
   hidden_dim: 512
   n_hidden: 4
-  beta: 1.0
+  alpha_pi: 1.0
+  alpha_v: 1.0
 
 # antsoccer-arena-navigate: default alias maps to task4
 antsoccer-arena-navigate-singletask-v0:
@@ -192,7 +197,8 @@ _ogb_cube_single: &ogb_cube_single
   <<: *ogbench_common
   hidden_dim: 256
   n_hidden: 4
-  beta: 1.0
+  alpha_pi: 1.0
+  alpha_v: 1.0
 
 # cube-single-play: default alias maps to task2
 cube-single-play-singletask-v0:
@@ -218,7 +224,8 @@ _ogb_cube_double: &ogb_cube_double
   <<: *ogbench_common
   hidden_dim: 256
   n_hidden: 4
-  beta: 0.3
+  alpha_pi: 0.3
+  alpha_v: 0.3
 
 # cube-double-play: default alias maps to task2
 cube-double-play-singletask-v0:
@@ -244,7 +251,8 @@ _ogb_scene: &ogb_scene
   <<: *ogbench_common
   hidden_dim: 256
   n_hidden: 4
-  beta: 10.0
+  alpha_pi: 10.0
+  alpha_v: 10.0
 
 # scene-play: default alias maps to task2
 scene-play-singletask-v0:
@@ -270,7 +278,8 @@ _ogb_puzzle_3x3: &ogb_puzzle_3x3
   <<: *ogbench_common
   hidden_dim: 256
   n_hidden: 4
-  beta: 10.0
+  alpha_pi: 10.0
+  alpha_v: 10.0
 
 # puzzle-3x3-play: default alias maps to task4
 puzzle-3x3-play-singletask-v0:
@@ -296,7 +305,8 @@ _ogb_puzzle_4x4: &ogb_puzzle_4x4
   <<: *ogbench_common
   hidden_dim: 256
   n_hidden: 4
-  beta: 3.0
+  alpha_pi: 3.0
+  alpha_v: 3.0
 
 # puzzle-4x4-play: default alias maps to task4
 puzzle-4x4-play-singletask-v0:
@@ -330,7 +340,8 @@ puzzle-4x4-play-singletask-task5-v0:
 #   batch_size: 1024
 #   hidden_dim: 1024
 #   n_hidden: 4
-#   beta: 3.0     
+#   alpha_pi: 3.0     
+#   alpha_v: 3.0     
 
 
 # # puzzle-4x5-play: default alias maps to task4
@@ -343,7 +354,8 @@ puzzle-4x4-play-singletask-task5-v0:
 #   batch_size: 1024
 #   hidden_dim: 1024
 #   n_hidden: 4
-#   beta: 3.0  
+#   alpha_pi: 3.0  
+#   alpha_v: 3.0  
 
 # # puzzle-4x6-play: default alias maps to task4
 # puzzle-4x6-play-singletask-v0:
@@ -355,4 +367,5 @@ puzzle-4x4-play-singletask-task5-v0:
 #   batch_size: 1024
 #   hidden_dim: 1024
 #   n_hidden: 4
-#   beta: 3.0   
+#   alpha_pi: 3.0   
+#   alpha_v: 3.0   

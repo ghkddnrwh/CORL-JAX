@@ -100,7 +100,7 @@ class TrainConfig:
     load_model: str = ""
     mode: str = "train"  # one of: train, refit. refit loads Q/V and trains only pi.
     hyperparams_path: Optional[str] = None
-    use_hyperparams: bool = False
+    use_hyperparams: bool = True
 
     # Dataset
     buffer_size: int = 2_000_000
@@ -118,6 +118,7 @@ class TrainConfig:
     tau: float = 0.005  # target Q-network soft-update coefficient
     alpha_v: float = 1.0  # SQL value-learning coefficient in Eq. (12): V <- Q
     alpha_pi: float = 1.0  # SQL policy-learning coefficient in Eq. (14): pi <- Q,V
+    iql_deterministic: bool = False  # kept for CLI compatibility: use deterministic weighted-BC actor
     vf_lr: float = 3e-4
     qf_lr: float = 3e-4
     actor_lr: float = 3e-4
@@ -596,6 +597,22 @@ class GaussianPolicy(nn.Module):
         return mean, log_std
 
 
+class DeterministicPolicy(nn.Module):
+    action_dim: int
+    hidden_dim: int = 256
+    n_hidden: int = 2
+    dropout: Optional[float] = None
+
+    @nn.compact
+    def __call__(self, state: jnp.ndarray, training: bool = False) -> jnp.ndarray:
+        return PolicyMLP(
+            action_dim=self.action_dim,
+            hidden_dim=self.hidden_dim,
+            n_hidden=self.n_hidden,
+            dropout=self.dropout,
+        )(state, training=training)
+
+
 class QFunction(nn.Module):
     hidden_dim: int = 256
     n_hidden: int = 2
@@ -636,7 +653,7 @@ class ValueFunction(nn.Module):
 
 
 def sql_sparse_term(advantage: jnp.ndarray, coefficient: float) -> jnp.ndarray:
-    """SQL paper Eq. (12)/(14) sparse term: 1 + (Q(s,a) - V(s)) / (2 * coefficient)."""
+    """SQL paper Eq. (12)/(14) sparse term for alpha_v or alpha_pi."""
     return 1.0 + advantage / (2.0 * coefficient)
 
 
@@ -686,6 +703,7 @@ class SQLJAX:
         tau: float = 0.005,
         alpha_v: float = 1.0,
         alpha_pi: float = 1.0,
+        iql_deterministic: bool = False,
         actor_dropout: Optional[float] = None,
         hidden_dim: int = 256,
         n_hidden: int = 2,
@@ -700,6 +718,7 @@ class SQLJAX:
         self.tau = tau
         self.alpha_v = alpha_v
         self.alpha_pi = alpha_pi
+        self.iql_deterministic = iql_deterministic
         self.actor_dropout = actor_dropout
         self.hidden_dim = int(hidden_dim)
         self.n_hidden = int(n_hidden)
@@ -710,12 +729,20 @@ class SQLJAX:
         if self.n_hidden <= 0:
             raise ValueError("n_hidden must be > 0")
 
-        self.actor_def = GaussianPolicy(
-            action_dim=action_dim,
-            hidden_dim=self.hidden_dim,
-            n_hidden=self.n_hidden,
-            dropout=actor_dropout,
-        )
+        if iql_deterministic:
+            self.actor_def = DeterministicPolicy(
+                action_dim=action_dim,
+                hidden_dim=self.hidden_dim,
+                n_hidden=self.n_hidden,
+                dropout=actor_dropout,
+            )
+        else:
+            self.actor_def = GaussianPolicy(
+                action_dim=action_dim,
+                hidden_dim=self.hidden_dim,
+                n_hidden=self.n_hidden,
+                dropout=actor_dropout,
+            )
         self.q_def = TwinQ(hidden_dim=self.hidden_dim, n_hidden=self.n_hidden)
         self.v_def = ValueFunction(hidden_dim=self.hidden_dim, n_hidden=self.n_hidden)
 
@@ -780,6 +807,7 @@ class SQLJAX:
         tau = self.tau
         alpha_v = self.alpha_v
         alpha_pi = self.alpha_pi
+        iql_deterministic = self.iql_deterministic
         use_dropout = self.actor_dropout is not None
         actor_apply_fn = self.actor_def.apply
 
@@ -846,12 +874,18 @@ class SQLJAX:
             actor_key, dropout_key = jax.random.split(state.actor_key)
 
             def actor_loss_fn(actor_params):
-                mean, log_std = apply_actor(actor_params, observations, training=True, rng=dropout_key)
-                std = jnp.exp(log_std)
-                log_prob = -0.5 * (((actions - mean) / std) ** 2 + 2.0 * log_std + jnp.log(2.0 * jnp.pi))
-                bc_losses = -jnp.sum(log_prob, axis=-1)
-                policy_mean = mean
-                log_std_mean = jnp.mean(log_std)
+                policy_out = apply_actor(actor_params, observations, training=True, rng=dropout_key)
+                if iql_deterministic:
+                    bc_losses = jnp.sum((policy_out - actions) ** 2, axis=-1)
+                    policy_mean = policy_out
+                    log_std_mean = jnp.asarray(np.nan, dtype=jnp.float32)
+                else:
+                    mean, log_std = policy_out
+                    std = jnp.exp(log_std)
+                    log_prob = -0.5 * (((actions - mean) / std) ** 2 + 2.0 * log_std + jnp.log(2.0 * jnp.pi))
+                    bc_losses = -jnp.sum(log_prob, axis=-1)
+                    policy_mean = mean
+                    log_std_mean = jnp.mean(log_std)
                 actor_loss = jnp.mean(jax.lax.stop_gradient(actor_weight) * bc_losses)
                 return actor_loss, (bc_losses, policy_mean, log_std_mean)
 
@@ -910,8 +944,9 @@ class SQLJAX:
 
     def actor_act(self, actor_params: Any, state: np.ndarray) -> np.ndarray:
         state_jnp = tree_to_device(jnp.asarray(state.reshape(1, -1), dtype=jnp.float32), self.device)
-        mean, _ = self._apply_actor(actor_params, state_jnp, training=False)
-        action = jnp.clip(self.max_action * mean, -self.max_action, self.max_action)
+        policy_out = self._apply_actor(actor_params, state_jnp, training=False)
+        action = policy_out if self.iql_deterministic else policy_out[0]
+        action = jnp.clip(self.max_action * action, -self.max_action, self.max_action)
         return np.asarray(jax.device_get(action))[0]
 
     def eval_actor(
@@ -946,6 +981,7 @@ class SQLJAX:
         v_apply = self.v_def.apply
         actor_tx = self.actor_tx
         alpha_pi = self.alpha_pi
+        iql_deterministic = self.iql_deterministic
         use_dropout = self.actor_dropout is not None
         actor_apply_fn = self.actor_def.apply
 
@@ -973,12 +1009,18 @@ class SQLJAX:
             actor_key, dropout_key = jax.random.split(actor_state.key)
 
             def actor_loss_fn(actor_params):
-                mean, log_std = apply_actor(actor_params, observations, training=True, rng=dropout_key)
-                std = jnp.exp(log_std)
-                log_prob = -0.5 * (((actions - mean) / std) ** 2 + 2.0 * log_std + jnp.log(2.0 * jnp.pi))
-                bc_losses = -jnp.sum(log_prob, axis=-1)
-                policy_mean = mean
-                log_std_mean = jnp.mean(log_std)
+                policy_out = apply_actor(actor_params, observations, training=True, rng=dropout_key)
+                if iql_deterministic:
+                    bc_losses = jnp.sum((policy_out - actions) ** 2, axis=-1)
+                    policy_mean = policy_out
+                    log_std_mean = jnp.asarray(np.nan, dtype=jnp.float32)
+                else:
+                    mean, log_std = policy_out
+                    std = jnp.exp(log_std)
+                    log_prob = -0.5 * (((actions - mean) / std) ** 2 + 2.0 * log_std + jnp.log(2.0 * jnp.pi))
+                    bc_losses = -jnp.sum(log_prob, axis=-1)
+                    policy_mean = mean
+                    log_std_mean = jnp.mean(log_std)
                 actor_loss = jnp.mean(jax.lax.stop_gradient(actor_weight) * bc_losses)
                 return actor_loss, (bc_losses, policy_mean, log_std_mean)
 
@@ -1182,6 +1224,7 @@ class SQLJAX:
             "initial_actor_params": serialization.to_state_dict(self.initial_actor_params),
             "initial_actor_opt_state": serialization.to_state_dict(self.initial_actor_opt_state),
             "initial_actor_key": serialization.to_state_dict(self.initial_actor_key),
+            "iql_deterministic": self.iql_deterministic,
         }
 
     def load_state_dict(self, state_dict: Dict[str, Any]):
@@ -1396,12 +1439,6 @@ def train(config: TrainConfig):
     jax_device = select_jax_device(config.device)
     env, dataset, dataset_backend = load_env_and_dataset(config.env)
 
-    if not isinstance(env.action_space, gym.spaces.Box):
-        raise ValueError(
-            f"{ALGORITHM_NAME}-JAX currently supports continuous Box action spaces only; "
-            f"got action_space={env.action_space}."
-        )
-
     if len(env.observation_space.shape) != 1 or len(env.action_space.shape) != 1:
         raise ValueError(
             f"{ALGORITHM_NAME}-JAX currently supports vector observations/actions only; "
@@ -1465,6 +1502,7 @@ def train(config: TrainConfig):
         tau=config.tau,
         alpha_v=config.alpha_v,
         alpha_pi=config.alpha_pi,
+        iql_deterministic=config.iql_deterministic,
         actor_dropout=config.actor_dropout,
         hidden_dim=config.hidden_dim,
         n_hidden=config.n_hidden,

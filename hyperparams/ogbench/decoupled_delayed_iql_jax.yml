@@ -321,44 +321,44 @@ puzzle-4x4-play-singletask-task5-v0:
   <<: *ogb_puzzle_4x4
 
 
-################################################
-################################################
+# ################################################
+# ################################################
 
-humanoidmaze-giant-navigate-singletask-v0:
-  <<: *ogbench_common
-  max_timesteps: !!float 5e6
-  n_timesteps: !!float 5e6
-  eval_freq: 50000
+# humanoidmaze-giant-navigate-singletask-v0:
+#   <<: *ogbench_common
+#   max_timesteps: !!float 5e6
+#   n_timesteps: !!float 5e6
+#   eval_freq: 50000
 
-  discount: 0.999
-  batch_size: 1024
-  hidden_dim: 1024
-  n_hidden: 4
-  beta: 3.0     
+#   discount: 0.999
+#   batch_size: 1024
+#   hidden_dim: 1024
+#   n_hidden: 4
+#   beta: 3.0     
 
 
-# puzzle-4x5-play: default alias maps to task4
-puzzle-4x5-play-singletask-v0:
-  <<: *ogbench_common
-  max_timesteps: !!float 5e6
-  n_timesteps: !!float 5e6
-  eval_freq: 50000
+# # puzzle-4x5-play: default alias maps to task4
+# puzzle-4x5-play-singletask-v0:
+#   <<: *ogbench_common
+#   max_timesteps: !!float 5e6
+#   n_timesteps: !!float 5e6
+#   eval_freq: 50000
 
-  discount: 0.999
-  batch_size: 1024
-  hidden_dim: 1024
-  n_hidden: 4
-  beta: 3.0  
+#   discount: 0.999
+#   batch_size: 1024
+#   hidden_dim: 1024
+#   n_hidden: 4
+#   beta: 3.0  
 
-# puzzle-4x6-play: default alias maps to task4
-puzzle-4x6-play-singletask-v0:
-  <<: *ogbench_common
-  max_timesteps: !!float 5e6
-  n_timesteps: !!float 5e6
-  eval_freq: 50000
+# # puzzle-4x6-play: default alias maps to task4
+# puzzle-4x6-play-singletask-v0:
+#   <<: *ogbench_common
+#   max_timesteps: !!float 5e6
+#   n_timesteps: !!float 5e6
+#   eval_freq: 50000
 
-  discount: 0.999
-  batch_size: 1024
-  hidden_dim: 1024
-  n_hidden: 4
-  beta: 3.0   
+#   discount: 0.999
+#   batch_size: 1024
+#   hidden_dim: 1024
+#   n_hidden: 4
+#   beta: 3.0   

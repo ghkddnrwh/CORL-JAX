@@ -1,18 +1,20 @@
-ukjo1    3655289 3415348 99 01:32 pts/359  12:47:45 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-large-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 3 --checkpoints_path logs/basic/iql_jax/ogbench/original --n_episodes 10
-ukjo1    3655417 3415348 99 01:32 pts/359  12:46:47 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-large-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 3 --checkpoints_path logs/basic/iql_jax/ogbench/0.999 --discount 0.999 --n_episodes 10
-ukjo1    3663768 3606315 99 09:16 pts/402  04:10:47 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-medium-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 1 --checkpoints_path logs/basic/iql_jax/ogbench/0.9999 --discount 0.9999 --n_episodes 10
-ukjo1    3674701 3600123 99 09:54 pts/392  03:30:28 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-medium-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 3 --checkpoints_path logs/basic/iql_jax/ogbench/0.9999 --discount 0.9999 --n_episodes 10
-ukjo1    3717064 3605357 99 10:46 pts/400  02:31:32 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-large-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 1 --checkpoints_path logs/basic/iql_jax/ogbench/0.9999 --discount 0.9999 --n_episodes 10
-ukjo1    3755939 3599399 99 11:04 pts/390  02:11:17 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-large-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 3 --checkpoints_path logs/basic/iql_jax/ogbench/0.9999 --discount 0.9999 --n_episodes 10
-kill -9 3823333
-kill -9 3823470
-kill -9 3824552
-kill -9 3824726
-kill -9 3827170
-kill -9 3827470
-kill -9 3830164
-kill -9 3830500
-kill -9 3832349
-kill -9 3832538
-kill -9 3833967
-kill -9 3834117
+ukjo1    3663768 3606315 99 09:16 pts/402  12:58:36 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-medium-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 1 --checkpoints_path logs/basic/iql_jax/ogbench/0.9999 --discount 0.9999 --n_episodes 10
+ukjo1    3674701 3600123 99 09:54 pts/392  12:18:54 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-medium-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 3 --checkpoints_path logs/basic/iql_jax/ogbench/0.9999 --discount 0.9999 --n_episodes 10
+ukjo1    3717064 3605357 99 10:46 pts/400  11:19:35 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-large-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 1 --checkpoints_path logs/basic/iql_jax/ogbench/0.9999 --discount 0.9999 --n_episodes 10
+ukjo1    3755939 3599399 99 11:04 pts/390  10:57:14 python algorithms/uk_offline/basic/iql_jax.py --env humanoidmaze-large-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/iql_jax.yml --device gpu --seed 3 --checkpoints_path logs/basic/iql_jax/ogbench/0.9999 --discount 0.9999 --n_episodes 10
+ukjo1    3847006 3847005 99 13:09 pts/403  09:04:25 python algorithms/uk_offline/basic/rebrac_jax.py --env antmaze-large-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/rebrac_jax.yml --device gpu --seed 0 --checkpoints_path logs/iclr2027/basic/rebrac_jax/ogbench/original --n_episodes 50
+ukjo1    3847204 3847005 99 13:09 pts/403  09:04:13 python algorithms/uk_offline/basic/rebrac_jax.py --env antmaze-large-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/rebrac_jax.yml --device gpu --seed 0 --checkpoints_path logs/iclr2027/basic/rebrac_jax/ogbench/0.999 --discount 0.999 --n_episodes 50
+ukjo1    3848812 3848811 99 13:09 pts/405  08:50:32 python algorithms/uk_offline/basic/rebrac_jax.py --env humanoidmaze-large-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/rebrac_jax.yml --device gpu --seed 0 --checkpoints_path logs/iclr2027/basic/rebrac_jax/ogbench/original --n_episodes 50
+ukjo1    3849044 3848811 99 13:09 pts/405  08:48:41 python algorithms/uk_offline/basic/rebrac_jax.py --env humanoidmaze-large-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/rebrac_jax.yml --device gpu --seed 0 --checkpoints_path logs/iclr2027/basic/rebrac_jax/ogbench/0.999 --discount 0.999 --n_episodes 50
+ukjo1    3850346 3850345 99 13:09 pts/407  08:50:31 python algorithms/uk_offline/basic/rebrac_jax.py --env humanoidmaze-medium-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/rebrac_jax.yml --device gpu --seed 0 --checkpoints_path logs/iclr2027/basic/rebrac_jax/ogbench/original --n_episodes 50
+ukjo1    3850541 3850345 99 13:09 pts/407  08:48:33 python algorithms/uk_offline/basic/rebrac_jax.py --env humanoidmaze-medium-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/rebrac_jax.yml --device gpu --seed 0 --checkpoints_path logs/iclr2027/basic/rebrac_jax/ogbench/0.999 --discount 0.999 --n_episodes 50
+ukjo1    3852074 3852073 99 13:09 pts/409  09:06:12 python algorithms/uk_offline/basic/rebrac_jax.py --env antsoccer-arena-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/rebrac_jax.yml --device gpu --seed 0 --checkpoints_path logs/iclr2027/basic/rebrac_jax/ogbench/original --n_episodes 50
+ukjo1    3852212 3852073 99 13:09 pts/409  09:03:13 python algorithms/uk_offline/basic/rebrac_jax.py --env antsoccer-arena-navigate-singletask-v0 --hyperparams_path hyperparams/ogbench/rebrac_jax.yml --device gpu --seed 0 --checkpoints_path logs/iclr2027/basic/rebrac_jax/ogbench/0.999 --discount 0.999 --n_episodes 50
+kill -9 4006745
+kill -9 4007876
+kill -9 4008606
+kill -9 4009197
+ukjo1    4019559 3855203 99 19:05 pts/411  01:39:53 python algorithms/uk_offline/basic/rebrac_jax.py --env puzzle-4x4-play-singletask-v0 --hyperparams_path hyperparams/ogbench/rebrac_jax.yml --device gpu --seed 1 --checkpoints_path logs/iclr2027/basic/rebrac_jax/ogbench/original --n_episodes 50
+ukjo1    4019687 3855203 99 19:05 pts/411  01:40:04 python algorithms/uk_offline/basic/rebrac_jax.py --env puzzle-4x4-play-singletask-v0 --hyperparams_path hyperparams/ogbench/rebrac_jax.yml --device gpu --seed 1 --checkpoints_path logs/iclr2027/basic/rebrac_jax/ogbench/0.999 --discount 0.999 --n_episodes 50
+ukjo1    4022270 3858114 99 19:05 pts/413  01:40:41 python algorithms/uk_offline/basic/rebrac_jax.py --env puzzle-3x3-play-singletask-v0 --hyperparams_path hyperparams/ogbench/rebrac_jax.yml --device gpu --seed 1 --checkpoints_path logs/iclr2027/basic/rebrac_jax/ogbench/original --n_episodes 50
+ukjo1    4022398 3858114 99 19:05 pts/413  01:39:25 python algorithms/uk_offline/basic/rebrac_jax.py --env puzzle-3x3-play-singletask-v0 --hyperparams_path hyperparams/ogbench/rebrac_jax.yml --device gpu --seed 1 --checkpoints_path logs/iclr2027/basic/rebrac_jax/ogbench/0.999 --discount 0.999 --n_episodes 50
