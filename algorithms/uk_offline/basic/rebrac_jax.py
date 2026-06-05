@@ -34,12 +34,25 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import chex
-import d4rl  # noqa: F401
 import flax.linen as nn
 import gym
 import jax
 import jax.numpy as jnp
 import numpy as np
+
+try:
+    import scipy.linalg as scipy_linalg
+
+    if not hasattr(scipy_linalg, "tril"):
+        scipy_linalg.tril = np.tril
+    if not hasattr(scipy_linalg, "triu"):
+        scipy_linalg.triu = np.triu
+except ImportError:
+    pass
+
+import optax
+import pyrallis
+
 import optax
 import pyrallis
 try:
@@ -70,6 +83,16 @@ from flax import serialization, struct
 from flax.core import FrozenDict
 from flax.training.train_state import TrainState
 from tqdm.auto import trange
+
+# Match the IQL implementation: do not import d4rl at module import time.
+# D4RL is imported lazily only when a D4RL environment is requested, so
+# OGBench runs do not trigger mujoco_py/Cython compilation.
+d4rl = None
+
+try:
+    import ogbench
+except ImportError:
+    ogbench = None
 
 TensorBatch = Dict[str, jnp.ndarray]
 
@@ -291,9 +314,15 @@ def tree_to_device(tree, device):
 
 def set_seed(seed: int, env: Optional[gym.Env] = None):
     if env is not None:
-        env.seed(seed)
-        env.action_space.seed(seed)
-        env.observation_space.seed(seed)
+        try:
+            env.reset(seed=seed)
+        except TypeError:
+            if hasattr(env, "seed"):
+                env.seed(seed)
+        if hasattr(env.action_space, "seed"):
+            env.action_space.seed(seed)
+        if hasattr(env.observation_space, "seed"):
+            env.observation_space.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
     random.seed(seed)
@@ -368,10 +397,20 @@ def load_pickle(path: Union[str, Path]) -> Any:
 
 
 def normalize_episode_scores(env: gym.Env, eval_scores: np.ndarray) -> np.ndarray:
+    if not hasattr(env, "get_normalized_score"):
+        return np.full_like(np.asarray(eval_scores, dtype=np.float32), np.nan, dtype=np.float32)
     return np.asarray(
         [env.get_normalized_score(float(score)) * 100.0 for score in eval_scores],
         dtype=np.float32,
     )
+
+
+def mean_std_or_nan(values: np.ndarray) -> Tuple[float, float]:
+    values = np.asarray(values, dtype=np.float32)
+    finite_values = values[np.isfinite(values)]
+    if finite_values.size == 0:
+        return np.nan, np.nan
+    return float(np.mean(finite_values)), float(np.std(finite_values))
 
 
 def pytorch_init(fan_in: float) -> Callable:
@@ -563,6 +602,140 @@ def normalize_states(
     return (states - mean) / std
 
 
+class TransformEnv:
+    def __init__(
+        self,
+        env: gym.Env,
+        state_mean: Union[np.ndarray, float],
+        state_std: Union[np.ndarray, float],
+        reward_scale: float,
+    ):
+        self.env = env
+        self.state_mean = state_mean
+        self.state_std = state_std
+        self.reward_scale = reward_scale
+        self.observation_space = env.observation_space
+        self.action_space = env.action_space
+
+    def __getattr__(self, name: str):
+        return getattr(self.env, name)
+
+    def _normalize_state(self, state):
+        return (state - self.state_mean) / self.state_std
+
+    def _scale_reward(self, reward):
+        return self.reward_scale * reward
+
+    def reset(self, *args, **kwargs):
+        reset_out = self.env.reset(*args, **kwargs)
+        if isinstance(reset_out, tuple) and len(reset_out) == 2:
+            state, info = reset_out
+            return self._normalize_state(state), info
+        return self._normalize_state(reset_out)
+
+    def step(self, action):
+        step_out = self.env.step(action)
+        if isinstance(step_out, tuple) and len(step_out) == 5:
+            state, reward, terminated, truncated, info = step_out
+            return self._normalize_state(state), self._scale_reward(reward), terminated, truncated, info
+        state, reward, done, info = step_out
+        return self._normalize_state(state), self._scale_reward(reward), done, info
+
+    def seed(self, seed: int):
+        if hasattr(self.env, "seed"):
+            return self.env.seed(seed)
+        return self.env.reset(seed=seed)
+
+
+def wrap_env(
+    env: gym.Env,
+    state_mean: Union[np.ndarray, float] = 0.0,
+    state_std: Union[np.ndarray, float] = 1.0,
+    reward_scale: float = 1.0,
+) -> gym.Env:
+    return TransformEnv(env, state_mean=state_mean, state_std=state_std, reward_scale=reward_scale)
+
+
+def is_ogbench_env(env_name: str) -> bool:
+    return "singletask" in env_name or "oraclerep" in env_name
+
+
+def add_next_actions_if_missing(dataset: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+    """Return a ReBRAC-compatible dataset dict.
+
+    ReBRAC's critic regularization needs behavior actions at next states. D4RL's
+    env.get_dataset path above already builds them by shifting actions by one.
+    OGBench-style datasets normally provide observations/actions/next_observations
+    but not next_actions, so we construct the same shifted-action proxy here.
+    """
+    data = dict(dataset)
+    n_transitions = int(np.asarray(data["rewards"]).shape[0])
+
+    if "next_actions" not in data:
+        actions = np.asarray(data["actions"], dtype=np.float32)
+        next_actions = np.empty_like(actions)
+        if n_transitions > 1:
+            next_actions[:-1] = actions[1:]
+        next_actions[-1] = actions[-1]
+        data["next_actions"] = next_actions
+
+    if "terminals" not in data:
+        if "masks" in data:
+            data["terminals"] = 1.0 - np.asarray(data["masks"], dtype=np.float32)
+        else:
+            data["terminals"] = np.zeros(n_transitions, dtype=np.float32)
+
+    return data
+
+
+def load_env_and_dataset(env_name: str) -> Tuple[gym.Env, Dict[str, np.ndarray], str]:
+    if is_ogbench_env(env_name):
+        if ogbench is None:
+            raise ImportError(
+                "OGBench environment requested, but the `ogbench` package is not installed."
+            )
+        env, train_dataset, _ = ogbench.make_env_and_datasets(env_name)
+        return env, add_next_actions_if_missing(train_dataset), "ogbench"
+
+    global d4rl
+    if d4rl is None:
+        try:
+            import d4rl as d4rl_module
+        except Exception as exc:
+            raise ImportError(
+                "D4RL environment requested, but the `d4rl` package could not be imported."
+            ) from exc
+        d4rl = d4rl_module
+
+    env = gym.make(env_name)
+    return env, qlearning_dataset(env), "d4rl"
+
+
+def reset_env(env: gym.Env, seed: Optional[int] = None):
+    if seed is not None:
+        try:
+            reset_out = env.reset(seed=seed)
+        except TypeError:
+            if hasattr(env, "seed"):
+                env.seed(seed)
+            reset_out = env.reset()
+    else:
+        reset_out = env.reset()
+
+    if isinstance(reset_out, tuple) and len(reset_out) == 2:
+        return reset_out[0]
+    return reset_out
+
+
+def step_env(env: gym.Env, action: np.ndarray):
+    step_out = env.step(action)
+    if isinstance(step_out, tuple) and len(step_out) == 5:
+        next_state, reward, terminated, truncated, info = step_out
+        return next_state, reward, bool(terminated or truncated), info
+    next_state, reward, done, info = step_out
+    return next_state, reward, bool(done), info
+
+
 class ReplayBuffer:
     def __init__(self, device: Any):
         self.data: Optional[TensorBatch] = None
@@ -570,30 +743,52 @@ class ReplayBuffer:
         self.std: Union[np.ndarray, float] = 1.0
         self.device = device
 
-    def create_from_d4rl(
+    def create_from_dataset(
         self,
         env_name: str,
+        dataset: Dict[str, np.ndarray],
         normalize_reward: bool = False,
         is_normalize: bool = False,
+        dataset_backend: str = "d4rl",
     ):
-        d4rl_data = qlearning_dataset(gym.make(env_name))
+        dataset = add_next_actions_if_missing(dataset)
+        rewards = np.asarray(dataset["rewards"], dtype=np.float32).reshape(-1)
+        terminals = np.asarray(dataset["terminals"], dtype=np.float32).reshape(-1)
         buffer_np = {
-            "states": d4rl_data["observations"].astype(np.float32),
-            "actions": d4rl_data["actions"].astype(np.float32),
-            "rewards": d4rl_data["rewards"].astype(np.float32),
-            "next_states": d4rl_data["next_observations"].astype(np.float32),
-            "next_actions": d4rl_data["next_actions"].astype(np.float32),
-            "dones": d4rl_data["terminals"].astype(np.float32),
+            "states": np.asarray(dataset["observations"], dtype=np.float32),
+            "actions": np.asarray(dataset["actions"], dtype=np.float32),
+            "rewards": rewards,
+            "next_states": np.asarray(dataset["next_observations"], dtype=np.float32),
+            "next_actions": np.asarray(dataset["next_actions"], dtype=np.float32),
+            "dones": terminals,
         }
         if is_normalize:
             self.mean, self.std = compute_mean_std(buffer_np["states"], eps=1e-3)
             buffer_np["states"] = normalize_states(buffer_np["states"], self.mean, self.std)
             buffer_np["next_states"] = normalize_states(buffer_np["next_states"], self.mean, self.std)
         if normalize_reward:
-            buffer_np["rewards"] = ReplayBuffer.normalize_reward(env_name, buffer_np["rewards"])
+            if dataset_backend == "d4rl":
+                buffer_np["rewards"] = ReplayBuffer.normalize_reward(env_name, buffer_np["rewards"])
+            else:
+                print("Skipping ReBRAC/D4RL reward normalization for non-D4RL dataset.")
 
         self.data = tree_to_device({k: jnp.asarray(v, dtype=jnp.float32) for k, v in buffer_np.items()}, self.device)
         print(f"Dataset size: {self.size}")
+
+    def create_from_d4rl(
+        self,
+        env_name: str,
+        normalize_reward: bool = False,
+        is_normalize: bool = False,
+    ):
+        _, dataset, dataset_backend = load_env_and_dataset(env_name)
+        self.create_from_dataset(
+            env_name=env_name,
+            dataset=dataset,
+            normalize_reward=normalize_reward,
+            is_normalize=is_normalize,
+            dataset_backend=dataset_backend,
+        )
 
     @property
     def size(self) -> int:
@@ -618,32 +813,6 @@ class ReplayBuffer:
         if "antmaze" in dataset_name:
             return rewards * 100.0  # Like in LAPO / original ReBRAC code.
         raise NotImplementedError("Reward normalization is implemented only for AntMaze.")
-
-
-def make_env(env_name: str, seed: int) -> gym.Env:
-    env = gym.make(env_name)
-    env.seed(seed)
-    env.action_space.seed(seed)
-    env.observation_space.seed(seed)
-    return env
-
-
-def wrap_env(
-    env: gym.Env,
-    state_mean: Union[np.ndarray, float] = 0.0,
-    state_std: Union[np.ndarray, float] = 1.0,
-    reward_scale: float = 1.0,
-) -> gym.Env:
-    def normalize_state(state: np.ndarray) -> np.ndarray:
-        return (state - state_mean) / state_std
-
-    def scale_reward(reward: float) -> float:
-        return reward_scale * reward
-
-    env = gym.wrappers.TransformObservation(env, normalize_state)
-    if reward_scale != 1.0:
-        env = gym.wrappers.TransformReward(env, scale_reward)
-    return env
 
 
 class CriticTrainState(TrainState):
@@ -1009,16 +1178,14 @@ class ReBRACJAX:
         return np.asarray(jax.device_get(action))[0]
 
     def eval_actor(self, env: gym.Env, actor_params: Any, n_episodes: int, seed: int) -> np.ndarray:
-        env.seed(seed)
-        env.action_space.seed(seed)
-        env.observation_space.seed(seed)
         returns = []
-        for _ in trange(n_episodes, desc="Eval", leave=False):
-            obs, done = env.reset(), False
+        for episode_idx in trange(n_episodes, desc="Eval", leave=False):
+            obs = reset_env(env, seed=seed if episode_idx == 0 else None)
+            done = False
             total_reward = 0.0
             while not done:
                 action = self.actor_act(actor_params, obs)
-                obs, reward, done, _ = env.step(action)
+                obs, reward, done, _ = step_env(env, action)
                 total_reward += reward
             returns.append(total_reward)
         return np.asarray(returns, dtype=np.float32)
@@ -1159,8 +1326,7 @@ class ReBRACJAX:
 
                 eval_score_mean = float(np.mean(eval_scores))
                 eval_score_std = float(np.std(eval_scores))
-                normalized_score_mean = float(np.mean(normalized_eval_scores))
-                normalized_score_std = float(np.std(normalized_eval_scores))
+                normalized_score_mean, normalized_score_std = mean_std_or_nan(normalized_eval_scores)
 
                 refit_log[f"{prefix}/inner_eval_steps"].append(int(fit_step))
                 refit_log[f"{prefix}/inner_score_mean"].append(eval_score_mean)
@@ -1172,7 +1338,7 @@ class ReBRACJAX:
                 refit_log[f"{prefix}/final_d4rl_normalized_score_mean"] = normalized_score_mean
                 refit_log[f"{prefix}/final_d4rl_normalized_score_std"] = normalized_score_std
 
-                is_best = normalized_score_mean > best_normalized_score_mean
+                is_best = np.isfinite(normalized_score_mean) and normalized_score_mean > best_normalized_score_mean
                 if is_best:
                     best_normalized_score_mean = normalized_score_mean
                     refit_log[f"{prefix}/best_score_mean"] = eval_score_mean
@@ -1325,6 +1491,64 @@ def resolve_checkpoint_path(
     return checkpoint_path.parent, checkpoint_path
 
 
+def load_run_config_for_actor_refit(
+    current_config: TrainConfig,
+    loaded_run_dir: Union[str, Path],
+) -> TrainConfig:
+    """Load saved config.yaml from the checkpoint run dir for actor_refit mode.
+
+    This mirrors the IQL implementation: refit reconstructs the original
+    training env/model/preprocessing settings, while explicit CLI flags are
+    allowed to override saved values. This also prevents the default ReBRAC
+    D4RL env from being loaded accidentally when refitting an OGBench run.
+    """
+    loaded_run_dir = Path(loaded_run_dir)
+    saved_config_path = loaded_run_dir / "config.yaml"
+
+    if not saved_config_path.exists():
+        raise FileNotFoundError(
+            f"mode='actor_refit' expects saved run config at: {saved_config_path}"
+        )
+
+    with open(saved_config_path, "r") as f:
+        saved_raw = yaml.safe_load(f) or {}
+
+    config_fields = set(TrainConfig.__dataclass_fields__.keys())
+    saved_kwargs = {
+        key: _coerce_hparam_value(value)
+        for key, value in saved_raw.items()
+        if key in config_fields
+    }
+
+    loaded_config = TrainConfig(**saved_kwargs)
+
+    cli_overrides = _cli_overridden_fields()
+    current_config_dict = asdict(current_config)
+    applied_cli_overrides = []
+    for key in sorted(cli_overrides):
+        if key not in config_fields:
+            continue
+        setattr(loaded_config, key, current_config_dict[key])
+        applied_cli_overrides.append(key)
+
+    loaded_config.mode = "actor_refit"
+    loaded_config.load_model = current_config.load_model
+    loaded_config.checkpoints_path = None
+
+    normalize_config_aliases(loaded_config)
+    refresh_algorithm_names(loaded_config)
+    validate_config(loaded_config)
+
+    print(f"Loaded saved run config for actor_refit from: {saved_config_path}")
+    if applied_cli_overrides:
+        print(
+            "Applied explicit CLI overrides on top of saved config: "
+            + ", ".join(applied_cli_overrides)
+        )
+
+    return loaded_config
+
+
 def make_checkpoint_payload(
     trainer: ReBRACJAX,
     config: TrainConfig,
@@ -1362,26 +1586,50 @@ def save_checkpoint(
 
 @pyrallis.wrap()
 def train(config: TrainConfig):
-    config = apply_env_hyperparams(config)
+    normalize_config_aliases(config)
     actor_refit_only = config.mode == "actor_refit"
-    if actor_refit_only and config.load_model == "":
-        raise ValueError("actor_refit mode requires --load_model")
-    if not actor_refit_only:
+
+    loaded_run_dir: Optional[Path] = None
+    checkpoint_path: Optional[Path] = None
+
+    if actor_refit_only:
+        if config.load_model == "":
+            raise ValueError("actor_refit mode requires --load_model")
+
+        loaded_run_dir, checkpoint_path = resolve_checkpoint_path(
+            config.load_model,
+            run_name=config.name,
+            seed=config.seed,
+        )
+        config = load_run_config_for_actor_refit(
+            current_config=config,
+            loaded_run_dir=loaded_run_dir,
+        )
+    else:
+        config = apply_env_hyperparams(config)
         config = finalize_checkpoint_path(config)
 
     jax_device = select_jax_device(config.device)
-    eval_env = make_env(config.env, seed=config.eval_seed)
-    set_seed(config.seed, eval_env)
+    raw_env, dataset, dataset_backend = load_env_and_dataset(config.env)
+
+    if len(raw_env.observation_space.shape) != 1 or len(raw_env.action_space.shape) != 1:
+        raise ValueError(
+            f"{ALGORITHM_NAME}-JAX currently supports vector observations/actions only; "
+            f"got observation_space={raw_env.observation_space}, action_space={raw_env.action_space}."
+        )
 
     replay_buffer = ReplayBuffer(device=jax_device)
-    replay_buffer.create_from_d4rl(
-        config.env,
+    replay_buffer.create_from_dataset(
+        env_name=config.env,
+        dataset=dataset,
         normalize_reward=config.normalize_reward,
         is_normalize=config.normalize_states,
+        dataset_backend=dataset_backend,
     )
 
     state_mean, state_std = replay_buffer.mean, replay_buffer.std
-    eval_env = wrap_env(eval_env, state_mean=state_mean, state_std=state_std)
+    eval_env = wrap_env(raw_env, state_mean=state_mean, state_std=state_std)
+    set_seed(config.seed, eval_env)
 
     if config.checkpoints_path is not None and not actor_refit_only:
         print(f"Checkpoints path: {config.checkpoints_path}")
@@ -1420,21 +1668,20 @@ def train(config: TrainConfig):
         device=jax_device,
     )
 
-    loaded_run_dir: Optional[Path] = None
     if config.load_model != "":
-        loaded_run_dir, checkpoint_path = resolve_checkpoint_path(
-            config.load_model,
-            run_name=config.name,
-            seed=config.seed,
-        )
+        if checkpoint_path is None or loaded_run_dir is None:
+            loaded_run_dir, checkpoint_path = resolve_checkpoint_path(
+                config.load_model,
+                run_name=config.name,
+                seed=config.seed,
+            )
         print(f"Loading checkpoint from: {checkpoint_path}")
         checkpoint = load_pickle(checkpoint_path)
         trainer.load_state_dict(checkpoint["trainer"] if "trainer" in checkpoint else checkpoint)
         if isinstance(checkpoint, dict):
             state_mean = checkpoint.get("state_mean", state_mean)
             state_std = checkpoint.get("state_std", state_std)
-            eval_env = make_env(config.env, seed=config.eval_seed)
-            eval_env = wrap_env(eval_env, state_mean=state_mean, state_std=state_std)
+            eval_env = wrap_env(raw_env, state_mean=state_mean, state_std=state_std)
 
     if config.log_wandb:
         wandb_init(asdict(config))
@@ -1525,14 +1772,14 @@ def train(config: TrainConfig):
                 seed=config.eval_seed,
             )
             normalized_eval_scores = normalize_episode_scores(eval_env, eval_scores)
-            normalized_score_mean = float(np.mean(normalized_eval_scores))
+            normalized_score_mean, normalized_score_std = mean_std_or_nan(normalized_eval_scores)
 
             eval_log: Dict[str, Any] = {
                 "timestep": train_step,
                 "eval/reward_mean": float(np.mean(eval_scores)),
                 "eval/reward_std": float(np.std(eval_scores)),
                 "eval/normalized_score_mean": normalized_score_mean,
-                "eval/normalized_score_std": float(np.std(normalized_eval_scores)),
+                "eval/normalized_score_std": normalized_score_std,
             }
             eval_logs.append(eval_log.copy())
 
@@ -1558,7 +1805,7 @@ def train(config: TrainConfig):
             )
 
             if config.checkpoints_path is not None and config.save_best_model:
-                is_best = normalized_score_mean > best_normalized_score_mean
+                is_best = np.isfinite(normalized_score_mean) and normalized_score_mean > best_normalized_score_mean
                 if is_best:
                     best_normalized_score_mean = normalized_score_mean
                     best_checkpoint_path = os.path.join(config.checkpoints_path, "best_checkpoint.pkl")
