@@ -27,6 +27,8 @@ _ogbench_common: &ogbench_common
   tau: 0.005
   beta: 10.0          # AWR inverse temperature alpha in the FQL paper
   iql_tau: 0.9        # IQL expectile
+  dc_tau_min: 0.9        # IQL expectile
+  dc_tau_max: 0.99
   iql_deterministic: false
   qf_lr: !!float 3e-4
   vf_lr: !!float 3e-4
