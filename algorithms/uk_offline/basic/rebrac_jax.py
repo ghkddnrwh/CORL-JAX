@@ -1628,8 +1628,8 @@ def save_checkpoint(
             state_std=state_std,
         ),
     )
-    if log_wandb and wandb.run is not None:
-        wandb.save(str(checkpoint_path), policy="now")
+    # if log_wandb and wandb.run is not None:
+    #     wandb.save(str(checkpoint_path), policy="now")
 
 
 @pyrallis.wrap()

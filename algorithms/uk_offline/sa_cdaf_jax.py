@@ -1573,8 +1573,8 @@ def train(config: TrainConfig):
             trainer.state_dict(),
         )
 
-        if config.log_wandb and wandb.run is not None:
-            wandb.save(os.path.join(config.checkpoints_path, "checkpoint.pkl"), policy="now")
+        # if config.log_wandb and wandb.run is not None:
+            # wandb.save(os.path.join(config.checkpoints_path, "checkpoint.pkl"), policy="now")
 
         save_and_upload_eval_logs(
             eval_logs=eval_logs,

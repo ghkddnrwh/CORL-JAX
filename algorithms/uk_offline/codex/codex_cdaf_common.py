@@ -822,8 +822,8 @@ def train_impl(config: TrainConfig, default_variant: Optional[str] = None):
 
     if config.checkpoints_path is not None:
         save_pickle(os.path.join(config.checkpoints_path, "checkpoint.pkl"), trainer.state_dict())
-        if config.log_wandb and wandb.run is not None:
-            wandb.save(os.path.join(config.checkpoints_path, "checkpoint.pkl"), policy="now")
+        # if config.log_wandb and wandb.run is not None:
+        #     wandb.save(os.path.join(config.checkpoints_path, "checkpoint.pkl"), policy="now")
         base.save_and_upload_eval_logs(
             eval_logs=eval_logs,
             checkpoints_path=config.checkpoints_path,

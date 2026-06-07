@@ -128,7 +128,7 @@ class TrainConfig:
     dc_tau_min: float = 0.7
     dc_tau_max: float = 0.99
     dc_density_k: int = 10
-    dc_density_subsample: int = 100_000
+    dc_density_subsample: int = 10_000_000
     dc_density_chunk_size: int = 50_000
     dc_density_percentile_low: float = 5.0
     dc_density_percentile_high: float = 95.0
@@ -1771,8 +1771,8 @@ def train(config: TrainConfig):
         checkpoint_path = os.path.join(config.checkpoints_path, "checkpoint.pkl")
         save_pickle(checkpoint_path, trainer.state_dict())
 
-        if config.log_wandb and wandb.run is not None:
-            wandb.save(checkpoint_path, policy="now")
+        # if config.log_wandb and wandb.run is not None:
+        #     wandb.save(checkpoint_path, policy="now")
 
         save_and_upload_eval_logs(
             eval_logs=eval_logs,
