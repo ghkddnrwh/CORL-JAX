@@ -149,9 +149,9 @@ class TrainConfig:
     actor_refit_dir_name: str = "actor_refit"
 
     # Logging
-    project: str = "ORL-SMOOTH"
-    group: str = "IQL-JAX"
-    name: str = "IQL-JAX"
+    project: str = "ORL-BIAS"
+    group: str = "DC-IQL-JAX"
+    name: str = "DC-IQL-JAX"
     log_wandb: bool = True
     log_every: int = 500
 
@@ -161,8 +161,8 @@ class TrainConfig:
 
 
 def refresh_algorithm_names(config: TrainConfig) -> None:
-    config.project = "ORL-SMOOTH"
-    config.group = f"{ALGORITHM_NAME}-JAX"
+    # config.project = "ORL-BIAS"
+    # config.group = f"{ALGORITHM_NAME}-JAX"
     config.name = f"{ALGORITHM_NAME}-JAX-{config.env}"
 
 

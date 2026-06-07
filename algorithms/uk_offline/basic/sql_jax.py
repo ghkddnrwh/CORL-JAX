@@ -658,9 +658,14 @@ def sql_sparse_term(advantage: jnp.ndarray, coefficient: float) -> jnp.ndarray:
 
 
 def sql_sparse_weight(advantage: jnp.ndarray, coefficient: float) -> jnp.ndarray:
-    """Positive part of the SQL sparse term used for the actor objective in Eq. (14)."""
-    term = sql_sparse_term(advantage, coefficient)
-    return jnp.where(term > 0.0, term, 0.0)
+    """Official SQL actor weight: clip(max(Q - V, 0), 0, 100).
+
+    The coefficient argument is kept only for compatibility with the existing
+    call sites/config. The official IVR SQL implementation does not use alpha
+    in the actor weight; it uses the positive advantage clipped to 100.
+    """
+    del coefficient
+    return jnp.clip(jnp.maximum(advantage, 0.0), 0.0, 100.0)
 
 
 @struct.dataclass
