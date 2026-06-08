@@ -11,6 +11,7 @@
 #   - No backward-compatibility aliases for old refit_* keys.
 
 import copy
+import json
 import os
 import pickle
 import random
@@ -132,6 +133,14 @@ class TrainConfig:
     dc_density_chunk_size: int = 50_000
     dc_density_percentile_low: float = 5.0
     dc_density_percentile_high: float = 95.0
+
+    # Density confidence cache. This is not a neural model; it stores the
+    # precomputed c(s) array used by DC-IQL so repeated runs can skip kNN.
+    # Saved as: {dc_density_model_path}/{env}/seed_{seed}/density_confidence.npz
+    dc_density_model_path: Optional[str] = None
+    dc_density_force_recompute: bool = False
+    dc_density_cache_by_seed: bool = True
+
     dc_vicinal_lambda: float = 0.1
     dc_vicinal_noise_std: float = 0.01
     vf_lr: float = 3e-4
@@ -186,6 +195,8 @@ def validate_config(config: TrainConfig) -> None:
     assert config.dc_density_chunk_size >= 1
     assert config.dc_density_percentile_low >= 0.0 and config.dc_density_percentile_low < config.dc_density_percentile_high
     assert config.dc_density_percentile_high <= 100.0
+    if config.dc_density_model_path is not None:
+        assert config.dc_density_model_path != ""
     assert config.dc_vicinal_lambda >= 0.0
     assert config.dc_vicinal_noise_std >= 0.0
     if config.actor_dropout is not None:
@@ -375,6 +386,151 @@ def compute_state_density_confidence(
         # radius small -> dense -> confidence high
         confidence = 1.0 - np.clip((radii - lo) / (hi - lo), 0.0, 1.0)
     return confidence.reshape(-1, 1).astype(np.float32)
+
+
+def _safe_path_name(name: str) -> str:
+    """Make env names safe for directory paths."""
+    return name.replace("/", "_").replace(":", "_")
+
+
+def get_density_cache_path(config: TrainConfig) -> Optional[Path]:
+    """Return the cache file path for precomputed density confidence."""
+    if config.dc_density_model_path is None:
+        return None
+
+    root = Path(config.dc_density_model_path)
+    env_name = _safe_path_name(config.env)
+
+    if config.dc_density_cache_by_seed:
+        return root / env_name / f"seed_{config.seed}" / "density_confidence.npz"
+
+    return root / env_name / "density_confidence.npz"
+
+
+def _canonicalize_density_cache_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize metadata types for reliable equality checks after JSON load."""
+    canonical = dict(metadata)
+    if "observations_shape" in canonical:
+        canonical["observations_shape"] = tuple(canonical["observations_shape"])
+    return canonical
+
+
+def build_density_cache_metadata(
+    config: TrainConfig,
+    observations: np.ndarray,
+) -> Dict[str, Any]:
+    """Metadata that must match before a cached density file can be reused."""
+    return _canonicalize_density_cache_metadata(
+        {
+            "cache_version": 1,
+            "env": config.env,
+            "seed": int(config.seed) if config.dc_density_cache_by_seed else None,
+            "normalize": bool(config.normalize),
+            "observations_shape": tuple(observations.shape),
+            "observations_dtype": str(np.asarray(observations).dtype),
+            "dc_density_k": int(config.dc_density_k),
+            "dc_density_subsample": int(config.dc_density_subsample),
+            "dc_density_chunk_size": int(config.dc_density_chunk_size),
+            "dc_density_percentile_low": float(config.dc_density_percentile_low),
+            "dc_density_percentile_high": float(config.dc_density_percentile_high),
+        }
+    )
+
+
+def load_density_confidence_cache(
+    cache_path: Path,
+    expected_metadata: Dict[str, Any],
+) -> Optional[np.ndarray]:
+    """Load density confidence if the cache exists and metadata matches."""
+    if not cache_path.exists():
+        return None
+
+    try:
+        payload = np.load(cache_path, allow_pickle=False)
+        density_confidence = np.asarray(payload["density_confidence"], dtype=np.float32)
+        saved_metadata_raw = payload["metadata"]
+        if hasattr(saved_metadata_raw, "item"):
+            saved_metadata_raw = saved_metadata_raw.item()
+        saved_metadata = _canonicalize_density_cache_metadata(json.loads(str(saved_metadata_raw)))
+        expected_metadata = _canonicalize_density_cache_metadata(expected_metadata)
+
+        if saved_metadata != expected_metadata:
+            print(f"Density cache metadata mismatch. Recomputing density: {cache_path}")
+            print(f"Saved metadata:    {saved_metadata}")
+            print(f"Expected metadata: {expected_metadata}")
+            return None
+
+        expected_n = int(expected_metadata["observations_shape"][0])
+        if density_confidence.shape != (expected_n, 1):
+            print(
+                "Density cache shape mismatch. "
+                f"Expected {(expected_n, 1)}, got {density_confidence.shape}. "
+                "Recomputing density."
+            )
+            return None
+
+        print(f"Loaded density confidence from: {cache_path}")
+        return density_confidence
+
+    except Exception as exc:
+        print(f"Failed to load density cache from {cache_path}: {exc}")
+        print("Recomputing density confidence.")
+        return None
+
+
+def save_density_confidence_cache(
+    cache_path: Path,
+    density_confidence: np.ndarray,
+    metadata: Dict[str, Any],
+) -> None:
+    """Save precomputed density confidence and the metadata needed for reuse."""
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        cache_path,
+        density_confidence=np.asarray(density_confidence, dtype=np.float32),
+        metadata=json.dumps(_canonicalize_density_cache_metadata(metadata)),
+    )
+    print(f"Saved density confidence to: {cache_path}")
+
+
+def load_or_compute_density_confidence(
+    config: TrainConfig,
+    observations: np.ndarray,
+) -> np.ndarray:
+    """Load cached c(s), or compute and save it when the cache is missing/stale."""
+    cache_path = get_density_cache_path(config)
+    metadata = build_density_cache_metadata(config, observations)
+
+    if cache_path is not None and not config.dc_density_force_recompute:
+        cached_density_confidence = load_density_confidence_cache(
+            cache_path=cache_path,
+            expected_metadata=metadata,
+        )
+        if cached_density_confidence is not None:
+            return cached_density_confidence
+
+    if cache_path is not None and config.dc_density_force_recompute:
+        print(f"Ignoring existing density cache because dc_density_force_recompute=True: {cache_path}")
+
+    print("Computing one-time state-density confidence for DC-IQL...")
+    density_confidence = compute_state_density_confidence(
+        observations,
+        k=config.dc_density_k,
+        subsample_size=config.dc_density_subsample,
+        chunk_size=config.dc_density_chunk_size,
+        percentile_low=config.dc_density_percentile_low,
+        percentile_high=config.dc_density_percentile_high,
+        seed=config.seed,
+    )
+
+    if cache_path is not None:
+        save_density_confidence_cache(
+            cache_path=cache_path,
+            density_confidence=density_confidence,
+            metadata=metadata,
+        )
+
+    return density_confidence
 
 
 class TransformEnv:
@@ -1570,15 +1726,9 @@ def train(config: TrainConfig):
 
     density_confidence = None
     if config.use_density_calibration:
-        print("Computing one-time state-density confidence for DC-IQL...")
-        density_confidence = compute_state_density_confidence(
-            dataset["observations"],
-            k=config.dc_density_k,
-            subsample_size=config.dc_density_subsample,
-            chunk_size=config.dc_density_chunk_size,
-            percentile_low=config.dc_density_percentile_low,
-            percentile_high=config.dc_density_percentile_high,
-            seed=config.seed,
+        density_confidence = load_or_compute_density_confidence(
+            config=config,
+            observations=dataset["observations"],
         )
         tau_values = config.dc_tau_min + (config.dc_tau_max - config.dc_tau_min) * density_confidence
         print(
