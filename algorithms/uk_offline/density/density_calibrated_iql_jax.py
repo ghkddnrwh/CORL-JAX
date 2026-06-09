@@ -139,7 +139,7 @@ class TrainConfig:
     # Saved as: {dc_density_model_path}/{env}/seed_{seed}/density_confidence.npz
     dc_density_model_path: Optional[str] = None
     dc_density_force_recompute: bool = False
-    dc_density_cache_by_seed: bool = True
+    dc_density_cache_by_seed: bool = False
 
     dc_vicinal_lambda: float = 0.1
     dc_vicinal_noise_std: float = 0.01

@@ -385,6 +385,7 @@ def main():
         # "antsoccer",
         # "humanoidmaze",
         # "puzzle-4x4",
+        # "cube",
         "scene",
     ]
     dataset_list = [
@@ -392,6 +393,7 @@ def main():
         # "arena-navigate-singletask-v0",
         # "medium-navigate-singletask-v0",
         "play-singletask-v0",
+        # "single-play-singletask-v0",
     ]
 
     # 현재 경로 기준:
