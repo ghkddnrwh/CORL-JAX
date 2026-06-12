@@ -351,8 +351,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--root_path",
         type=str,
-        # default="logs/basic/iql_jax/ogbench/original/",
-        default="logs/basic/iql_jax/ogbench/0.999/",
+        default="logs/basic/iql_jax/ogbench/original/",
+        # default="logs/basic/iql_jax/ogbench/0.999/",
     )
     parser.add_argument("--metric_name", type=str, default="eval/success_rate.npy")
     parser.add_argument("--eval_log_filename", type=str, default="eval_logs.npz")
@@ -385,15 +385,15 @@ def main():
         # "antsoccer",
         # "humanoidmaze",
         # "puzzle-4x4",
-        # "cube",
-        "scene",
+        "cube",
+        # "scene",
     ]
     dataset_list = [
         # "large-navigate-singletask-v0",
         # "arena-navigate-singletask-v0",
         # "medium-navigate-singletask-v0",
-        "play-singletask-v0",
-        # "single-play-singletask-v0",
+        # "play-singletask-v0",
+        "single-play-singletask-v0",
     ]
 
     # 현재 경로 기준:
