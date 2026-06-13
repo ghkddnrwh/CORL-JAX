@@ -6,29 +6,9 @@ from typing import Any, Dict, Iterable, List, Tuple
 import numpy as np
 
 
-DATASET_ALIAS = {
-    "medium-v2": "M",
-    "medium-replay-v2": "MR",
-    "medium-expert-v2": "ME",
-    "expert-v2": "E",
-    "full-replay-v2": "FR",
-    "random-v2": "R",
-
-    "umaze-v2": "U",
-    "umaze-diverse-v2": "UD",
-    "medium-play-v2": "MP",
-    "medium-diverse-v2": "MD",
-    "large-play-v2": "LP",
-    "large-diverse-v2": "LD",
-}
-
-
 ArgGrid = List[Tuple[str, List[Any]]]
 ArgSetting = Dict[str, Any]
-
-
-def build_env_name(env_id: str, dataset_name: str) -> str:
-    return f"{env_id}-{dataset_name}"
+EnvNameList = List[str]
 
 
 def normalize_metric_key(metric_name: str) -> str:
@@ -289,20 +269,19 @@ def calculate_mean_std_for_setting(
     return float(np.mean(values)), float(np.std(values)), len(values)
 
 
-def generate_header(env_id_list: List[str], dataset_list: List[str]) -> str:
-    header = "Setting & "
-    for env_id in env_id_list:
-        for dataset_name in dataset_list:
-            alias = DATASET_ALIAS.get(dataset_name, dataset_name)
-            header += f"{env_id}-{alias} & "
-    header += "Avg \\\\"
-    return header
+def generate_header(env_name_list: EnvNameList) -> str:
+    """
+    env_name_list에 명시된 환경 이름을 그대로 header로 사용한다.
+
+    예:
+      env_name_list = ["cube-single-play-singletask-v0", "scene-play-singletask-v0"]
+    """
+    return "Setting & " + " & ".join(env_name_list) + " & Avg \\\\" 
 
 
 def generate_result_row(
     root_path: str,
-    env_id_list: List[str],
-    dataset_list: List[str],
+    env_name_list: EnvNameList,
     setting: ArgSetting,
     seeds: List[int],
     metric_name: str,
@@ -310,37 +289,42 @@ def generate_result_row(
     algo_name: str = "CDAF-JAX",
     eval_log_filename: str = "eval_logs.npz",
 ) -> str:
+    """
+    env_name_list에 들어 있는 모든 환경에 대해 결과를 계산해서 하나의 row로 반환한다.
+    """
     label = format_setting_label(setting)
     row = f"{label} & "
 
+    cell_values = []
     cell_means = []
 
-    for env_id in env_id_list:
-        for dataset_name in dataset_list:
-            env_name = build_env_name(env_id, dataset_name)
+    for env_name in env_name_list:
+        mean_value, std_value, n_found = calculate_mean_std_for_setting(
+            root_path=root_path,
+            setting=setting,
+            env_name=env_name,
+            seeds=seeds,
+            metric_name=metric_name,
+            last_n_evals=last_n_evals,
+            algo_name=algo_name,
+            eval_log_filename=eval_log_filename,
+            missing_ok=True,
+        )
 
-            mean_value, std_value, n_found = calculate_mean_std_for_setting(
-                root_path=root_path,
-                setting=setting,
-                env_name=env_name,
-                seeds=seeds,
-                metric_name=metric_name,
-                last_n_evals=last_n_evals,
-                algo_name=algo_name,
-                eval_log_filename=eval_log_filename,
-                missing_ok=True,
+        if n_found == 0:
+            cell_values.append("NA")
+        else:
+            cell_values.append(
+                f"{mean_value:.2f} ± {std_value:.2f} ({n_found}/{len(seeds)})"
             )
+            cell_means.append(mean_value)
 
-            if n_found == 0:
-                row += "NA & "
-            else:
-                row += f"{mean_value:.2f} ± {std_value:.2f} ({n_found}/{len(seeds)}) & "
-                cell_means.append(mean_value)
+    row += " & ".join(cell_values)
 
     if len(cell_means) == 0:
-        row += "NA \\\\"
+        row += " & NA \\\\"
     else:
-        row += f"{np.mean(cell_means):.2f} \\\\"
+        row += f" & {np.mean(cell_means):.2f} \\\\"
 
     return row
 
@@ -367,6 +351,16 @@ def parse_args() -> argparse.Namespace:
             "0 또는 음수이면 전체 evaluation 평균을 사용한다."
         ),
     )
+    parser.add_argument(
+        "--env_names",
+        type=str,
+        nargs="+",
+        default=None,
+        help=(
+            "평가할 전체 환경 이름 리스트. "
+            "예: --env_names cube-single-play-singletask-v0 scene-play-singletask-v0"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -380,27 +374,35 @@ def main():
     seeds = args.seeds
     last_n_evals = args.last_n_evals
 
-    env_id_list = [
-        # "antmaze",
-        # "antsoccer",
-        # "humanoidmaze",
-        # "puzzle-4x4",
-        "cube",
-        # "scene",
+    # env_id와 dataset_name을 따로 관리하지 않고,
+    # 실제 log folder에 들어가는 env_name 전체를 하나의 리스트에서 관리한다.
+    #
+    # 경로는 다음처럼 만들어진다:
+    #   root_path/{arg_grid values...}/{algo_name}-{env_name}/{seed}/eval_logs.npz
+    env_name_list: EnvNameList = [
+        "antmaze-large-navigate-singletask-v0",
+        "humanoidmaze-medium-navigate-singletask-v0",
+        "humanoidmaze-large-navigate-singletask-v0",
+        "antsoccer-arena-navigate-singletask-v0",
+        "cube-single-play-singletask-v0",
+        "cube-double-play-singletask-v0",
+        "puzzle-3x3-play-singletask-v0",
+        "puzzle-4x4-play-singletask-v0",
+        "scene-play-singletask-v0",
     ]
-    dataset_list = [
-        # "large-navigate-singletask-v0",
-        # "arena-navigate-singletask-v0",
-        # "medium-navigate-singletask-v0",
-        # "play-singletask-v0",
-        "single-play-singletask-v0",
-    ]
+
+    # CLI에서 리스트가 주어지면 그 리스트를 우선 사용한다.
+    # 예:
+    #   python script.py \
+    #     --env_names cube-single-play-singletask-v0 scene-play-singletask-v0
+    if args.env_names is not None:
+        env_name_list = args.env_names
 
     # 현재 경로 기준:
     #   root_path/{first}/{third}/{algo_name}-{env_name}/{seed}/eval_logs.npz
     # 만약 root_path 바로 아래에 {algo_name}-{env_name}/{seed}/eval_logs.npz가 있으면
     #   arg_grid = []
-    # 로 바꾸면 된다.
+    # 로 두면 된다.
     arg_grid: ArgGrid = [
         # ("first", [1.0]),
         # ("third", [1000]),
@@ -410,14 +412,14 @@ def main():
     print(f"[Info] eval_log_filename={eval_log_filename}")
     print(f"[Info] seeds={seeds}")
     print(f"[Info] last_n_evals={last_n_evals}")
-    print(generate_header(env_id_list, dataset_list))
+    print(f"[Info] env_name_list={env_name_list}")
+    print(generate_header(env_name_list))
 
     for setting in iter_arg_settings(arg_grid):
         print(
             generate_result_row(
                 root_path=root_path,
-                env_id_list=env_id_list,
-                dataset_list=dataset_list,
+                env_name_list=env_name_list,
                 setting=setting,
                 seeds=seeds,
                 metric_name=metric_name,
