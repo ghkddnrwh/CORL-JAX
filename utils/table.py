@@ -11,6 +11,62 @@ ArgSetting = Dict[str, Any]
 EnvNameList = List[str]
 
 
+# 출력용 짧은 이름.
+# 실제 로그 경로에는 env_name 원본을 그대로 사용하고, table header에만 이 alias를 사용한다.
+ENV_NAME_ALIAS: Dict[str, str] = {
+    "antmaze-large-navigate-singletask-v0": "AM-L",
+    "humanoidmaze-medium-navigate-singletask-v0": "HM-M",
+    "humanoidmaze-large-navigate-singletask-v0": "HM-L",
+    "antsoccer-arena-navigate-singletask-v0": "AS-A",
+    "cube-single-play-singletask-v0": "Cube-S",
+    "cube-double-play-singletask-v0": "Cube-D",
+    "puzzle-3x3-play-singletask-v0": "Pz-3x3",
+    "puzzle-4x4-play-singletask-v0": "Pz-4x4",
+    "scene-play-singletask-v0": "Scene",
+}
+
+
+def abbreviate_env_name(env_name: str) -> str:
+    """
+    출력용 환경 이름을 짧게 만든다.
+
+    - ENV_NAME_ALIAS에 등록된 환경은 지정된 축약형 사용
+    - 등록되지 않은 환경은 최대한 일반 규칙으로 축약
+    - 중요한 점: 이 함수는 출력용으로만 사용하고, 경로 생성에는 원본 env_name을 사용한다.
+    """
+    if env_name in ENV_NAME_ALIAS:
+        return ENV_NAME_ALIAS[env_name]
+
+    short_name = env_name
+    replacements = [
+        ("-navigate-singletask-v0", "-nav"),
+        ("-play-singletask-v0", "-play"),
+        ("-singletask-v0", ""),
+        ("humanoidmaze", "hm"),
+        ("antmaze", "am"),
+        ("antsoccer", "as"),
+        ("puzzle", "pz"),
+        ("large", "L"),
+        ("medium", "M"),
+        ("arena", "A"),
+        ("single", "S"),
+        ("double", "D"),
+    ]
+    for old, new in replacements:
+        short_name = short_name.replace(old, new)
+    return short_name
+
+
+def format_env_name_list_for_info(env_name_list: EnvNameList) -> str:
+    return "[" + ", ".join(abbreviate_env_name(env_name) for env_name in env_name_list) + "]"
+
+
+def print_env_name_mapping(env_name_list: EnvNameList) -> None:
+    print("[Info] env_name_aliases:")
+    for env_name in env_name_list:
+        print(f"  {abbreviate_env_name(env_name)} = {env_name}")
+
+
 def normalize_metric_key(metric_name: str) -> str:
     """
     npz key가 "eval/success_rate.npy" 또는 "eval/success_rate" 둘 중 하나로
@@ -271,12 +327,13 @@ def calculate_mean_std_for_setting(
 
 def generate_header(env_name_list: EnvNameList) -> str:
     """
-    env_name_list에 명시된 환경 이름을 그대로 header로 사용한다.
+    env_name_list에 명시된 환경들의 출력용 축약 이름을 header로 사용한다.
 
-    예:
-      env_name_list = ["cube-single-play-singletask-v0", "scene-play-singletask-v0"]
+    실제 로그 경로 탐색에는 원본 env_name을 그대로 사용하고,
+    table 출력에서만 abbreviate_env_name(env_name)을 사용한다.
     """
-    return "Setting & " + " & ".join(env_name_list) + " & Avg \\\\" 
+    short_env_names = [abbreviate_env_name(env_name) for env_name in env_name_list]
+    return "Setting & " + " & ".join(short_env_names) + " & Avg \\\\"
 
 
 def generate_result_row(
@@ -361,6 +418,11 @@ def parse_args() -> argparse.Namespace:
             "예: --env_names cube-single-play-singletask-v0 scene-play-singletask-v0"
         ),
     )
+    parser.add_argument(
+        "--show_env_mapping",
+        action="store_true",
+        help="출력용 축약 이름이 어떤 원본 env_name에 대응되는지 함께 출력한다.",
+    )
     return parser.parse_args()
 
 
@@ -412,7 +474,9 @@ def main():
     print(f"[Info] eval_log_filename={eval_log_filename}")
     print(f"[Info] seeds={seeds}")
     print(f"[Info] last_n_evals={last_n_evals}")
-    print(f"[Info] env_name_list={env_name_list}")
+    print(f"[Info] env_name_list={format_env_name_list_for_info(env_name_list)}")
+    if args.show_env_mapping:
+        print_env_name_mapping(env_name_list)
     print(generate_header(env_name_list))
 
     for setting in iter_arg_settings(arg_grid):
