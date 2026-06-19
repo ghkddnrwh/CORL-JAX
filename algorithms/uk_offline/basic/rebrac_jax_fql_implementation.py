@@ -160,8 +160,8 @@ def normalize_config_aliases(config: TrainConfig) -> None:
 
 def refresh_algorithm_names(config: TrainConfig) -> None:
     config.project = "ORL-SMOOTH"
-    config.group = f"{ALGORITHM_NAME}-JAX"
-    config.name = f"{ALGORITHM_NAME}-JAX-{config.env}"
+    config.group = f"{ALGORITHM_NAME}-JAX-FQL"
+    config.name = f"{ALGORITHM_NAME}-JAX-FQL-{config.env}"
 
 
 def validate_config(config: TrainConfig) -> None:
@@ -652,20 +652,11 @@ class FQLTrainState(flax.struct.PyTreeNode):
         return self.replace(step=self.step + 1, params=new_params, opt_state=new_opt_state, **kwargs)
 
     def apply_loss_fn(self, loss_fn):
+        # Keep the FQL/ReBRAC algorithmic update intact, but do not compute
+        # global gradient diagnostics inside the jitted update step. Those
+        # diagnostics create large reduce operations over every parameter leaf
+        # and can trigger very slow XLA constant-folding during first compile.
         grads, info = jax.grad(loss_fn, has_aux=True)(self.params)
-        grad_max = jax.tree_util.tree_map(jnp.max, grads)
-        grad_min = jax.tree_util.tree_map(jnp.min, grads)
-        grad_norm = jax.tree_util.tree_map(jnp.linalg.norm, grads)
-        grad_max_flat = jnp.concatenate([jnp.reshape(x, -1) for x in jax.tree_util.tree_leaves(grad_max)], axis=0)
-        grad_min_flat = jnp.concatenate([jnp.reshape(x, -1) for x in jax.tree_util.tree_leaves(grad_min)], axis=0)
-        grad_norm_flat = jnp.concatenate([jnp.reshape(x, -1) for x in jax.tree_util.tree_leaves(grad_norm)], axis=0)
-        info.update(
-            {
-                "grad/max": jnp.max(grad_max_flat),
-                "grad/min": jnp.min(grad_min_flat),
-                "grad/norm": jnp.linalg.norm(grad_norm_flat, ord=1),
-            }
-        )
         return self.apply_gradients(grads=grads), info
 
 
