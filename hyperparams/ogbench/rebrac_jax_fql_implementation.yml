@@ -1,0 +1,351 @@
+# Hyperparameters for rebrac_fql_interface.py
+#
+# Goal:
+#   Reproduce the FQL repository's ReBRAC code path while keeping the
+#   IQL_JAX-style runner interface: pyrallis config, env-specific YAML loading,
+#   wandb logging, checkpoint saving/loading, eval_logs.npz, and actor_refit.
+#
+# Important reproduction notes:
+#   - normalize_states is intentionally false. FQL's OGBench ReBRAC path does
+#     not normalize vector observations by dataset mean/std.
+#   - actor_hidden_dims/value_hidden_dims are explicitly set to [512,512,512,512]
+#     to match FQL ReBRAC, rather than relying only on hidden_dim/n_hiddens aliases.
+#   - policy_freq maps to FQL's actor_freq.
+#   - policy_noise/noise_clip map to FQL's actor_noise/actor_noise_clip.
+#   - actor_bc_coef/critic_bc_coef map to FQL's alpha_actor/alpha_critic.
+#   - action_clip_eps keeps FQL's dataset action clipping: [-1 + eps, 1 - eps].
+#   - For visual tasks, FQL uses encoder=impala_small, p_aug=0.5, frame_stack=3,
+#     and max_timesteps=5e5.
+
+_ogbench_common: &ogbench_common
+  max_timesteps: 1000000
+  n_timesteps: 1000000
+  eval_freq: 100000
+  log_every: 500
+
+  # Dataset / preprocessing. Keep this false for FQL reproduction.
+  batch_size: 256
+  normalize_states: false
+  normalize_reward: false
+  action_clip_eps: 0.00001
+  frame_stack: null
+  p_aug: null
+
+  # FQL ReBRAC network/optimization settings.
+  actor_learning_rate: 0.0003
+  critic_learning_rate: 0.0003
+  hidden_dim: 512
+  actor_n_hiddens: 4
+  critic_n_hiddens: 4
+  actor_hidden_dims: [512, 512, 512, 512]
+  value_hidden_dims: [512, 512, 512, 512]
+  num_critics: 2
+
+  # FQL ReBRAC loss / target settings.
+  discount: 0.99
+  tau: 0.005
+  actor_ln: false
+  critic_ln: true
+  policy_noise: 0.2
+  noise_clip: 0.5
+  policy_freq: 2
+  normalize_q: true
+  tanh_squash: true
+  actor_fc_scale: 0.01
+  encoder: null
+
+  # Evaluation / saving.
+  n_episodes: 50
+  eval_seed: 42
+  actor_refit_dir_name: "actor_refit"
+  eval_at_first_step: true
+
+_ogbench_discount_0995: &ogbench_discount_0995
+  <<: *ogbench_common
+  discount: 0.995
+
+_ogbench_visual_common: &ogbench_visual_common
+  <<: *ogbench_common
+  max_timesteps: 500000
+  n_timesteps: 500000
+  encoder: impala_small
+  p_aug: 0.5
+  frame_stack: 3
+
+# -----------------------------------------------------------------------------
+# OGBench state-based tasks
+# -----------------------------------------------------------------------------
+
+_ogb_antmaze_large: &ogb_antmaze_large
+  <<: *ogbench_common
+  actor_bc_coef: 0.003
+  critic_bc_coef: 0.01
+
+antmaze-large-navigate-singletask-v0:
+  <<: *ogb_antmaze_large
+antmaze-large-navigate-singletask-task1-v0:
+  <<: *ogb_antmaze_large
+antmaze-large-navigate-singletask-task2-v0:
+  <<: *ogb_antmaze_large
+antmaze-large-navigate-singletask-task3-v0:
+  <<: *ogb_antmaze_large
+antmaze-large-navigate-singletask-task4-v0:
+  <<: *ogb_antmaze_large
+antmaze-large-navigate-singletask-task5-v0:
+  <<: *ogb_antmaze_large
+
+_ogb_antmaze_giant: &ogb_antmaze_giant
+  <<: *ogbench_discount_0995
+  actor_bc_coef: 0.003
+  critic_bc_coef: 0.01
+
+antmaze-giant-navigate-singletask-v0:
+  <<: *ogb_antmaze_giant
+antmaze-giant-navigate-singletask-task1-v0:
+  <<: *ogb_antmaze_giant
+antmaze-giant-navigate-singletask-task2-v0:
+  <<: *ogb_antmaze_giant
+antmaze-giant-navigate-singletask-task3-v0:
+  <<: *ogb_antmaze_giant
+antmaze-giant-navigate-singletask-task4-v0:
+  <<: *ogb_antmaze_giant
+antmaze-giant-navigate-singletask-task5-v0:
+  <<: *ogb_antmaze_giant
+
+_ogb_humanoidmaze_medium: &ogb_humanoidmaze_medium
+  <<: *ogbench_discount_0995
+  actor_bc_coef: 0.01
+  critic_bc_coef: 0.01
+
+humanoidmaze-medium-navigate-singletask-v0:
+  <<: *ogb_humanoidmaze_medium
+humanoidmaze-medium-navigate-singletask-task1-v0:
+  <<: *ogb_humanoidmaze_medium
+humanoidmaze-medium-navigate-singletask-task2-v0:
+  <<: *ogb_humanoidmaze_medium
+humanoidmaze-medium-navigate-singletask-task3-v0:
+  <<: *ogb_humanoidmaze_medium
+humanoidmaze-medium-navigate-singletask-task4-v0:
+  <<: *ogb_humanoidmaze_medium
+humanoidmaze-medium-navigate-singletask-task5-v0:
+  <<: *ogb_humanoidmaze_medium
+
+_ogb_humanoidmaze_large: &ogb_humanoidmaze_large
+  <<: *ogbench_discount_0995
+  actor_bc_coef: 0.01
+  critic_bc_coef: 0.01
+
+humanoidmaze-large-navigate-singletask-v0:
+  <<: *ogb_humanoidmaze_large
+humanoidmaze-large-navigate-singletask-task1-v0:
+  <<: *ogb_humanoidmaze_large
+humanoidmaze-large-navigate-singletask-task2-v0:
+  <<: *ogb_humanoidmaze_large
+humanoidmaze-large-navigate-singletask-task3-v0:
+  <<: *ogb_humanoidmaze_large
+humanoidmaze-large-navigate-singletask-task4-v0:
+  <<: *ogb_humanoidmaze_large
+humanoidmaze-large-navigate-singletask-task5-v0:
+  <<: *ogb_humanoidmaze_large
+
+_ogb_antsoccer_arena: &ogb_antsoccer_arena
+  <<: *ogbench_discount_0995
+  actor_bc_coef: 0.01
+  critic_bc_coef: 0.01
+
+antsoccer-arena-navigate-singletask-v0:
+  <<: *ogb_antsoccer_arena
+antsoccer-arena-navigate-singletask-task1-v0:
+  <<: *ogb_antsoccer_arena
+antsoccer-arena-navigate-singletask-task2-v0:
+  <<: *ogb_antsoccer_arena
+antsoccer-arena-navigate-singletask-task3-v0:
+  <<: *ogb_antsoccer_arena
+antsoccer-arena-navigate-singletask-task4-v0:
+  <<: *ogb_antsoccer_arena
+antsoccer-arena-navigate-singletask-task5-v0:
+  <<: *ogb_antsoccer_arena
+
+_ogb_cube_single: &ogb_cube_single
+  <<: *ogbench_common
+  actor_bc_coef: 1.0
+  critic_bc_coef: 0.0
+
+cube-single-play-singletask-v0:
+  <<: *ogb_cube_single
+cube-single-play-singletask-task1-v0:
+  <<: *ogb_cube_single
+cube-single-play-singletask-task2-v0:
+  <<: *ogb_cube_single
+cube-single-play-singletask-task3-v0:
+  <<: *ogb_cube_single
+cube-single-play-singletask-task4-v0:
+  <<: *ogb_cube_single
+cube-single-play-singletask-task5-v0:
+  <<: *ogb_cube_single
+
+_ogb_cube_double: &ogb_cube_double
+  <<: *ogbench_common
+  actor_bc_coef: 0.1
+  critic_bc_coef: 0.0
+
+cube-double-play-singletask-v0:
+  <<: *ogb_cube_double
+cube-double-play-singletask-task1-v0:
+  <<: *ogb_cube_double
+cube-double-play-singletask-task2-v0:
+  <<: *ogb_cube_double
+cube-double-play-singletask-task3-v0:
+  <<: *ogb_cube_double
+cube-double-play-singletask-task4-v0:
+  <<: *ogb_cube_double
+cube-double-play-singletask-task5-v0:
+  <<: *ogb_cube_double
+
+_ogb_scene: &ogb_scene
+  <<: *ogbench_common
+  actor_bc_coef: 0.1
+  critic_bc_coef: 0.01
+
+scene-play-singletask-v0:
+  <<: *ogb_scene
+scene-play-singletask-task1-v0:
+  <<: *ogb_scene
+scene-play-singletask-task2-v0:
+  <<: *ogb_scene
+scene-play-singletask-task3-v0:
+  <<: *ogb_scene
+scene-play-singletask-task4-v0:
+  <<: *ogb_scene
+scene-play-singletask-task5-v0:
+  <<: *ogb_scene
+
+_ogb_puzzle_3x3: &ogb_puzzle_3x3
+  <<: *ogbench_common
+  actor_bc_coef: 0.3
+  critic_bc_coef: 0.01
+
+puzzle-3x3-play-singletask-v0:
+  <<: *ogb_puzzle_3x3
+puzzle-3x3-play-singletask-task1-v0:
+  <<: *ogb_puzzle_3x3
+puzzle-3x3-play-singletask-task2-v0:
+  <<: *ogb_puzzle_3x3
+puzzle-3x3-play-singletask-task3-v0:
+  <<: *ogb_puzzle_3x3
+puzzle-3x3-play-singletask-task4-v0:
+  <<: *ogb_puzzle_3x3
+puzzle-3x3-play-singletask-task5-v0:
+  <<: *ogb_puzzle_3x3
+
+_ogb_puzzle_4x4: &ogb_puzzle_4x4
+  <<: *ogbench_common
+  actor_bc_coef: 0.3
+  critic_bc_coef: 0.01
+
+puzzle-4x4-play-singletask-v0:
+  <<: *ogb_puzzle_4x4
+puzzle-4x4-play-singletask-task1-v0:
+  <<: *ogb_puzzle_4x4
+puzzle-4x4-play-singletask-task2-v0:
+  <<: *ogb_puzzle_4x4
+puzzle-4x4-play-singletask-task3-v0:
+  <<: *ogb_puzzle_4x4
+puzzle-4x4-play-singletask-task4-v0:
+  <<: *ogb_puzzle_4x4
+puzzle-4x4-play-singletask-task5-v0:
+  <<: *ogb_puzzle_4x4
+
+# -----------------------------------------------------------------------------
+# OGBench visual manipulation tasks
+# -----------------------------------------------------------------------------
+
+_visual_cube_single: &visual_cube_single
+  <<: *ogbench_visual_common
+  actor_bc_coef: 1.0
+  critic_bc_coef: 0.0
+
+visual-cube-single-play-singletask-v0:
+  <<: *visual_cube_single
+visual-cube-single-play-singletask-task1-v0:
+  <<: *visual_cube_single
+visual-cube-single-play-singletask-task2-v0:
+  <<: *visual_cube_single
+visual-cube-single-play-singletask-task3-v0:
+  <<: *visual_cube_single
+visual-cube-single-play-singletask-task4-v0:
+  <<: *visual_cube_single
+visual-cube-single-play-singletask-task5-v0:
+  <<: *visual_cube_single
+
+_visual_cube_double: &visual_cube_double
+  <<: *ogbench_visual_common
+  actor_bc_coef: 0.1
+  critic_bc_coef: 0.0
+
+visual-cube-double-play-singletask-v0:
+  <<: *visual_cube_double
+visual-cube-double-play-singletask-task1-v0:
+  <<: *visual_cube_double
+visual-cube-double-play-singletask-task2-v0:
+  <<: *visual_cube_double
+visual-cube-double-play-singletask-task3-v0:
+  <<: *visual_cube_double
+visual-cube-double-play-singletask-task4-v0:
+  <<: *visual_cube_double
+visual-cube-double-play-singletask-task5-v0:
+  <<: *visual_cube_double
+
+_visual_scene: &visual_scene
+  <<: *ogbench_visual_common
+  actor_bc_coef: 0.1
+  critic_bc_coef: 0.01
+
+visual-scene-play-singletask-v0:
+  <<: *visual_scene
+visual-scene-play-singletask-task1-v0:
+  <<: *visual_scene
+visual-scene-play-singletask-task2-v0:
+  <<: *visual_scene
+visual-scene-play-singletask-task3-v0:
+  <<: *visual_scene
+visual-scene-play-singletask-task4-v0:
+  <<: *visual_scene
+visual-scene-play-singletask-task5-v0:
+  <<: *visual_scene
+
+_visual_puzzle_3x3: &visual_puzzle_3x3
+  <<: *ogbench_visual_common
+  actor_bc_coef: 0.3
+  critic_bc_coef: 0.01
+
+visual-puzzle-3x3-play-singletask-v0:
+  <<: *visual_puzzle_3x3
+visual-puzzle-3x3-play-singletask-task1-v0:
+  <<: *visual_puzzle_3x3
+visual-puzzle-3x3-play-singletask-task2-v0:
+  <<: *visual_puzzle_3x3
+visual-puzzle-3x3-play-singletask-task3-v0:
+  <<: *visual_puzzle_3x3
+visual-puzzle-3x3-play-singletask-task4-v0:
+  <<: *visual_puzzle_3x3
+visual-puzzle-3x3-play-singletask-task5-v0:
+  <<: *visual_puzzle_3x3
+
+_visual_puzzle_4x4: &visual_puzzle_4x4
+  <<: *ogbench_visual_common
+  actor_bc_coef: 0.3
+  critic_bc_coef: 0.01
+
+visual-puzzle-4x4-play-singletask-v0:
+  <<: *visual_puzzle_4x4
+visual-puzzle-4x4-play-singletask-task1-v0:
+  <<: *visual_puzzle_4x4
+visual-puzzle-4x4-play-singletask-task2-v0:
+  <<: *visual_puzzle_4x4
+visual-puzzle-4x4-play-singletask-task3-v0:
+  <<: *visual_puzzle_4x4
+visual-puzzle-4x4-play-singletask-task4-v0:
+  <<: *visual_puzzle_4x4
+visual-puzzle-4x4-play-singletask-task5-v0:
+  <<: *visual_puzzle_4x4

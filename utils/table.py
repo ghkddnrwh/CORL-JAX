@@ -388,12 +388,13 @@ def generate_result_row(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--algo_name", type=str, default="IQL-JAX")
+    parser.add_argument("--algo_name", type=str, default="ReBRAC-JAX")
     parser.add_argument(
         "--root_path",
         type=str,
-        default="logs/basic/iql_jax/ogbench/original/",
+        # default="logs/basic/iql_jax/ogbench/original/",
         # default="logs/basic/iql_jax/ogbench/0.999/",
+        default="logs/iclr2027/basic/rebrac_jax/ogbench/unnormalize/original/",
     )
     parser.add_argument("--metric_name", type=str, default="eval/success_rate.npy")
     parser.add_argument("--eval_log_filename", type=str, default="eval_logs.npz")
