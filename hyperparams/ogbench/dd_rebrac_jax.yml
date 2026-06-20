@@ -48,7 +48,7 @@ _ogbench_common: &ogbench_common
   critic_ln: true
   policy_noise: 0.2
   noise_clip: 0.5
-  policy_freq: 2
+  policy_freq: 1
   normalize_q: true
   tanh_squash: true
   actor_fc_scale: 0.01
