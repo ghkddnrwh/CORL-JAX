@@ -1552,8 +1552,8 @@ def save_checkpoint(
     log_wandb: bool,
 ) -> None:
     save_pickle(checkpoint_path, make_checkpoint_payload(trainer=trainer, config=config, state_mean=state_mean, state_std=state_std))
-    if log_wandb and wandb.run is not None:
-        wandb.save(str(checkpoint_path), policy="now")
+    # if log_wandb and wandb.run is not None:
+    #     wandb.save(str(checkpoint_path), policy="now")
 
 
 @pyrallis.wrap()
