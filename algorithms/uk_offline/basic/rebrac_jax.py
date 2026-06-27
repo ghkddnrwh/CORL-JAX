@@ -163,7 +163,8 @@ class TrainConfig:
     name: str = "ReBRAC-JAX"
     log_wandb: bool = True
     log_every: int = 500
-    save_best_model: bool = True
+    save_final_model: bool = False
+    save_best_model: bool = False
 
     def __post_init__(self):
         normalize_config_aliases(self)
@@ -1898,22 +1899,29 @@ def train(config: TrainConfig):
                     )
 
     if config.checkpoints_path is not None:
-        checkpoint_path = os.path.join(config.checkpoints_path, "checkpoint.pkl")
-        save_checkpoint(
-            checkpoint_path,
-            trainer=trainer,
-            config=config,
-            state_mean=state_mean,
-            state_std=state_std,
-            log_wandb=config.log_wandb,
-        )
+        if config.save_final_model:
+            checkpoint_path = os.path.join(config.checkpoints_path, "checkpoint.pkl")
+            save_checkpoint(
+                checkpoint_path,
+                trainer=trainer,
+                config=config,
+                state_mean=state_mean,
+                state_std=state_std,
+                log_wandb=config.log_wandb,
+            )
+
         save_and_upload_eval_logs(
             eval_logs=eval_logs,
             checkpoints_path=config.checkpoints_path,
             log_wandb=config.log_wandb,
         )
+
         print("---------------------------------------")
-        print(f"Saved final checkpoint to: {checkpoint_path}")
+        if config.save_final_model:
+            print(f"Saved final checkpoint to: {os.path.join(config.checkpoints_path, 'checkpoint.pkl')}")
+        else:
+            print("Skipped final checkpoint saving because save_final_model=False")
+
         if config.save_best_model:
             print(f"Saved best checkpoint to:  {os.path.join(config.checkpoints_path, 'best_checkpoint.pkl')}")
         print("---------------------------------------")

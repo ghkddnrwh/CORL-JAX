@@ -139,7 +139,8 @@ class TrainConfig:
     name: str = "ReBRAC-JAX"
     log_wandb: bool = True
     log_every: int = 500
-    save_best_model: bool = True
+    save_final_model: bool = False
+    save_best_model: bool = False
     eval_at_first_step: bool = True
 
     def __post_init__(self):
@@ -1726,15 +1727,22 @@ def train(config: TrainConfig):
                         log_wandb=config.log_wandb,
                     )
 
-    if config.checkpoints_path is not None:
+    if config.checkpoints_path is not None and config.save_final_model:
         checkpoint_path = os.path.join(config.checkpoints_path, "checkpoint.pkl")
-        save_checkpoint(checkpoint_path, trainer=trainer, config=config, state_mean=state_mean, state_std=state_std, log_wandb=config.log_wandb)
-        save_and_upload_eval_logs(eval_logs, config.checkpoints_path, config.log_wandb)
+        save_checkpoint(
+            checkpoint_path,
+            trainer=trainer,
+            config=config,
+            state_mean=state_mean,
+            state_std=state_std,
+            log_wandb=config.log_wandb,
+        )
         print("---------------------------------------")
         print(f"Saved final checkpoint to: {checkpoint_path}")
-        if config.save_best_model:
-            print(f"Saved best checkpoint to:  {os.path.join(config.checkpoints_path, 'best_checkpoint.pkl')}")
         print("---------------------------------------")
+
+    if config.checkpoints_path is not None:
+        save_and_upload_eval_logs(eval_logs, config.checkpoints_path, config.log_wandb)
 
 
 if __name__ == "__main__":

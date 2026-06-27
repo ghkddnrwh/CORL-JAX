@@ -152,6 +152,7 @@ class TrainConfig:
     name: str = "DDIQL-JAX"
     log_wandb: bool = True
     log_every: int = 500
+    save_final_model: bool = False
 
     def __post_init__(self):
         refresh_algorithm_names(self)
@@ -1864,13 +1865,18 @@ def train(config: TrainConfig):
                 log_wandb=config.log_wandb,
             )
 
-    if config.checkpoints_path is not None:
+    if config.checkpoints_path is not None and config.save_final_model:
         checkpoint_path = os.path.join(config.checkpoints_path, "checkpoint.pkl")
         save_pickle(checkpoint_path, trainer.state_dict())
 
         # if config.log_wandb and wandb.run is not None:
         #     wandb.save(checkpoint_path, policy="now")
 
+        print("---------------------------------------")
+        print(f"Saved final checkpoint to: {checkpoint_path}")
+        print("---------------------------------------")
+
+    if config.checkpoints_path is not None:
         save_and_upload_eval_logs(
             eval_logs=eval_logs,
             checkpoints_path=config.checkpoints_path,
