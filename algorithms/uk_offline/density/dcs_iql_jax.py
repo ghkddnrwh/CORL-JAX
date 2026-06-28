@@ -1,14 +1,42 @@
-# JAX/Flax IQL implementation with CDAF_JAX-style experiment plumbing.
-# Algorithmic losses mirror the provided PyTorch IQL code; checkpointing,
-# hyperparameter merging, logging, and path handling follow the CDAF_JAX style.
+# dcs_iql_jax.py
 #
-# Current plumbing:
-#   - Explicit mode switch: mode="train" or mode="refit".
-#   - Refit mode uses shared schedule fields:
-#       max_timesteps -> actor-only refit steps
-#       batch_size    -> actor-only refit batch size
-#       eval_freq     -> actor-only refit evaluation interval
-#   - No backward-compatibility aliases for old refit_* keys.
+# DCS-IQL: Density-Certified Stitching IQL (JAX/Flax).
+#
+# Successor of DC-IQL. The diagnosis of DC-IQL (see the accompanying proposal
+# document) showed that (i) the per-state expectile tau(s) driven by state
+# density alone diverges for tau_max >= 0.95 and is inert at 0.9, and (ii) the
+# correct local signal for "how aggressive may the in-sample max be at s" is
+# the *diversity of actions/continuations* among neighbors, not state density.
+#
+# DCS-IQL therefore changes the control lever:
+#   - tau is GLOBAL and fixed (0.7-0.9, as in IQL). No per-state tau.
+#   - Aggressiveness is instead controlled by the COMPOSITION of the
+#     distribution the expectile looks at: V(s_i) is regressed against the
+#     pooled set { Q_target(s_j, a_j) : j in {i} u N_k(s_i) } of *in-sample*
+#     neighbor state-action values ("Vicinal Bellman Backup"), weighted by
+#       w_ij = gate(J(s_i)) * exp(-(d_ij / h_i)^2),
+#     where J(s) = density(s) x action/continuation-diversity(s) is the
+#     precomputed junction score. gate -> 0 recovers exact IQL (SARSA-ish);
+#     gate -> 1 performs an explicit, certified cross-trajectory stitch.
+#   - The same pool drives policy extraction ("Vicinal AWR"): pi(.|s_i) is
+#     trained on neighbor actions a_j weighted by exp(beta * A_ij) * w_ij,
+#     attacking the policy-extraction bottleneck directly.
+#   - Only in-sample pairs (s_j, a_j) are ever evaluated by Q: the in-sample
+#     property of IQL (no OOD action queries) is preserved exactly.
+#
+# All coverage statistics (kNN graph, density, diversity) are one-time
+# nonparametric precomputation handled by coverage_profile.py and cached with
+# metadata validation, mirroring the DC-IQL cache design. Percentile scaling,
+# junction mode, gate percentiles and kernel bandwidth are post-processing
+# applied at load time, so tuning them does not invalidate caches.
+#
+# Plumbing (modes, hyperparameter merging, checkpointing, refit, logging)
+# follows the original DC-IQL/CDAF_JAX file style:
+#   - mode="train":  joint Q/V/pi training.
+#   - mode="refit":  load Q/V from a checkpoint, train only pi
+#                    (max_timesteps/batch_size/eval_freq are reused as the
+#                    refit schedule). DC-IQL checkpoints are loadable here
+#                    since the network architectures are unchanged.
 
 import copy
 import json
@@ -63,6 +91,8 @@ except ImportError:
 from flax import linen as nn
 from flax import serialization, struct
 
+import coverage_profile as covp
+
 d4rl = None
 
 try:
@@ -101,7 +131,7 @@ class TrainConfig:
     checkpoints_path: Optional[str] = None
     load_model: str = ""
     mode: str = "train"  # one of: train, refit. refit loads Q/V and trains only pi.
-    hyperparams_path: Optional[str] = "hyperparams/iql_jax.yml"
+    hyperparams_path: Optional[str] = "hyperparams/dcs_iql_jax.yml"
     use_hyperparams: bool = True
 
     # Dataset
@@ -115,61 +145,59 @@ class TrainConfig:
     normalize: bool = True
     normalize_reward: bool = False
 
-    # IQL
+    # IQL core. iql_tau is GLOBAL and fixed by design (see header).
     discount: float = 0.99
     tau: float = 0.005
     beta: float = 3.0
     iql_tau: float = 0.7
     iql_deterministic: bool = False
 
-    # DCS-IQL: Density-Certified Stitching IQL
-    #
-    # The previous DC-IQL version used a scalar density confidence c(s) to
-    # change the expectile level tau(s). The new research direction keeps tau
-    # mostly global and uses density as a certificate for explicit local
-    # stitching. A one-time kNN preprocessing step builds a local coverage
-    # profile:
-    #   rho(s): state-density confidence from kNN radii
-    #   b(s):   local action-diversity confidence
-    #   J(s):   rho(s) * b(s), a junction/stitching score
-    # The profile then controls which neighbor transitions are allowed to enter
-    # the value expectile target pool and the actor AWR extraction pool.
-    use_density_calibration: bool = True
+    # ----- DCS: Density-Certified Stitching -------------------------------
+    # Master switch. False -> neighbor weights are zeroed and DCS-IQL reduces
+    # exactly to standard IQL (pool collapses onto the sample itself).
+    use_dcs: bool = True
 
-    # Legacy ablation only. Keep False for the new method. If True, tau(s) is
-    # still computed from rho(s), but this is not the recommended setting.
-    dc_use_state_tau: bool = False
-    dc_tau_min: float = 0.7
-    dc_tau_max: float = 0.9
+    # kNN graph: number of neighbors kept per state (self excluded).
+    dcs_k: int = 8
 
-    # kNN/profile preprocessing. dc_density_k is the number of neighbor states
-    # excluding self; the training-time pool size is therefore k+1.
-    dc_density_k: int = 10
-    dc_density_subsample: int = 10_000_000
-    dc_density_chunk_size: int = 50_000
-    dc_density_percentile_low: float = 5.0
-    dc_density_percentile_high: float = 95.0
-    dc_action_diversity_percentile_low: float = 5.0
-    dc_action_diversity_percentile_high: float = 95.0
-    dc_junction_percentile: float = 60.0
-    dc_kernel_scale: float = 1.0
+    # Relative mass of the neighbor pool vs the sample itself, separately for
+    # the value expectile (Vicinal Bellman Backup) and policy extraction
+    # (Vicinal AWR). 0.0 disables that side; with both at 0.0 -> exact IQL.
+    dcs_value_neighbor_weight: float = 1.0
+    dcs_actor_neighbor_weight: float = 1.0
 
-    # Coverage profile cache. Saved as:
-    #   {dc_density_model_path}/{env}/coverage_profile.npz
-    # or, if dc_density_cache_by_seed=True:
-    #   {dc_density_model_path}/{env}/seed_{seed}/coverage_profile.npz
-    dc_density_model_path: Optional[str] = None
-    dc_density_force_recompute: bool = False
-    dc_density_cache_by_seed: bool = False
+    # Junction score J(s) = density_conf x diversity_conf.
+    #   diversity mode: "action" (spread of neighbor actions),
+    #                   "displacement" (directional dispersion of neighbor
+    #                                   next-state displacements),
+    #                   "product" (geometric mean of both).
+    dcs_diversity_mode: str = "product"
 
-    # Switches for the two core mechanisms proposed in the memo.
-    dc_use_vicinal_value: bool = True
-    dc_use_vicinal_actor: bool = True
+    # Percentile scaling of raw kNN statistics into [0, 1] confidences.
+    dcs_percentile_low: float = 5.0
+    dcs_percentile_high: float = 95.0
 
-    # Deprecated smoothing ablation from the previous DC-IQL version. Default 0
-    # because the new proposal replaces smoothing with explicit neighbor pools.
-    dc_vicinal_lambda: float = 0.0
-    dc_vicinal_noise_std: float = 0.01
+    # Gate(s): 0 below the low percentile of J, 1 above the high percentile.
+    # Pooling is only active on the gated (junction-like) part of the data.
+    dcs_gate_low_percentile: float = 60.0
+    dcs_gate_high_percentile: float = 95.0
+
+    # Distance kernel exp(-(d/h)^2) with per-state bandwidth
+    # h_i = dcs_bandwidth_scale * median_j d_ij.
+    dcs_bandwidth_scale: float = 1.0
+
+    # kNN computation controls (mirroring the DC-IQL density cache).
+    dcs_subsample: int = 10_000_000
+    dcs_chunk_size: int = 50_000
+
+    # Coverage profile cache (raw kNN statistics only; post-processing knobs
+    # above never invalidate it). Saved as:
+    #   {dcs_profile_path}/{env}/[seed_{seed}/]coverage_profile_k{dcs_k}.npz
+    dcs_profile_path: Optional[str] = None
+    dcs_force_recompute: bool = False
+    dcs_cache_by_seed: bool = False
+    # -----------------------------------------------------------------------
+
     vf_lr: float = 3e-4
     qf_lr: float = 3e-4
     actor_lr: float = 3e-4
@@ -178,18 +206,15 @@ class TrainConfig:
     n_hidden: int = 2
 
     # Standalone actor refit output directory.
-    # Refit reuses the shared training schedule fields above:
-    #   max_timesteps -> actor-only refit steps
-    #   batch_size    -> actor-only refit batch size
-    #   eval_freq     -> actor-only refit evaluation interval
     actor_refit_dir_name: str = "actor_refit"
 
     # Logging
     project: str = "ORL-BIAS"
-    group: str = "DC-IQL-JAX"
-    name: str = "DC-IQL-JAX"
+    group: str = "DCS-IQL-JAX"
+    name: str = "DCS-IQL-JAX"
     log_wandb: bool = True
     log_every: int = 500
+    save_final_model: bool = False
 
     def __post_init__(self):
         refresh_algorithm_names(self)
@@ -197,8 +222,8 @@ class TrainConfig:
 
 
 def refresh_algorithm_names(config: TrainConfig) -> None:
-    # config.project = "ORL-BIAS"
-    # config.group = f"{ALGORITHM_NAME}-JAX"
+    config.project = "ORL-BIAS"
+    config.group = f"{ALGORITHM_NAME}-JAX"
     config.name = f"{ALGORITHM_NAME}-JAX-{config.env}"
 
 
@@ -214,23 +239,17 @@ def validate_config(config: TrainConfig) -> None:
     assert config.tau >= 0.0 and config.tau <= 1.0
     assert config.beta >= 0.0
     assert config.iql_tau >= 0.0 and config.iql_tau <= 1.0
-    assert config.dc_tau_min >= 0.0 and config.dc_tau_min <= 1.0
-    assert config.dc_tau_max >= 0.0 and config.dc_tau_max <= 1.0
-    assert config.dc_tau_min <= config.dc_tau_max
-    assert config.dc_density_k >= 1
-    assert config.dc_density_subsample >= 1
-    assert config.dc_density_chunk_size >= 1
-    assert config.dc_density_percentile_low >= 0.0 and config.dc_density_percentile_low < config.dc_density_percentile_high
-    assert config.dc_density_percentile_high <= 100.0
-    assert config.dc_action_diversity_percentile_low >= 0.0
-    assert config.dc_action_diversity_percentile_low < config.dc_action_diversity_percentile_high
-    assert config.dc_action_diversity_percentile_high <= 100.0
-    assert config.dc_junction_percentile >= 0.0 and config.dc_junction_percentile <= 100.0
-    assert config.dc_kernel_scale > 0.0
-    if config.dc_density_model_path is not None:
-        assert config.dc_density_model_path != ""
-    assert config.dc_vicinal_lambda >= 0.0
-    assert config.dc_vicinal_noise_std >= 0.0
+    assert config.dcs_k >= 1
+    assert config.dcs_value_neighbor_weight >= 0.0
+    assert config.dcs_actor_neighbor_weight >= 0.0
+    assert config.dcs_diversity_mode in ("action", "displacement", "product")
+    assert 0.0 <= config.dcs_percentile_low < config.dcs_percentile_high <= 100.0
+    assert 0.0 <= config.dcs_gate_low_percentile <= config.dcs_gate_high_percentile <= 100.0
+    assert config.dcs_bandwidth_scale > 0.0
+    assert config.dcs_subsample >= 1
+    assert config.dcs_chunk_size >= 1
+    if config.dcs_profile_path is not None:
+        assert config.dcs_profile_path != ""
     if config.actor_dropout is not None:
         assert config.actor_dropout >= 0.0 and config.actor_dropout < 1.0
     assert config.hidden_dim > 0
@@ -265,7 +284,8 @@ def apply_env_hyperparams(config: TrainConfig) -> TrainConfig:
     Priority is:
         dataclass defaults < hyperparams YAML < explicit CLI flags
 
-    Hyperparameter YAML keys must exactly match TrainConfig field names.
+    Hyperparameter YAML keys must exactly match TrainConfig field names
+    (a few legacy DC-IQL keys are aliased for convenience).
     """
     if not config.use_hyperparams or config.hyperparams_path is None:
         refresh_algorithm_names(config)
@@ -287,7 +307,18 @@ def apply_env_hyperparams(config: TrainConfig) -> TrainConfig:
 
     env_hyperparams = all_hyperparams[config.env] or {}
     cli_overrides = _cli_overridden_fields()
-    aliases = {"n_timesteps": "max_timesteps"}
+    aliases = {
+        "n_timesteps": "max_timesteps",
+        # Legacy DC-IQL keys that map cleanly onto DCS-IQL fields.
+        "dc_density_model_path": "dcs_profile_path",
+        "dc_density_k": "dcs_k",
+        "dc_density_subsample": "dcs_subsample",
+        "dc_density_chunk_size": "dcs_chunk_size",
+        "dc_density_percentile_low": "dcs_percentile_low",
+        "dc_density_percentile_high": "dcs_percentile_high",
+        "dc_density_force_recompute": "dcs_force_recompute",
+        "dc_density_cache_by_seed": "dcs_cache_by_seed",
+    }
     config_fields = set(TrainConfig.__dataclass_fields__.keys())
     applied, skipped_unknown, skipped_cli = [], [], []
     applied_fields = set()
@@ -314,7 +345,7 @@ def apply_env_hyperparams(config: TrainConfig) -> TrainConfig:
     if skipped_cli:
         print(f"Kept CLI overrides for: {', '.join(skipped_cli)}")
     if skipped_unknown:
-        print(f"Ignored unknown hyperparameter keys for IQL: {', '.join(skipped_unknown)}")
+        print(f"Ignored unknown hyperparameter keys for {ALGORITHM_NAME}: {', '.join(skipped_unknown)}")
     return config
 
 
@@ -355,175 +386,9 @@ def normalize_states(states: np.ndarray, mean: Union[np.ndarray, float], std: Un
     return (states - mean) / std
 
 
-
-
-def _percentile_confidence(
-    values: np.ndarray,
-    percentile_low: float,
-    percentile_high: float,
-    high_is_good: bool,
-) -> np.ndarray:
-    """Map a scalar statistic to [0, 1] by percentile clipping."""
-    values = np.asarray(values, dtype=np.float32)
-    lo = np.percentile(values, percentile_low)
-    hi = np.percentile(values, percentile_high)
-    if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
-        return np.ones_like(values, dtype=np.float32)
-    scaled = np.clip((values - lo) / (hi - lo), 0.0, 1.0)
-    if high_is_good:
-        return scaled.astype(np.float32)
-    return (1.0 - scaled).astype(np.float32)
-
-
-def compute_local_coverage_profile(
-    states: np.ndarray,
-    actions: np.ndarray,
-    next_states: np.ndarray,
-    k: int = 10,
-    subsample_size: int = 100_000,
-    chunk_size: int = 50_000,
-    density_percentile_low: float = 5.0,
-    density_percentile_high: float = 95.0,
-    action_diversity_percentile_low: float = 5.0,
-    action_diversity_percentile_high: float = 95.0,
-    junction_percentile: float = 60.0,
-    kernel_scale: float = 1.0,
-    seed: int = 0,
-) -> Dict[str, np.ndarray]:
-    """Build the one-time local coverage profile used by DCS-IQL.
-
-    Returns a dictionary with one scalar profile per transition plus the
-    training-time neighbor pool:
-      - density_confidence rho(s): larger means denser local state coverage.
-      - action_diversity b(s): larger means more diverse neighbor actions.
-      - junction_score J(s)=rho(s)*b(s).
-      - junction_gate: 1 if J(s) is above the selected percentile threshold.
-      - neighbor_indices: [N, k+1], first column is always self.
-      - neighbor_weights: [N, k+1], normalized RBF weights; neighbor columns are
-        zeroed when junction_gate=0, so the pool collapses to self only.
-
-    This implements the memo's proposed shift from "tau(s) as the control
-    variable" to "the expectile target distribution itself as the control
-    variable." Tau can remain global while the Bellman/policy target pool expands
-    only at certified stitching junctions.
-    """
-    states = np.asarray(states, dtype=np.float32)
-    actions = np.asarray(actions, dtype=np.float32)
-    next_states = np.asarray(next_states, dtype=np.float32)
-    n = states.shape[0]
-    k = int(k)
-    if n == 0:
-        empty_1 = np.zeros((0, 1), dtype=np.float32)
-        return {
-            "density_confidence": empty_1,
-            "action_diversity": empty_1,
-            "junction_score": empty_1,
-            "junction_gate": empty_1,
-            "knn_radius": empty_1,
-            "neighbor_indices": np.zeros((0, k + 1), dtype=np.int32),
-            "neighbor_weights": np.zeros((0, k + 1), dtype=np.float32),
-            "junction_threshold": np.asarray(np.nan, dtype=np.float32),
-        }
-
-    try:
-        from scipy.spatial import cKDTree
-    except Exception as exc:
-        raise ImportError(
-            "DCS-IQL requires scipy.spatial.cKDTree for certified stitching profile construction."
-        ) from exc
-
-    rng = np.random.default_rng(seed)
-    ref_size = int(min(n, subsample_size))
-    ref_idx = rng.choice(n, size=ref_size, replace=False) if ref_size < n else np.arange(n)
-    ref_states = states[ref_idx]
-    tree = cKDTree(ref_states)
-
-    # Query a few extra neighbors so self can be removed when the full dataset is
-    # used as the reference set. If the reference set is tiny, padding will fill
-    # missing slots with self and zero distance.
-    query_k = int(min(max(k + 2, 1), ref_size))
-    neighbor_indices = np.empty((n, k), dtype=np.int32)
-    neighbor_distances = np.empty((n, k), dtype=np.float32)
-
-    for start in range(0, n, int(chunk_size)):
-        end = min(start + int(chunk_size), n)
-        distances, ref_positions = tree.query(states[start:end], k=query_k, workers=-1)
-        if query_k == 1:
-            distances = distances[:, None]
-            ref_positions = ref_positions[:, None]
-        candidate_indices = ref_idx[np.asarray(ref_positions, dtype=np.int64)]
-        distances = np.asarray(distances, dtype=np.float32)
-
-        for row, original_i in enumerate(range(start, end)):
-            cand = candidate_indices[row]
-            dist = distances[row]
-            keep = cand != original_i
-            cand = cand[keep]
-            dist = dist[keep]
-            if cand.shape[0] >= k:
-                neighbor_indices[original_i] = cand[:k]
-                neighbor_distances[original_i] = dist[:k]
-            else:
-                fill_n = cand.shape[0]
-                if fill_n > 0:
-                    neighbor_indices[original_i, :fill_n] = cand
-                    neighbor_distances[original_i, :fill_n] = dist
-                neighbor_indices[original_i, fill_n:] = original_i
-                neighbor_distances[original_i, fill_n:] = 0.0
-
-    # Density: smaller kNN radius means higher confidence.
-    knn_radius = np.max(neighbor_distances, axis=1).astype(np.float32)
-    density_confidence = _percentile_confidence(
-        knn_radius,
-        percentile_low=density_percentile_low,
-        percentile_high=density_percentile_high,
-        high_is_good=False,
-    )
-
-    # Local action diversity: trace of the empirical neighbor action covariance.
-    all_neighbor_indices = np.concatenate(
-        [np.arange(n, dtype=np.int32)[:, None], neighbor_indices], axis=1
-    )
-    action_pool = actions[all_neighbor_indices]
-    action_center = np.mean(action_pool, axis=1, keepdims=True)
-    action_diversity_raw = np.mean(
-        np.sum((action_pool - action_center) ** 2, axis=-1), axis=1
-    ).astype(np.float32)
-    action_diversity = _percentile_confidence(
-        action_diversity_raw,
-        percentile_low=action_diversity_percentile_low,
-        percentile_high=action_diversity_percentile_high,
-        high_is_good=True,
-    )
-
-    junction_score = (density_confidence * action_diversity).astype(np.float32)
-    junction_threshold = np.percentile(junction_score, junction_percentile).astype(np.float32)
-    junction_gate = (junction_score >= junction_threshold).astype(np.float32)
-
-    all_distances = np.concatenate(
-        [np.zeros((n, 1), dtype=np.float32), neighbor_distances], axis=1
-    )
-    # Local bandwidth. The max radius is stable and cheap; kernel_scale controls
-    # how quickly neighbors are down-weighted inside the certified pool.
-    bandwidth = np.maximum(knn_radius[:, None] * float(kernel_scale), 1e-6)
-    neighbor_weights = np.exp(-((all_distances / bandwidth) ** 2)).astype(np.float32)
-    neighbor_weights[:, 0] = 1.0
-    neighbor_weights[:, 1:] *= junction_gate[:, None]
-    neighbor_weights = neighbor_weights / np.maximum(
-        np.sum(neighbor_weights, axis=1, keepdims=True), 1e-8
-    )
-
-    return {
-        "density_confidence": density_confidence.reshape(-1, 1).astype(np.float32),
-        "action_diversity": action_diversity.reshape(-1, 1).astype(np.float32),
-        "junction_score": junction_score.reshape(-1, 1).astype(np.float32),
-        "junction_gate": junction_gate.reshape(-1, 1).astype(np.float32),
-        "knn_radius": knn_radius.reshape(-1, 1).astype(np.float32),
-        "neighbor_indices": all_neighbor_indices.astype(np.int32),
-        "neighbor_weights": neighbor_weights.astype(np.float32),
-        "junction_threshold": np.asarray(junction_threshold, dtype=np.float32),
-    }
-
+# ---------------------------------------------------------------------------
+# Coverage profile cache plumbing (mirrors the DC-IQL density cache design)
+# ---------------------------------------------------------------------------
 
 def _safe_path_name(name: str) -> str:
     """Make env names safe for directory paths."""
@@ -532,179 +397,129 @@ def _safe_path_name(name: str) -> str:
 
 def get_coverage_profile_cache_path(config: TrainConfig) -> Optional[Path]:
     """Return the cache file path for the precomputed coverage profile."""
-    if config.dc_density_model_path is None:
+    if config.dcs_profile_path is None:
         return None
 
-    root = Path(config.dc_density_model_path)
+    root = Path(config.dcs_profile_path)
     env_name = _safe_path_name(config.env)
+    filename = f"coverage_profile_k{int(config.dcs_k)}.npz"
 
-    if config.dc_density_cache_by_seed:
-        return root / env_name / f"seed_{config.seed}" / "coverage_profile.npz"
-
-    return root / env_name / "coverage_profile.npz"
-
-
-def _canonicalize_coverage_profile_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
-    """Normalize metadata types for reliable equality checks after JSON load."""
-    canonical = dict(metadata)
-    for key in ("observations_shape", "actions_shape", "next_observations_shape"):
-        if key in canonical:
-            canonical[key] = tuple(canonical[key])
-    return canonical
+    if config.dcs_cache_by_seed:
+        return root / env_name / f"seed_{config.seed}" / filename
+    return root / env_name / filename
 
 
 def build_coverage_profile_metadata(
     config: TrainConfig,
     observations: np.ndarray,
     actions: np.ndarray,
-    next_observations: np.ndarray,
 ) -> Dict[str, Any]:
-    """Metadata that must match before a cached coverage profile can be reused."""
-    return _canonicalize_coverage_profile_metadata(
+    """Metadata that must match before a cached profile can be reused.
+
+    Post-processing knobs (percentiles, diversity mode, gate, bandwidth) are
+    intentionally excluded: they are applied at load time.
+    """
+    return covp.canonicalize_metadata(
         {
-            "cache_version": 2,
+            "cache_version": covp.COVERAGE_CACHE_VERSION,
             "env": config.env,
-            "seed": int(config.seed) if config.dc_density_cache_by_seed else None,
+            "seed": int(config.seed) if config.dcs_cache_by_seed else None,
             "normalize": bool(config.normalize),
             "observations_shape": tuple(observations.shape),
-            "actions_shape": tuple(actions.shape),
-            "next_observations_shape": tuple(next_observations.shape),
             "observations_dtype": str(np.asarray(observations).dtype),
-            "actions_dtype": str(np.asarray(actions).dtype),
-            "dc_density_k": int(config.dc_density_k),
-            "dc_density_subsample": int(config.dc_density_subsample),
-            "dc_density_chunk_size": int(config.dc_density_chunk_size),
-            "dc_density_percentile_low": float(config.dc_density_percentile_low),
-            "dc_density_percentile_high": float(config.dc_density_percentile_high),
-            "dc_action_diversity_percentile_low": float(config.dc_action_diversity_percentile_low),
-            "dc_action_diversity_percentile_high": float(config.dc_action_diversity_percentile_high),
-            "dc_junction_percentile": float(config.dc_junction_percentile),
-            "dc_kernel_scale": float(config.dc_kernel_scale),
+            "actions_shape": tuple(actions.shape),
+            "dcs_k": int(config.dcs_k),
+            "dcs_subsample": int(config.dcs_subsample),
+            "dcs_chunk_size": int(config.dcs_chunk_size),
         }
     )
-
-
-def load_coverage_profile_cache(
-    cache_path: Path,
-    expected_metadata: Dict[str, Any],
-) -> Optional[Dict[str, np.ndarray]]:
-    """Load coverage profile if the cache exists and metadata matches."""
-    if not cache_path.exists():
-        return None
-
-    try:
-        payload = np.load(cache_path, allow_pickle=False)
-        saved_metadata_raw = payload["metadata"]
-        if hasattr(saved_metadata_raw, "item"):
-            saved_metadata_raw = saved_metadata_raw.item()
-        saved_metadata = _canonicalize_coverage_profile_metadata(json.loads(str(saved_metadata_raw)))
-        expected_metadata = _canonicalize_coverage_profile_metadata(expected_metadata)
-
-        if saved_metadata != expected_metadata:
-            print(f"Coverage profile cache metadata mismatch. Recomputing profile: {cache_path}")
-            print(f"Saved metadata:    {saved_metadata}")
-            print(f"Expected metadata: {expected_metadata}")
-            return None
-
-        expected_n = int(expected_metadata["observations_shape"][0])
-        expected_k = int(expected_metadata["dc_density_k"]) + 1
-        profile = {
-            "density_confidence": np.asarray(payload["density_confidence"], dtype=np.float32),
-            "action_diversity": np.asarray(payload["action_diversity"], dtype=np.float32),
-            "junction_score": np.asarray(payload["junction_score"], dtype=np.float32),
-            "junction_gate": np.asarray(payload["junction_gate"], dtype=np.float32),
-            "knn_radius": np.asarray(payload["knn_radius"], dtype=np.float32),
-            "neighbor_indices": np.asarray(payload["neighbor_indices"], dtype=np.int32),
-            "neighbor_weights": np.asarray(payload["neighbor_weights"], dtype=np.float32),
-            "junction_threshold": np.asarray(payload["junction_threshold"], dtype=np.float32),
-        }
-        if profile["density_confidence"].shape != (expected_n, 1):
-            print("Coverage profile density shape mismatch. Recomputing profile.")
-            return None
-        if profile["neighbor_indices"].shape != (expected_n, expected_k):
-            print("Coverage profile neighbor index shape mismatch. Recomputing profile.")
-            return None
-        if profile["neighbor_weights"].shape != (expected_n, expected_k):
-            print("Coverage profile neighbor weight shape mismatch. Recomputing profile.")
-            return None
-
-        print(f"Loaded coverage profile from: {cache_path}")
-        return profile
-
-    except Exception as exc:
-        print(f"Failed to load coverage profile cache from {cache_path}: {exc}")
-        print("Recomputing coverage profile.")
-        return None
-
-
-def save_coverage_profile_cache(
-    cache_path: Path,
-    profile: Dict[str, np.ndarray],
-    metadata: Dict[str, Any],
-) -> None:
-    """Save precomputed coverage profile and the metadata needed for reuse."""
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
-        cache_path,
-        density_confidence=np.asarray(profile["density_confidence"], dtype=np.float32),
-        action_diversity=np.asarray(profile["action_diversity"], dtype=np.float32),
-        junction_score=np.asarray(profile["junction_score"], dtype=np.float32),
-        junction_gate=np.asarray(profile["junction_gate"], dtype=np.float32),
-        knn_radius=np.asarray(profile["knn_radius"], dtype=np.float32),
-        neighbor_indices=np.asarray(profile["neighbor_indices"], dtype=np.int32),
-        neighbor_weights=np.asarray(profile["neighbor_weights"], dtype=np.float32),
-        junction_threshold=np.asarray(profile["junction_threshold"], dtype=np.float32),
-        metadata=json.dumps(_canonicalize_coverage_profile_metadata(metadata)),
-    )
-    print(f"Saved coverage profile to: {cache_path}")
 
 
 def load_or_compute_coverage_profile(
     config: TrainConfig,
-    observations: np.ndarray,
-    actions: np.ndarray,
-    next_observations: np.ndarray,
+    dataset: Dict[str, np.ndarray],
 ) -> Dict[str, np.ndarray]:
-    """Load cached local coverage profile, or compute and save it."""
+    """Load the cached coverage profile, or compute and save it when the cache
+    is missing/stale. Observations are expected to be already normalized."""
     cache_path = get_coverage_profile_cache_path(config)
-    metadata = build_coverage_profile_metadata(config, observations, actions, next_observations)
+    metadata = build_coverage_profile_metadata(
+        config, dataset["observations"], dataset["actions"]
+    )
 
-    if cache_path is not None and not config.dc_density_force_recompute:
-        cached_profile = load_coverage_profile_cache(
-            cache_path=cache_path,
-            expected_metadata=metadata,
-        )
-        if cached_profile is not None:
-            return cached_profile
+    if cache_path is not None and not config.dcs_force_recompute:
+        cached = covp.load_coverage_profile_cache(cache_path, metadata)
+        if cached is not None:
+            return cached
 
-    if cache_path is not None and config.dc_density_force_recompute:
-        print(f"Ignoring existing coverage profile cache because dc_density_force_recompute=True: {cache_path}")
+    if cache_path is not None and config.dcs_force_recompute:
+        print(f"Ignoring existing coverage cache because dcs_force_recompute=True: {cache_path}")
 
-    print("Computing one-time local coverage profile for DCS-IQL...")
-    profile = compute_local_coverage_profile(
-        states=observations,
-        actions=actions,
-        next_states=next_observations,
-        k=config.dc_density_k,
-        subsample_size=config.dc_density_subsample,
-        chunk_size=config.dc_density_chunk_size,
-        density_percentile_low=config.dc_density_percentile_low,
-        density_percentile_high=config.dc_density_percentile_high,
-        action_diversity_percentile_low=config.dc_action_diversity_percentile_low,
-        action_diversity_percentile_high=config.dc_action_diversity_percentile_high,
-        junction_percentile=config.dc_junction_percentile,
-        kernel_scale=config.dc_kernel_scale,
+    print(f"Computing one-time coverage profile for {ALGORITHM_NAME} (k={config.dcs_k})...")
+    profile = covp.compute_coverage_profile(
+        observations=dataset["observations"],
+        actions=dataset["actions"],
+        next_observations=dataset["next_observations"],
+        k=config.dcs_k,
+        subsample_size=config.dcs_subsample,
+        chunk_size=config.dcs_chunk_size,
         seed=config.seed,
     )
 
     if cache_path is not None:
-        save_coverage_profile_cache(
-            cache_path=cache_path,
-            profile=profile,
-            metadata=metadata,
-        )
+        covp.save_coverage_profile_cache(cache_path, profile, metadata)
 
     return profile
+
+
+def build_neighbor_weights(
+    config: TrainConfig,
+    profile: Dict[str, np.ndarray],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Post-process raw kNN statistics into per-transition training inputs.
+
+    Returns:
+        neighbor_indices (N, k) int32
+        neighbor_weights (N, k) float32 = gate(J(s_i)) * exp(-(d_ij/h_i)^2)
+        junction         (N,)   float32 (for logging/diagnostics)
+    """
+    density_conf = covp.percentile_confidence(
+        profile["knn_radius"],
+        config.dcs_percentile_low,
+        config.dcs_percentile_high,
+        invert=True,
+    )
+    action_div_conf = covp.percentile_confidence(
+        profile["action_spread"],
+        config.dcs_percentile_low,
+        config.dcs_percentile_high,
+    )
+    disp_div_conf = covp.percentile_confidence(
+        profile["disp_dispersion"],
+        config.dcs_percentile_low,
+        config.dcs_percentile_high,
+    )
+    junction = covp.build_junction_score(
+        density_conf, action_div_conf, disp_div_conf, config.dcs_diversity_mode
+    )
+    gate = covp.gate_from_junction(
+        junction, config.dcs_gate_low_percentile, config.dcs_gate_high_percentile
+    )
+    kernel = covp.neighbor_kernel_weights(
+        profile["neighbor_distances"], config.dcs_bandwidth_scale
+    )
+    neighbor_weights = (gate[:, None] * kernel).astype(np.float32)
+
+    print(
+        "Coverage profile | "
+        + covp.summarize_profile(
+            density_conf, action_div_conf, disp_div_conf, junction, gate
+        )
+    )
+    return (
+        profile["neighbor_indices"].astype(np.int32),
+        neighbor_weights,
+        junction.astype(np.float32),
+    )
 
 
 class TransformEnv:
@@ -812,16 +627,28 @@ def step_env(env: gym.Env, action: np.ndarray):
     return next_state, reward, bool(done), info
 
 
-
 class ReplayBuffer:
+    """Replay buffer extended with the precomputed kNN graph.
+
+    For every stored transition i it additionally holds:
+      - neighbor_indices[i]: (k,) int32 indices of i's nearest dataset states
+      - neighbor_weights[i]: (k,) float32 gate(J(s_i)) * kernel(d_ij) in [0, 1]
+      - junction[i]:         (1,) float32 J(s_i) for logging
+
+    sample() gathers the neighbors' (s_j, a_j) so the trainer can evaluate
+    in-sample target-Q values on the whole pool in one batched forward pass.
+    """
+
     def __init__(
         self,
         state_dim: int,
         action_dim: int,
         buffer_size: int,
+        neighbor_k: int,
         device: Any,
     ):
         self._buffer_size = buffer_size
+        self._neighbor_k = int(neighbor_k)
         self._pointer = 0
         self._size = 0
         self._states = np.zeros((buffer_size, state_dim), dtype=np.float32)
@@ -829,23 +656,17 @@ class ReplayBuffer:
         self._rewards = np.zeros((buffer_size, 1), dtype=np.float32)
         self._next_states = np.zeros((buffer_size, state_dim), dtype=np.float32)
         self._dones = np.zeros((buffer_size, 1), dtype=np.float32)
-
-        # Local coverage profile fields. Defaults collapse the vicinal pool to
-        # self only, making the algorithm exactly standard IQL when no profile is
-        # provided or the corresponding switches are disabled.
-        self._density_confidences = np.ones((buffer_size, 1), dtype=np.float32)
-        self._action_diversities = np.zeros((buffer_size, 1), dtype=np.float32)
-        self._junction_scores = np.zeros((buffer_size, 1), dtype=np.float32)
-        self._junction_gates = np.zeros((buffer_size, 1), dtype=np.float32)
-        self._neighbor_indices = np.zeros((buffer_size, 1), dtype=np.int32)
-        self._neighbor_weights = np.ones((buffer_size, 1), dtype=np.float32)
+        self._neighbor_indices = np.zeros((buffer_size, self._neighbor_k), dtype=np.int32)
+        self._neighbor_weights = np.zeros((buffer_size, self._neighbor_k), dtype=np.float32)
+        self._junction = np.zeros((buffer_size, 1), dtype=np.float32)
         self._device = device
 
     def load_d4rl_dataset(
         self,
         data: Dict[str, np.ndarray],
-        coverage_profile: Optional[Dict[str, np.ndarray]] = None,
-        coverage: Optional[np.ndarray] = None,
+        neighbor_indices: Optional[np.ndarray] = None,
+        neighbor_weights: Optional[np.ndarray] = None,
+        junction: Optional[np.ndarray] = None,
     ):
         if self._size != 0:
             raise ValueError("Trying to load data into non-empty replay buffer")
@@ -860,77 +681,54 @@ class ReplayBuffer:
         done_values = 1.0 - data["masks"] if "masks" in data else data["terminals"]
         self._dones[:n_transitions] = done_values[..., None].astype(np.float32)
 
-        self_indices = np.arange(n_transitions, dtype=np.int32).reshape(-1, 1)
-        self._neighbor_indices[:n_transitions] = self_indices
-        self._neighbor_weights[:n_transitions] = 1.0
+        if neighbor_indices is None:
+            # DCS disabled: pool collapses onto the sample itself (weights 0),
+            # which makes the trainer reduce exactly to standard IQL.
+            neighbor_indices = np.tile(
+                np.arange(n_transitions, dtype=np.int32)[:, None], (1, self._neighbor_k)
+            )
+            neighbor_weights = np.zeros((n_transitions, self._neighbor_k), dtype=np.float32)
+            junction = np.zeros((n_transitions,), dtype=np.float32)
 
-        if coverage_profile is not None:
-            required = [
-                "density_confidence",
-                "action_diversity",
-                "junction_score",
-                "junction_gate",
-                "neighbor_indices",
-                "neighbor_weights",
-            ]
-            for key in required:
-                if key not in coverage_profile:
-                    raise KeyError(f"coverage_profile is missing required key: {key}")
+        neighbor_indices = np.asarray(neighbor_indices, dtype=np.int32)
+        neighbor_weights = np.asarray(neighbor_weights, dtype=np.float32)
+        junction = np.asarray(junction, dtype=np.float32).reshape(-1)
+        if neighbor_indices.shape != (n_transitions, self._neighbor_k):
+            raise ValueError(
+                f"neighbor_indices must have shape {(n_transitions, self._neighbor_k)}, "
+                f"got {neighbor_indices.shape}"
+            )
+        if neighbor_weights.shape != (n_transitions, self._neighbor_k):
+            raise ValueError(
+                f"neighbor_weights must have shape {(n_transitions, self._neighbor_k)}, "
+                f"got {neighbor_weights.shape}"
+            )
+        if junction.shape[0] != n_transitions:
+            raise ValueError("junction must have one scalar per transition")
+        if neighbor_indices.min() < 0 or neighbor_indices.max() >= n_transitions:
+            raise ValueError("neighbor_indices out of range for the loaded dataset")
 
-            density_confidence = np.asarray(coverage_profile["density_confidence"], dtype=np.float32).reshape(-1, 1)
-            action_diversity = np.asarray(coverage_profile["action_diversity"], dtype=np.float32).reshape(-1, 1)
-            junction_score = np.asarray(coverage_profile["junction_score"], dtype=np.float32).reshape(-1, 1)
-            junction_gate = np.asarray(coverage_profile["junction_gate"], dtype=np.float32).reshape(-1, 1)
-            neighbor_indices = np.asarray(coverage_profile["neighbor_indices"], dtype=np.int32)
-            neighbor_weights = np.asarray(coverage_profile["neighbor_weights"], dtype=np.float32)
-
-            if density_confidence.shape[0] != n_transitions:
-                raise ValueError("density_confidence must have one scalar per transition")
-            if neighbor_indices.shape[0] != n_transitions:
-                raise ValueError("neighbor_indices must have one row per transition")
-            if neighbor_weights.shape != neighbor_indices.shape:
-                raise ValueError("neighbor_weights must have the same shape as neighbor_indices")
-            if np.min(neighbor_indices) < 0 or np.max(neighbor_indices) >= n_transitions:
-                raise ValueError("coverage_profile neighbor_indices contain out-of-range entries")
-
-            neighbor_count = neighbor_indices.shape[1]
-            self._neighbor_indices = np.zeros((self._buffer_size, neighbor_count), dtype=np.int32)
-            self._neighbor_weights = np.zeros((self._buffer_size, neighbor_count), dtype=np.float32)
-            self._neighbor_indices[:n_transitions] = neighbor_indices
-            self._neighbor_weights[:n_transitions] = neighbor_weights
-            self._density_confidences[:n_transitions] = density_confidence
-            self._action_diversities[:n_transitions] = action_diversity
-            self._junction_scores[:n_transitions] = junction_score
-            self._junction_gates[:n_transitions] = junction_gate
-        elif coverage is not None:
-            # Backward-compatible fallback for old density-confidence arrays.
-            coverage = np.asarray(coverage, dtype=np.float32).reshape(-1, 1)
-            if coverage.shape[0] != n_transitions:
-                raise ValueError("coverage must have one scalar per transition")
-            self._density_confidences[:n_transitions] = coverage
+        self._neighbor_indices[:n_transitions] = neighbor_indices
+        self._neighbor_weights[:n_transitions] = np.clip(neighbor_weights, 0.0, 1.0)
+        self._junction[:n_transitions] = junction[:, None]
 
         self._size += n_transitions
         self._pointer = min(self._size, n_transitions)
-        print(f"Dataset size: {n_transitions}")
-        print(f"Vicinal pool size: {self._neighbor_indices.shape[1]}")
+        print(f"Dataset size: {n_transitions} (kNN pool k={self._neighbor_k})")
 
     def sample(self, batch_size: int) -> TensorBatch:
         indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
-        neighbor_indices = self._neighbor_indices[indices]
+        nbr_idx = self._neighbor_indices[indices]  # (B, k)
         batch = {
             "observations": self._states[indices],
             "actions": self._actions[indices],
             "rewards": self._rewards[indices],
             "next_observations": self._next_states[indices],
             "dones": self._dones[indices],
-            "density_confidences": self._density_confidences[indices],
-            "action_diversities": self._action_diversities[indices],
-            "junction_scores": self._junction_scores[indices],
-            "junction_gates": self._junction_gates[indices],
-            "neighbor_indices": neighbor_indices,
-            "neighbor_weights": self._neighbor_weights[indices],
-            "neighbor_observations": self._states[neighbor_indices],
-            "neighbor_actions": self._actions[neighbor_indices],
+            "neighbor_observations": self._states[nbr_idx],   # (B, k, Ds)
+            "neighbor_actions": self._actions[nbr_idx],       # (B, k, Da)
+            "neighbor_weights": self._neighbor_weights[indices],  # (B, k)
+            "junction": self._junction[indices],              # (B, 1)
         }
         return tree_to_device({k: jnp.asarray(v) for k, v in batch.items()}, self._device)
 
@@ -1047,7 +845,7 @@ def return_reward_range(dataset, max_episode_steps):
 
 
 def modify_reward(dataset, env_name, max_episode_steps=1000):
-    # Preserves the reward preprocessing from the provided PyTorch IQL code.
+    # Preserves the reward preprocessing from the original IQL code.
     if any(s in env_name for s in ("halfcheetah", "hopper", "walker2d")):
         min_ret, max_ret = return_reward_range(dataset, max_episode_steps)
         dataset["rewards"] /= max_ret - min_ret
@@ -1168,12 +966,13 @@ class ActorState:
     key: jnp.ndarray
 
 
-class IQLJAX:
+class DCSIQLJAX:
     """Density-Certified Stitching IQL in JAX/Flax.
 
-    Q learning remains standard IQL, while V and actor extraction can use a
-    certified local neighbor pool built from the dataset coverage profile.
-    Experiment-management code follows the CDAF_JAX file style.
+    Q-function training and the overall update sequencing mirror IQL. The two
+    departures are the Vicinal Bellman Backup in the value loss and Vicinal
+    AWR in policy extraction (see the module docstring). With all neighbor
+    weights at zero both reduce exactly to standard IQL.
     """
 
     def __init__(
@@ -1190,13 +989,8 @@ class IQLJAX:
         beta: float = 3.0,
         iql_tau: float = 0.7,
         iql_deterministic: bool = False,
-        dc_tau_min: float = 0.7,
-        dc_tau_max: float = 0.9,
-        dc_use_state_tau: bool = False,
-        dc_use_vicinal_value: bool = True,
-        dc_use_vicinal_actor: bool = True,
-        dc_vicinal_lambda: float = 0.0,
-        dc_vicinal_noise_std: float = 0.01,
+        dcs_value_neighbor_weight: float = 1.0,
+        dcs_actor_neighbor_weight: float = 1.0,
         actor_dropout: Optional[float] = None,
         hidden_dim: int = 256,
         n_hidden: int = 2,
@@ -1211,13 +1005,8 @@ class IQLJAX:
         self.tau = tau
         self.beta = beta
         self.iql_tau = iql_tau
-        self.dc_tau_min = dc_tau_min
-        self.dc_tau_max = dc_tau_max
-        self.dc_use_state_tau = dc_use_state_tau
-        self.dc_use_vicinal_value = dc_use_vicinal_value
-        self.dc_use_vicinal_actor = dc_use_vicinal_actor
-        self.dc_vicinal_lambda = dc_vicinal_lambda
-        self.dc_vicinal_noise_std = dc_vicinal_noise_std
+        self.dcs_value_neighbor_weight = float(dcs_value_neighbor_weight)
+        self.dcs_actor_neighbor_weight = float(dcs_actor_neighbor_weight)
         self.iql_deterministic = iql_deterministic
         self.actor_dropout = actor_dropout
         self.hidden_dim = int(hidden_dim)
@@ -1297,6 +1086,35 @@ class IQLJAX:
             )
         return self.actor_def.apply({"params": actor_params}, observations, training=training)
 
+    @staticmethod
+    def _build_pool(batch: TensorBatch) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        """Stack the sample itself with its kNN neighbors.
+
+        Returns:
+            pool_observations (B, 1+K, Ds)  [:, 0] is the sample itself
+            pool_actions      (B, 1+K, Da)
+            neighbor_weights  (B, K) clipped to [0, 1]
+        """
+        observations = batch["observations"]
+        actions = batch["actions"]
+        neighbor_observations = batch["neighbor_observations"]
+        neighbor_actions = batch["neighbor_actions"]
+        neighbor_weights = jnp.clip(batch["neighbor_weights"], 0.0, 1.0)
+        pool_observations = jnp.concatenate(
+            [observations[:, None, :], neighbor_observations], axis=1
+        )
+        pool_actions = jnp.concatenate([actions[:, None, :], neighbor_actions], axis=1)
+        return pool_observations, pool_actions, neighbor_weights
+
+    @staticmethod
+    def _pool_weights(neighbor_weights: jnp.ndarray, neighbor_scale: float) -> jnp.ndarray:
+        """Normalized pool weights: self gets mass 1, neighbor j gets
+        neighbor_scale * w_ij, then the row is normalized to sum to 1.
+        neighbor_scale = 0 or w = 0 recovers the plain single-sample loss."""
+        ones = jnp.ones_like(neighbor_weights[:, :1])
+        w = jnp.concatenate([ones, neighbor_scale * neighbor_weights], axis=1)
+        return w / jnp.sum(w, axis=1, keepdims=True)
+
     def _build_train_step(self):
         q_apply = self.q_def.apply
         v_apply = self.v_def.apply
@@ -1307,16 +1125,13 @@ class IQLJAX:
         tau = self.tau
         beta = self.beta
         iql_tau = self.iql_tau
-        dc_tau_min = self.dc_tau_min
-        dc_tau_max = self.dc_tau_max
-        dc_use_state_tau = self.dc_use_state_tau
-        dc_use_vicinal_value = self.dc_use_vicinal_value
-        dc_use_vicinal_actor = self.dc_use_vicinal_actor
-        dc_vicinal_lambda = self.dc_vicinal_lambda
-        dc_vicinal_noise_std = self.dc_vicinal_noise_std
+        value_neighbor_weight = self.dcs_value_neighbor_weight
+        actor_neighbor_weight = self.dcs_actor_neighbor_weight
         iql_deterministic = self.iql_deterministic
         use_dropout = self.actor_dropout is not None
         actor_apply_fn = self.actor_def.apply
+        build_pool = self._build_pool
+        pool_weights = self._pool_weights
 
         def apply_actor(actor_params: Any, observations: jnp.ndarray, training: bool, rng: Optional[jnp.ndarray] = None):
             if use_dropout and training:
@@ -1336,91 +1151,49 @@ class IQLJAX:
             rewards = jnp.squeeze(batch["rewards"], axis=-1)
             next_observations = batch["next_observations"]
             dones = jnp.squeeze(batch["dones"], axis=-1)
+            junction = jnp.squeeze(batch["junction"], axis=-1)
 
-            density_conf = jnp.squeeze(
-                batch.get("density_confidences", jnp.ones_like(batch["dones"])), axis=-1
-            )
-            action_diversity = jnp.squeeze(
-                batch.get("action_diversities", jnp.zeros_like(batch["dones"])), axis=-1
-            )
-            junction_scores = jnp.squeeze(
-                batch.get("junction_scores", jnp.zeros_like(batch["dones"])), axis=-1
-            )
-            junction_gates = jnp.squeeze(
-                batch.get("junction_gates", jnp.zeros_like(batch["dones"])), axis=-1
-            )
-            density_conf = jnp.clip(density_conf, 0.0, 1.0)
-            action_diversity = jnp.clip(action_diversity, 0.0, 1.0)
-            junction_scores = jnp.clip(junction_scores, 0.0, 1.0)
-            junction_gates = jnp.clip(junction_gates, 0.0, 1.0)
+            pool_observations, pool_actions, neighbor_weights = build_pool(batch)
+            batch_size = pool_observations.shape[0]
+            pool_size = pool_observations.shape[1]
+            flat_pool_obs = pool_observations.reshape(batch_size * pool_size, -1)
+            flat_pool_act = pool_actions.reshape(batch_size * pool_size, -1)
 
-            neighbor_observations = batch.get("neighbor_observations", observations[:, None, :])
-            neighbor_actions = batch.get("neighbor_actions", actions[:, None, :])
-            neighbor_weights = batch.get(
-                "neighbor_weights",
-                jnp.ones((observations.shape[0], 1), dtype=observations.dtype),
-            )
-            neighbor_weights = neighbor_weights / jnp.maximum(
-                jnp.sum(neighbor_weights, axis=1, keepdims=True), 1e-8
-            )
-            self_only_weights = jnp.zeros_like(neighbor_weights).at[:, 0].set(1.0)
-            value_pool_weights = neighbor_weights if dc_use_vicinal_value else self_only_weights
-            actor_pool_weights = neighbor_weights if dc_use_vicinal_actor else self_only_weights
+            # In-sample pool of target Q values. Only dataset (s_j, a_j) pairs
+            # are ever queried: IQL's no-OOD-action-query property is intact.
+            tq1, tq2 = q_apply({"params": state.q_target_params}, flat_pool_obs, flat_pool_act)
+            pool_target_q = jnp.minimum(tq1, tq2).reshape(batch_size, pool_size)
 
-            batch_iql_tau = jnp.full_like(density_conf, iql_tau)
-            if dc_use_state_tau:
-                batch_iql_tau = dc_tau_min + (dc_tau_max - dc_tau_min) * density_conf
+            w_value = pool_weights(neighbor_weights, value_neighbor_weight)
+            w_actor = pool_weights(neighbor_weights, actor_neighbor_weight)
 
-            # Values used by multiple losses are computed from the old state,
-            # matching the sequencing of the provided PyTorch IQL implementation.
+            # Quantities computed from the old state, matching IQL sequencing.
             next_v = v_apply({"params": state.v_params}, next_observations)
             target_q_for_backup = rewards + (1.0 - dones) * discount * next_v
-
-            batch_size, pool_size = neighbor_weights.shape
-            flat_neighbor_observations = neighbor_observations.reshape((-1, neighbor_observations.shape[-1]))
-            flat_neighbor_actions = neighbor_actions.reshape((-1, neighbor_actions.shape[-1]))
-            neighbor_q1, neighbor_q2 = q_apply(
-                {"params": state.q_target_params},
-                flat_neighbor_observations,
-                flat_neighbor_actions,
-            )
-            neighbor_target_q = jnp.minimum(neighbor_q1, neighbor_q2).reshape((batch_size, pool_size))
-
-            target_q_for_v_self = neighbor_target_q[:, 0]
             old_v = v_apply({"params": state.v_params}, observations)
-            adv = target_q_for_v_self - old_v
 
-            # DCS-IQL value update:
-            # V(s_i) is regressed against a certified pool of real dataset
-            # neighbor backups Q(s_j, a_j). When J(s_i) is low, preprocessing has
-            # already collapsed neighbor_weights to self-only. This implements
-            # explicit local stitching without pushing tau toward 1.
-            v_noise_key, actor_rng_key = jax.random.split(state.actor_key)
+            self_target_q = pool_target_q[:, 0]
+            adv = self_target_q - old_v
+            adv_pool = pool_target_q - old_v[:, None]
+            exp_adv_pool = jnp.minimum(
+                jnp.exp(beta * jax.lax.stop_gradient(adv_pool)), EXP_ADV_MAX
+            )
 
+            # ----- Vicinal Bellman Backup: expectile over the certified pool.
             def v_loss_fn(v_params):
                 v = v_apply({"params": v_params}, observations)
-                value_adv = jax.lax.stop_gradient(neighbor_target_q) - v[:, None]
-                value_weight = jnp.abs(batch_iql_tau[:, None] - (value_adv < 0.0).astype(jnp.float32))
-                per_neighbor_loss = value_weight * value_adv ** 2
-                expectile_loss = jnp.mean(jnp.sum(value_pool_weights * per_neighbor_loss, axis=1))
+                diff = jax.lax.stop_gradient(pool_target_q) - v[:, None]
+                expectile_weight = jnp.abs(iql_tau - (diff < 0.0).astype(jnp.float32))
+                value_loss = jnp.mean(
+                    jnp.sum(w_value * expectile_weight * diff ** 2, axis=1)
+                )
+                return value_loss, v
 
-                # Deprecated ablation from the old DC-IQL version. Kept only for
-                # compatibility; the new method should normally use lambda=0.
-                noise = jax.random.normal(v_noise_key, observations.shape, dtype=observations.dtype)
-                noise = noise * dc_vicinal_noise_std * density_conf[:, None]
-                perturbed_observations = observations + noise
-                v_perturbed = v_apply({"params": v_params}, perturbed_observations)
-                v_anchor = jax.lax.stop_gradient(old_v)
-                smoothing_loss = jnp.mean(density_conf * (v_perturbed - v_anchor) ** 2)
-                value_loss = expectile_loss + dc_vicinal_lambda * smoothing_loss
-                return value_loss, (v, expectile_loss, smoothing_loss)
-
-            (value_loss, (v, expectile_loss, smoothing_loss)), v_grads = jax.value_and_grad(
-                v_loss_fn, has_aux=True
-            )(state.v_params)
+            (value_loss, v), v_grads = jax.value_and_grad(v_loss_fn, has_aux=True)(state.v_params)
             v_updates, v_opt_state = v_tx.update(v_grads, state.v_opt_state, state.v_params)
             v_params = optax.apply_updates(state.v_params, v_updates)
 
+            # ----- Q update: standard IQL TD backup (unchanged).
             def q_loss_fn(q_params):
                 q1, q2 = q_apply({"params": q_params}, observations, actions)
                 target = jax.lax.stop_gradient(target_q_for_backup)
@@ -1432,32 +1205,29 @@ class IQLJAX:
             q_params = optax.apply_updates(state.q_params, q_updates)
             q_target_params = soft_update(q_params, state.q_target_params, tau)
 
-            actor_adv = neighbor_target_q - old_v[:, None]
-            exp_adv = jnp.minimum(jnp.exp(beta * jax.lax.stop_gradient(actor_adv)), EXP_ADV_MAX)
-            actor_key, dropout_key = jax.random.split(actor_rng_key)
+            actor_key, dropout_key = jax.random.split(state.actor_key)
 
+            # ----- Vicinal AWR: extract pi from the same certified pool.
             def actor_loss_fn(actor_params):
                 policy_out = apply_actor(actor_params, observations, training=True, rng=dropout_key)
                 if iql_deterministic:
-                    bc_losses = jnp.sum((policy_out[:, None, :] - neighbor_actions) ** 2, axis=-1)
+                    bc_pool = jnp.sum((policy_out[:, None, :] - pool_actions) ** 2, axis=-1)
                     policy_mean = policy_out
                     log_std_mean = jnp.asarray(np.nan, dtype=jnp.float32)
                 else:
                     mean, log_std = policy_out
                     std = jnp.exp(log_std)
-                    log_prob = -0.5 * (
-                        ((neighbor_actions - mean[:, None, :]) / std) ** 2
-                        + 2.0 * log_std
-                        + jnp.log(2.0 * jnp.pi)
-                    )
-                    bc_losses = -jnp.sum(log_prob, axis=-1)
+                    diff_a = (pool_actions - mean[:, None, :]) / std
+                    log_prob = -0.5 * (diff_a ** 2 + 2.0 * log_std + jnp.log(2.0 * jnp.pi))
+                    bc_pool = -jnp.sum(log_prob, axis=-1)
                     policy_mean = mean
                     log_std_mean = jnp.mean(log_std)
-                weighted_bc = actor_pool_weights * jax.lax.stop_gradient(exp_adv) * bc_losses
-                actor_loss = jnp.mean(jnp.sum(weighted_bc, axis=1))
-                return actor_loss, (bc_losses, policy_mean, log_std_mean)
+                actor_loss = jnp.mean(
+                    jnp.sum(w_actor * jax.lax.stop_gradient(exp_adv_pool) * bc_pool, axis=1)
+                )
+                return actor_loss, (bc_pool, policy_mean, log_std_mean)
 
-            (actor_loss, (bc_losses, policy_mean, log_std_mean)), actor_grads = jax.value_and_grad(
+            (actor_loss, (bc_pool, policy_mean, log_std_mean)), actor_grads = jax.value_and_grad(
                 actor_loss_fn, has_aux=True
             )(state.actor_params)
             actor_updates, actor_opt_state = actor_tx.update(
@@ -1485,28 +1255,25 @@ class IQLJAX:
                 "q2_mean": jnp.mean(q2),
                 "target_q_mean": jnp.mean(target_q_for_backup),
                 "value_loss": value_loss,
-                "value_expectile_loss": expectile_loss,
-                "value_smoothing_loss": smoothing_loss,
-                "density_conf_mean": jnp.mean(density_conf),
-                "density_conf_min": jnp.min(density_conf),
-                "density_conf_max": jnp.max(density_conf),
-                "action_diversity_mean": jnp.mean(action_diversity),
-                "junction_score_mean": jnp.mean(junction_scores),
-                "junction_gate_mean": jnp.mean(junction_gates),
-                "vicinal_pool_size": jnp.asarray(pool_size, dtype=jnp.float32),
-                "vicinal_effective_pool_size": jnp.mean(1.0 / jnp.maximum(jnp.sum(neighbor_weights ** 2, axis=1), 1e-8)),
-                "iql_tau_mean": jnp.mean(batch_iql_tau),
-                "iql_tau_min": jnp.min(batch_iql_tau),
-                "iql_tau_max": jnp.max(batch_iql_tau),
                 "v_mean": jnp.mean(v),
                 "adv_mean": jnp.mean(adv),
                 "adv_min": jnp.min(adv),
                 "adv_max": jnp.max(adv),
-                "exp_adv_mean": jnp.mean(jnp.sum(actor_pool_weights * exp_adv, axis=1)),
+                "exp_adv_mean": jnp.mean(exp_adv_pool[:, 0]),
                 "actor_loss": actor_loss,
-                "bc_loss_mean": jnp.mean(jnp.sum(actor_pool_weights * bc_losses, axis=1)),
+                "bc_loss_mean": jnp.mean(bc_pool[:, 0]),
                 "policy_mean": jnp.mean(policy_mean),
                 "policy_log_std_mean": log_std_mean,
+                # DCS diagnostics
+                "pool_target_q_mean": jnp.mean(pool_target_q),
+                "pool_neighbor_mass_value": jnp.mean(jnp.sum(w_value[:, 1:], axis=1)),
+                "pool_neighbor_mass_actor": jnp.mean(jnp.sum(w_actor[:, 1:], axis=1)),
+                "neighbor_weight_mean": jnp.mean(neighbor_weights),
+                "gate_active_frac": jnp.mean(
+                    (jnp.max(neighbor_weights, axis=1) > 0.0).astype(jnp.float32)
+                ),
+                "junction_mean": jnp.mean(junction),
+                "junction_max": jnp.max(junction),
             }
             return new_state, log_dict
 
@@ -1555,10 +1322,12 @@ class IQLJAX:
         v_apply = self.v_def.apply
         actor_tx = self.actor_tx
         beta = self.beta
-        dc_use_vicinal_actor = self.dc_use_vicinal_actor
+        actor_neighbor_weight = self.dcs_actor_neighbor_weight
         iql_deterministic = self.iql_deterministic
         use_dropout = self.actor_dropout is not None
         actor_apply_fn = self.actor_def.apply
+        build_pool = self._build_pool
+        pool_weights = self._pool_weights
 
         def apply_actor(actor_params: Any, observations: jnp.ndarray, training: bool, rng: Optional[jnp.ndarray] = None):
             if use_dropout and training:
@@ -1573,57 +1342,46 @@ class IQLJAX:
         @jax.jit
         def actor_refit_step(actor_state: ActorState, iql_state: IQLState, batch: TensorBatch):
             observations = batch["observations"]
-            actions = batch["actions"]
-            neighbor_observations = batch.get("neighbor_observations", observations[:, None, :])
-            neighbor_actions = batch.get("neighbor_actions", actions[:, None, :])
-            neighbor_weights = batch.get(
-                "neighbor_weights",
-                jnp.ones((observations.shape[0], 1), dtype=observations.dtype),
-            )
-            neighbor_weights = neighbor_weights / jnp.maximum(
-                jnp.sum(neighbor_weights, axis=1, keepdims=True), 1e-8
-            )
-            self_only_weights = jnp.zeros_like(neighbor_weights).at[:, 0].set(1.0)
-            actor_pool_weights = neighbor_weights if dc_use_vicinal_actor else self_only_weights
 
-            batch_size, pool_size = neighbor_weights.shape
-            flat_neighbor_observations = neighbor_observations.reshape((-1, neighbor_observations.shape[-1]))
-            flat_neighbor_actions = neighbor_actions.reshape((-1, neighbor_actions.shape[-1]))
-            q1, q2 = q_apply(
-                {"params": iql_state.q_target_params},
-                flat_neighbor_observations,
-                flat_neighbor_actions,
-            )
-            target_q = jnp.minimum(q1, q2).reshape((batch_size, pool_size))
+            pool_observations, pool_actions, neighbor_weights = build_pool(batch)
+            batch_size = pool_observations.shape[0]
+            pool_size = pool_observations.shape[1]
+            flat_pool_obs = pool_observations.reshape(batch_size * pool_size, -1)
+            flat_pool_act = pool_actions.reshape(batch_size * pool_size, -1)
+
+            tq1, tq2 = q_apply({"params": iql_state.q_target_params}, flat_pool_obs, flat_pool_act)
+            pool_target_q = jnp.minimum(tq1, tq2).reshape(batch_size, pool_size)
+
             v = v_apply({"params": iql_state.v_params}, observations)
-            adv = target_q - v[:, None]
-            exp_adv = jnp.minimum(jnp.exp(beta * jax.lax.stop_gradient(adv)), EXP_ADV_MAX)
+            adv_pool = pool_target_q - v[:, None]
+            adv = adv_pool[:, 0]
+            exp_adv_pool = jnp.minimum(
+                jnp.exp(beta * jax.lax.stop_gradient(adv_pool)), EXP_ADV_MAX
+            )
+            w_actor = pool_weights(neighbor_weights, actor_neighbor_weight)
 
             actor_key, dropout_key = jax.random.split(actor_state.key)
 
             def actor_loss_fn(actor_params):
                 policy_out = apply_actor(actor_params, observations, training=True, rng=dropout_key)
                 if iql_deterministic:
-                    bc_losses = jnp.sum((policy_out[:, None, :] - neighbor_actions) ** 2, axis=-1)
+                    bc_pool = jnp.sum((policy_out[:, None, :] - pool_actions) ** 2, axis=-1)
                     policy_mean = policy_out
                     log_std_mean = jnp.asarray(np.nan, dtype=jnp.float32)
                 else:
                     mean, log_std = policy_out
                     std = jnp.exp(log_std)
-                    log_prob = -0.5 * (
-                        ((neighbor_actions - mean[:, None, :]) / std) ** 2
-                        + 2.0 * log_std
-                        + jnp.log(2.0 * jnp.pi)
-                    )
-                    bc_losses = -jnp.sum(log_prob, axis=-1)
+                    diff_a = (pool_actions - mean[:, None, :]) / std
+                    log_prob = -0.5 * (diff_a ** 2 + 2.0 * log_std + jnp.log(2.0 * jnp.pi))
+                    bc_pool = -jnp.sum(log_prob, axis=-1)
                     policy_mean = mean
                     log_std_mean = jnp.mean(log_std)
                 actor_loss = jnp.mean(
-                    jnp.sum(actor_pool_weights * jax.lax.stop_gradient(exp_adv) * bc_losses, axis=1)
+                    jnp.sum(w_actor * jax.lax.stop_gradient(exp_adv_pool) * bc_pool, axis=1)
                 )
-                return actor_loss, (bc_losses, policy_mean, log_std_mean)
+                return actor_loss, (bc_pool, policy_mean, log_std_mean)
 
-            (actor_loss, (bc_losses, policy_mean, log_std_mean)), actor_grads = jax.value_and_grad(
+            (actor_loss, (bc_pool, policy_mean, log_std_mean)), actor_grads = jax.value_and_grad(
                 actor_loss_fn, has_aux=True
             )(actor_state.params)
             actor_updates, actor_opt_state = actor_tx.update(
@@ -1639,16 +1397,17 @@ class IQLJAX:
             )
             log_dict = {
                 "loss": actor_loss,
-                "bc_loss": jnp.mean(jnp.sum(actor_pool_weights * bc_losses, axis=1)),
-                "adv_mean": jnp.mean(jnp.sum(actor_pool_weights * adv, axis=1)),
+                "bc_loss": jnp.mean(bc_pool[:, 0]),
+                "adv_mean": jnp.mean(adv),
                 "adv_min": jnp.min(adv),
                 "adv_max": jnp.max(adv),
-                "exp_adv_mean": jnp.mean(jnp.sum(actor_pool_weights * exp_adv, axis=1)),
-                "exp_adv_max": jnp.max(exp_adv),
-                "target_q_mean": jnp.mean(jnp.sum(actor_pool_weights * target_q, axis=1)),
+                "exp_adv_mean": jnp.mean(exp_adv_pool[:, 0]),
+                "exp_adv_max": jnp.max(exp_adv_pool),
+                "target_q_mean": jnp.mean(pool_target_q[:, 0]),
                 "v_mean": jnp.mean(v),
                 "policy_mean": jnp.mean(policy_mean),
                 "policy_log_std_mean": log_std_mean,
+                "pool_neighbor_mass_actor": jnp.mean(jnp.sum(w_actor[:, 1:], axis=1)),
             }
             return new_actor_state, log_dict
 
@@ -1805,7 +1564,7 @@ class IQLJAX:
                 )
 
                 print(
-                    f"[{prefix}:iql_awbc] step {fit_step}/{steps}: "
+                    f"[{prefix}:dcs_awbc] step {fit_step}/{steps}: "
                     f"loss={step_log['loss']:.4f}, bc={step_log['bc_loss']:.4f}, "
                     f"adv={step_log['adv_mean']:.4f}, exp_adv={step_log['exp_adv_mean']:.4f}, "
                     f"eval_mean={eval_score_mean:.3f}, eval_std={eval_score_std:.3f}, "
@@ -1863,7 +1622,7 @@ def resolve_checkpoint_path(
     run_name: Optional[str] = None,
     seed: Optional[int] = None,
 ) -> Tuple[Path, Path]:
-    """Return (run_dir, checkpoint_path) for a saved IQL-JAX checkpoint.
+    """Return (run_dir, checkpoint_path) for a saved checkpoint.
 
     Supported load_model formats:
 
@@ -1877,6 +1636,9 @@ def resolve_checkpoint_path(
     3. Parent directory that contains env/seed subdirectory:
        path/to/base_dir/
        where path/to/base_dir/{run_name}/{seed}/checkpoint.pkl exists
+
+    Note: DC-IQL checkpoints are loadable as well (identical architectures);
+    only the actor/value training rules differ.
     """
     load_path = Path(load_model)
 
@@ -1949,6 +1711,7 @@ def load_run_config_for_refit(
 
     This reconstructs the original training env/model/preprocessing settings,
     while allowing any CLI-provided field to override the saved config.
+    Unknown saved keys (e.g. legacy DC-IQL fields) are silently dropped.
     """
     loaded_run_dir = Path(loaded_run_dir)
     saved_config_path = loaded_run_dir / "config.yaml"
@@ -2059,39 +1822,36 @@ def train(config: TrainConfig):
     dataset["next_observations"] = normalize_states(dataset["next_observations"], state_mean, state_std)
     env = wrap_env(env, state_mean=state_mean, state_std=state_std)
 
-    coverage_profile = None
-    if config.use_density_calibration:
-        coverage_profile = load_or_compute_coverage_profile(
-            config=config,
-            observations=dataset["observations"],
-            actions=dataset["actions"],
-            next_observations=dataset["next_observations"],
-        )
-        print(
-            f"Coverage profile: "
-            f"rho_mean={float(np.mean(coverage_profile['density_confidence'])):.3f}, "
-            f"rho_min={float(np.min(coverage_profile['density_confidence'])):.3f}, "
-            f"rho_max={float(np.max(coverage_profile['density_confidence'])):.3f}; "
-            f"b_mean={float(np.mean(coverage_profile['action_diversity'])):.3f}; "
-            f"J_mean={float(np.mean(coverage_profile['junction_score'])):.3f}, "
-            f"J_gate_rate={float(np.mean(coverage_profile['junction_gate'])):.3f}; "
-            f"pool_size={coverage_profile['neighbor_indices'].shape[1]}"
-        )
-        if config.dc_use_state_tau:
-            tau_values = config.dc_tau_min + (config.dc_tau_max - config.dc_tau_min) * coverage_profile["density_confidence"]
+    # ----- DCS coverage profile: one-time kNN graph + junction gating -------
+    neighbor_indices = None
+    neighbor_weights = None
+    junction = None
+    buffer_neighbor_k = config.dcs_k
+    if config.use_dcs:
+        profile = load_or_compute_coverage_profile(config, dataset)
+        neighbor_indices, neighbor_weights, junction = build_neighbor_weights(config, profile)
+        buffer_neighbor_k = neighbor_indices.shape[1]
+        if buffer_neighbor_k != config.dcs_k:
             print(
-                "Legacy state-wise tau ablation is ON: "
-                f"tau(s) mean={float(np.mean(tau_values)):.3f}, "
-                f"min={float(np.min(tau_values)):.3f}, max={float(np.max(tau_values)):.3f}"
+                f"Note: coverage profile holds k={buffer_neighbor_k} neighbors "
+                f"(dcs_k={config.dcs_k} was clamped during computation)."
             )
+    else:
+        print("use_dcs=False: neighbor pool disabled; training reduces to standard IQL.")
 
     replay_buffer = ReplayBuffer(
         state_dim=state_dim,
         action_dim=action_dim,
         buffer_size=config.buffer_size,
+        neighbor_k=buffer_neighbor_k,
         device=jax_device,
     )
-    replay_buffer.load_d4rl_dataset(dataset, coverage_profile=coverage_profile)
+    replay_buffer.load_d4rl_dataset(
+        dataset,
+        neighbor_indices=neighbor_indices,
+        neighbor_weights=neighbor_weights,
+        junction=junction,
+    )
 
     max_action = float(env.action_space.high[0])
 
@@ -2111,9 +1871,16 @@ def train(config: TrainConfig):
     print("---------------------------------------")
     run_mode_name = "Actor refit" if refit_only else "Training"
     print(f"{run_mode_name} {ALGORITHM_NAME}-JAX, Env: {config.env}, Seed: {seed}")
+    print(
+        f"iql_tau={config.iql_tau} (global, fixed) | use_dcs={config.use_dcs} | "
+        f"k={buffer_neighbor_k} | eta_V={config.dcs_value_neighbor_weight} | "
+        f"eta_pi={config.dcs_actor_neighbor_weight} | "
+        f"gate=[{config.dcs_gate_low_percentile}, {config.dcs_gate_high_percentile}]%% of "
+        f"J(mode={config.dcs_diversity_mode})"
+    )
     print("---------------------------------------")
 
-    trainer = IQLJAX(
+    trainer = DCSIQLJAX(
         max_action=max_action,
         state_dim=state_dim,
         action_dim=action_dim,
@@ -2125,14 +1892,9 @@ def train(config: TrainConfig):
         tau=config.tau,
         beta=config.beta,
         iql_tau=config.iql_tau,
-        dc_tau_min=config.dc_tau_min if config.use_density_calibration else config.iql_tau,
-        dc_tau_max=config.dc_tau_max if config.use_density_calibration else config.iql_tau,
-        dc_use_state_tau=config.dc_use_state_tau if config.use_density_calibration else False,
-        dc_use_vicinal_value=config.dc_use_vicinal_value if config.use_density_calibration else False,
-        dc_use_vicinal_actor=config.dc_use_vicinal_actor if config.use_density_calibration else False,
-        dc_vicinal_lambda=config.dc_vicinal_lambda if config.use_density_calibration else 0.0,
-        dc_vicinal_noise_std=config.dc_vicinal_noise_std,
         iql_deterministic=config.iql_deterministic,
+        dcs_value_neighbor_weight=config.dcs_value_neighbor_weight if config.use_dcs else 0.0,
+        dcs_actor_neighbor_weight=config.dcs_actor_neighbor_weight if config.use_dcs else 0.0,
         actor_dropout=config.actor_dropout,
         hidden_dim=config.hidden_dim,
         n_hidden=config.n_hidden,
@@ -2161,7 +1923,7 @@ def train(config: TrainConfig):
         actor_refit_dir = loaded_run_dir / config.actor_refit_dir_name
         actor_refit_dir.mkdir(parents=True, exist_ok=True)
         print("---------------------------------------")
-        print(f"Actor refit from saved {ALGORITHM_NAME} checkpoint")
+        print(f"Actor refit from saved checkpoint ({ALGORITHM_NAME} vicinal AWR)")
         print("Q/V are frozen; only pi is optimized.")
         print(
             "Refit schedule uses shared fields: "
@@ -2267,13 +2029,15 @@ def train(config: TrainConfig):
                 log_wandb=config.log_wandb,
             )
 
-    if config.checkpoints_path is not None:
+    if config.checkpoints_path is not None and config.save_final_model:
         checkpoint_path = os.path.join(config.checkpoints_path, "checkpoint.pkl")
         save_pickle(checkpoint_path, trainer.state_dict())
+        print("---------------------------------------")
+        print(f"Saved final checkpoint to: {checkpoint_path}")
+        print("(needed for mode='refit'; enable with --save_final_model True)")
+        print("---------------------------------------")
 
-        # if config.log_wandb and wandb.run is not None:
-        #     wandb.save(checkpoint_path, policy="now")
-
+    if config.checkpoints_path is not None:
         save_and_upload_eval_logs(
             eval_logs=eval_logs,
             checkpoints_path=config.checkpoints_path,
@@ -2283,4 +2047,3 @@ def train(config: TrainConfig):
 
 if __name__ == "__main__":
     train()
-
