@@ -30,7 +30,7 @@ from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 
-COVERAGE_CACHE_VERSION = 2
+COVERAGE_CACHE_VERSION = 3
 _EPS = 1e-8
 
 
@@ -46,6 +46,8 @@ def compute_coverage_profile(
     subsample_size: int = 10_000_000,
     chunk_size: int = 50_000,
     seed: int = 0,
+    dynamics_ridge: float = 1e-3,
+    metric_space: Optional[np.ndarray] = None,
 ) -> Dict[str, np.ndarray]:
     """Compute the local coverage profile of an offline dataset.
 
@@ -60,14 +62,33 @@ def compute_coverage_profile(
                            FULL dataset (mapped through the subsample).
         chunk_size:        query/gather chunk size (memory control).
         seed:              rng seed for the reference subsample.
+        dynamics_ridge:    ridge regularization for the per-state local linear
+                           dynamics fit used to score neighbor dynamics
+                           consistency (numerical stability only; the residual
+                           is later compared to its own per-row median, so the
+                           absolute ridge scale cancels).
+        metric_space:      optional (N, Dm) array used ONLY to select neighbors
+                           and measure neighbor_distances. When None (default)
+                           neighbors are selected in observation space, the
+                           current behavior. Supplying an oracle / learned
+                           representation here selects neighbors in THAT space
+                           while the physical statistics (action_spread,
+                           disp_dispersion, dynamics_residual) are still computed
+                           from the real actions/observations of the selected
+                           neighbors. This is the single hook used by the oracle
+                           ceiling test and by any future learned-metric variant.
 
     Returns dict with keys:
         neighbor_indices  (N, k) int32   global dataset indices, self excluded
-        neighbor_distances(N, k) float32
+        neighbor_distances(N, k) float32 distances in the metric space
         knn_radius        (N,)   float32 distance to the k-th kept neighbor
         action_spread     (N,)   float32 RMS radius of neighbor actions
         disp_dispersion   (N,)   float32 1 - resultant/total of neighbor unit
                                           next-state displacements, in [0, 1]
+        dynamics_residual (N, k) float32 ||eps_j|| of neighbor j under the
+                                          local linear action->displacement fit
+                                          over {i} u N_k(s_i); small => neighbor
+                                          j shares s_i's local dynamics regime
     """
     observations = np.asarray(observations, dtype=np.float32)
     actions = np.asarray(actions, dtype=np.float32)
@@ -81,9 +102,21 @@ def compute_coverage_profile(
             "knn_radius": np.zeros((0,), dtype=np.float32),
             "action_spread": np.zeros((0,), dtype=np.float32),
             "disp_dispersion": np.zeros((0,), dtype=np.float32),
+            "dynamics_residual": np.zeros((0, k), dtype=np.float32),
         }
     if actions.shape[0] != n or next_observations.shape[0] != n:
         raise ValueError("observations/actions/next_observations must share N")
+
+    # The metric space drives neighbor selection; physical stats use the real
+    # observations/actions/next_observations regardless.
+    if metric_space is None:
+        metric = observations
+    else:
+        metric = np.asarray(metric_space, dtype=np.float32)
+        if metric.shape[0] != n:
+            raise ValueError("metric_space must have the same N as observations")
+        if metric.ndim != 2:
+            raise ValueError("metric_space must be 2-D (N, Dm)")
 
     from scipy.spatial import cKDTree  # imported lazily; hard requirement here
 
@@ -103,7 +136,7 @@ def compute_coverage_profile(
             f"clamping to k={k_eff}."
         )
 
-    tree = cKDTree(observations[ref_idx])
+    tree = cKDTree(metric[ref_idx])
     query_k = int(min(k_eff + 1, ref_size))
 
     neighbor_indices = np.empty((n, k_eff), dtype=np.int32)
@@ -111,7 +144,7 @@ def compute_coverage_profile(
 
     for start in range(0, n, int(chunk_size)):
         end = min(start + int(chunk_size), n)
-        dists, local_idx = tree.query(observations[start:end], k=query_k, workers=-1)
+        dists, local_idx = tree.query(metric[start:end], k=query_k, workers=-1)
         if query_k == 1:
             dists = dists[:, None]
             local_idx = local_idx[:, None]
@@ -151,8 +184,21 @@ def compute_coverage_profile(
     unit_disp = np.where(disp_norm[:, None] > _EPS, unit_disp, 0.0).astype(np.float32)
     moving = (disp_norm > _EPS).astype(np.float32)
 
+    action_dim = actions.shape[1]
+    # The local linear dynamics fit estimates a (Da -> Ds) map from the pool of
+    # {self} u neighbors. With pool size 1 + k_eff and Da free directions, the
+    # residuals are only informative once 1 + k_eff comfortably exceeds Da.
+    if (1 + k_eff) <= action_dim + 1:
+        print(
+            f"coverage_profile: pool size {1 + k_eff} is small relative to action "
+            f"dim {action_dim}; dynamics residuals will be near-zero and the "
+            f"dynamics gate uninformative. Consider increasing k to >= ~2*action_dim."
+        )
+
+    ridge = float(dynamics_ridge)
     action_spread = np.empty((n,), dtype=np.float32)
     disp_dispersion = np.empty((n,), dtype=np.float32)
+    dynamics_residual = np.empty((n, k_eff), dtype=np.float32)
 
     for start in range(0, n, int(chunk_size)):
         end = min(start + int(chunk_size), n)
@@ -171,12 +217,50 @@ def compute_coverage_profile(
         dispersion = np.where(total > 0.5, dispersion, 0.0)
         disp_dispersion[start:end] = np.clip(dispersion, 0.0, 1.0)
 
+        # ----- per-edge dynamics consistency g_ij ---------------------------
+        # Fit a per-state local linear map  Delta_s ~ A (a - a_bar) + b_bar
+        # over the pool {self} u neighbors, then score each neighbor by how
+        # well its own transition is explained by that map. A neighbor from a
+        # different dynamics regime (similar action, different displacement)
+        # gets a large residual and will be down-weighted in the pool.
+        #
+        # The residual is normalized by the local displacement scale so that it
+        # is dimensionless and ABSOLUTE: a residual that is a small fraction of
+        # the typical neighborhood displacement means the neighbor shares the
+        # local dynamics; a residual comparable to the displacement itself means
+        # it does not. (A per-row-relative scale would wash out exactly the
+        # cross-region contrast we need, e.g. coherent corridor vs incoherent
+        # puzzle neighborhood.)
+        self_a = actions[start:end][:, None, :]              # (c, 1, Da)
+        self_d = disp[start:end][:, None, :]                 # (c, 1, Ds)
+        pool_a = np.concatenate([self_a, nbr_actions], axis=1)        # (c, P, Da)
+        pool_d = np.concatenate([self_d, disp[idx]], axis=1)         # (c, P, Ds)
+        a_mean = pool_a.mean(axis=1, keepdims=True)
+        d_mean = pool_d.mean(axis=1, keepdims=True)
+        x = pool_a - a_mean                                  # (c, P, Da)
+        y = pool_d - d_mean                                  # (c, P, Ds)
+        xtx = np.einsum("cpa,cpb->cab", x, x)                # (c, Da, Da)
+        xty = np.einsum("cpa,cpd->cad", x, y)                # (c, Da, Ds)
+        xtx = xtx + ridge * np.eye(action_dim, dtype=xtx.dtype)[None]
+        weight_map = np.linalg.solve(xtx, xty)               # (c, Da, Ds)
+        y_hat = np.einsum("cpa,cad->cpd", x, weight_map)     # (c, P, Ds)
+        residual = np.linalg.norm(y - y_hat, axis=-1)        # (c, P)
+
+        pool_disp_norm = np.linalg.norm(pool_d, axis=-1)     # (c, P)
+        disp_scale = np.median(pool_disp_norm, axis=1, keepdims=True)  # (c, 1)
+        moving_region = disp_scale > _EPS
+        normalized = np.where(
+            moving_region, residual / np.maximum(disp_scale, _EPS), 0.0
+        )
+        dynamics_residual[start:end] = normalized[:, 1:].astype(np.float32)
+
     return {
         "neighbor_indices": neighbor_indices,
         "neighbor_distances": neighbor_distances,
         "knn_radius": knn_radius.astype(np.float32),
         "action_spread": action_spread,
         "disp_dispersion": disp_dispersion,
+        "dynamics_residual": dynamics_residual,
     }
 
 
@@ -260,23 +344,57 @@ def neighbor_kernel_weights(
     return np.exp(-((d / h) ** 2)).astype(np.float32)
 
 
+def dynamics_consistency_weights(
+    dynamics_residual: np.ndarray,
+    scale: float = 1.0,
+) -> np.ndarray:
+    """Per-edge dynamics-consistency gate g_ij in [0, 1].
+
+    Operates on the displacement-normalized residual produced by
+    compute_coverage_profile (residual ||eps_j|| divided by the local
+    displacement scale), so the residual is already dimensionless and
+    comparable across states:
+
+        g_ij = exp(-(r_ij / scale)^2)
+
+    A neighbor whose transition is well explained by s_i's local
+    action->displacement map has r ~ 0 => g ~ 1; a neighbor from a different
+    dynamics regime has r of order 1 (residual comparable to the displacement
+    itself) => g small. `scale` is the gate softness: r = scale maps to
+    g = exp(-1) ~ 0.37, so larger `scale` is a gentler gate. r == 0 rows
+    (perfectly coherent, or static neighborhoods that were zeroed at compute
+    time) yield g = 1, i.e. the gate abstains.
+    """
+    r = np.asarray(dynamics_residual, dtype=np.float32)
+    if r.size == 0:
+        return r
+    scale = max(float(scale), _EPS)
+    return np.exp(-((r / scale) ** 2)).astype(np.float32)
+
+
 def summarize_profile(
     density_conf: np.ndarray,
     action_div_conf: np.ndarray,
     disp_div_conf: np.ndarray,
     junction: np.ndarray,
     gate: np.ndarray,
+    dynamics_g: Optional[np.ndarray] = None,
 ) -> str:
     def _s(x):
         return f"mean={float(np.mean(x)):.3f} std={float(np.std(x)):.3f}"
 
     dense_homog = float(np.mean((density_conf > 0.7) & (action_div_conf < 0.3)))
-    return (
-        f"density [{_s(density_conf)}] | action_div [{_s(action_div_conf)}] | "
-        f"disp_div [{_s(disp_div_conf)}] | junction [{_s(junction)}] | "
-        f"gate [{_s(gate)} active={float(np.mean(gate > 0)):.3f}] | "
-        f"dense-but-homogeneous frac={dense_homog:.3f}"
-    )
+    parts = [
+        f"density [{_s(density_conf)}]",
+        f"action_div [{_s(action_div_conf)}]",
+        f"disp_div [{_s(disp_div_conf)}]",
+        f"junction [{_s(junction)}]",
+        f"gate [{_s(gate)} active={float(np.mean(gate > 0)):.3f}]",
+    ]
+    if dynamics_g is not None:
+        parts.append(f"dyn_g [{_s(dynamics_g)}]")
+    parts.append(f"dense-but-homogeneous frac={dense_homog:.3f}")
+    return " | ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +407,7 @@ _PROFILE_ARRAY_KEYS = (
     "knn_radius",
     "action_spread",
     "disp_dispersion",
+    "dynamics_residual",
 )
 
 

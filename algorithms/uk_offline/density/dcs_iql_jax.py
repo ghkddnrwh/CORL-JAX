@@ -186,6 +186,24 @@ class TrainConfig:
     # h_i = dcs_bandwidth_scale * median_j d_ij.
     dcs_bandwidth_scale: float = 1.0
 
+    # ----- Per-edge dynamics-consistency gate g_ij -------------------------
+    # Certifies that neighbor j's transition actually shares s_i's local
+    # action->displacement dynamics before its (s_j, a_j) is pooled into the
+    # vicinal backup / vicinal AWR. This is the certification that upgrades the
+    # method from "density-and-diversity gated" to genuinely dynamics-certified
+    # (addresses the cross-state-action contamination of the actor loss).
+    #   final edge weight = gate(J(s_i)) * kernel(d_ij) * g_ij
+    # g_ij = exp(-(r_ij / dcs_dynamics_scale)^2), r_ij = displacement-normalized
+    # residual of neighbor j under the local linear dynamics fit.
+    #
+    # dcs_use_dynamics_gate=False recovers the previous density-and-diversity
+    # gated behavior (g == 1) and is the clean ablation for measuring g's effect.
+    # Larger dcs_dynamics_scale -> gentler gate (so it cannot silently collapse
+    # the pool back to plain IQL; watch active_edge_frac / pool mass in logs).
+    dcs_use_dynamics_gate: bool = True
+    dcs_dynamics_scale: float = 1.0
+    dcs_dynamics_ridge: float = 1e-3
+
     # kNN computation controls (mirroring the DC-IQL density cache).
     dcs_subsample: int = 10_000_000
     dcs_chunk_size: int = 50_000
@@ -196,6 +214,24 @@ class TrainConfig:
     dcs_profile_path: Optional[str] = None
     dcs_force_recompute: bool = False
     dcs_cache_by_seed: bool = False
+
+    # ----- ORACLE CEILING TEST --------------------------------------------
+    # Selects the metric space in which the kNN graph is built:
+    #   "observation" : default; neighbors from normalized observations (L2).
+    #   "oracle"      : neighbors from ground-truth dataset field(s) (e.g.
+    #                   puzzle button_states), loaded via add_info=True. The
+    #                   policy/critic still train on the standard observations;
+    #                   ONLY neighbor selection uses the oracle. This is the
+    #                   upper-bound experiment: if oracle-graph DCS beats
+    #                   L2-graph DCS and plain IQL, the kNN graph was the
+    #                   bottleneck and a learned metric is worth building.
+    dcs_metric_source: str = "observation"  # observation | oracle
+    # Dataset add_info field(s) used as the oracle metric space. Auto-defaults:
+    # puzzle -> button_states; cube/antmaze -> qpos,qvel. Comma-separated.
+    dcs_oracle_keys: Optional[str] = None
+    # Standardize the oracle space per-dim before building the kNN graph so no
+    # single field (e.g. a large-magnitude qvel) dominates the distance.
+    dcs_oracle_standardize: bool = True
     # -----------------------------------------------------------------------
 
     vf_lr: float = 3e-4
@@ -209,7 +245,7 @@ class TrainConfig:
     actor_refit_dir_name: str = "actor_refit"
 
     # Logging
-    project: str = "ORL-BIAS"
+    project: str = "ORL-SMOOTH"
     group: str = "DCS-IQL-JAX"
     name: str = "DCS-IQL-JAX"
     log_wandb: bool = True
@@ -222,7 +258,7 @@ class TrainConfig:
 
 
 def refresh_algorithm_names(config: TrainConfig) -> None:
-    config.project = "ORL-BIAS"
+    config.project = "ORL-SMOOTH"
     config.group = f"{ALGORITHM_NAME}-JAX"
     config.name = f"{ALGORITHM_NAME}-JAX-{config.env}"
 
@@ -246,6 +282,10 @@ def validate_config(config: TrainConfig) -> None:
     assert 0.0 <= config.dcs_percentile_low < config.dcs_percentile_high <= 100.0
     assert 0.0 <= config.dcs_gate_low_percentile <= config.dcs_gate_high_percentile <= 100.0
     assert config.dcs_bandwidth_scale > 0.0
+    assert config.dcs_dynamics_scale > 0.0
+    assert config.dcs_dynamics_ridge >= 0.0
+    assert config.dcs_metric_source in ("observation", "oracle"), \
+        "dcs_metric_source must be 'observation' or 'oracle'"
     assert config.dcs_subsample >= 1
     assert config.dcs_chunk_size >= 1
     if config.dcs_profile_path is not None:
@@ -396,17 +436,84 @@ def _safe_path_name(name: str) -> str:
 
 
 def get_coverage_profile_cache_path(config: TrainConfig) -> Optional[Path]:
-    """Return the cache file path for the precomputed coverage profile."""
+    """Return the cache file path for the precomputed coverage profile.
+
+    The metric source is part of the path so that an oracle-graph profile and
+    an observation-graph profile for the same env never collide.
+    """
     if config.dcs_profile_path is None:
         return None
 
     root = Path(config.dcs_profile_path)
     env_name = _safe_path_name(config.env)
-    filename = f"coverage_profile_k{int(config.dcs_k)}.npz"
+    source_tag = "obs" if config.dcs_metric_source == "observation" else "oracle"
+    if config.dcs_metric_source == "oracle":
+        keys = resolve_oracle_keys(config) or ("auto",)
+        source_tag = "oracle-" + "_".join(keys)
+    filename = f"coverage_profile_{_safe_path_name(source_tag)}_k{int(config.dcs_k)}.npz"
 
     if config.dcs_cache_by_seed:
         return root / env_name / f"seed_{config.seed}" / filename
     return root / env_name / filename
+
+
+def resolve_oracle_keys(config: TrainConfig) -> Optional[Tuple[str, ...]]:
+    """Resolve the oracle dataset field name(s) for the oracle metric space.
+
+    Explicit --dcs_oracle_keys wins; otherwise auto-default by env family
+    (puzzle -> button_states; cube/antmaze -> qpos,qvel), mirroring the
+    metric_diagnostic.py oracle selection.
+    """
+    if config.dcs_oracle_keys:
+        return tuple(x.strip() for x in config.dcs_oracle_keys.split(",") if x.strip())
+    env = config.env
+    if env.startswith("puzzle-"):
+        return ("button_states",)
+    if env.startswith(("cube-", "antmaze-")):
+        return ("qpos", "qvel")
+    return None
+
+
+def build_oracle_metric_space(
+    config: TrainConfig,
+    dataset: Dict[str, np.ndarray],
+) -> np.ndarray:
+    """Concatenate the requested oracle field(s) into an (N, Dm) metric space,
+    standardized per-dim by default so no single field dominates the distance.
+    """
+    keys = resolve_oracle_keys(config)
+    if not keys:
+        raise SystemExit(
+            f"dcs_metric_source='oracle' but no oracle keys could be resolved for "
+            f"env '{config.env}'. Pass --dcs_oracle_keys, e.g. 'button_states'."
+        )
+    missing = [key for key in keys if key not in dataset]
+    if missing:
+        available = ", ".join(sorted(dataset.keys()))
+        raise SystemExit(
+            f"Oracle key(s) {missing} not in dataset (load uses add_info=True). "
+            f"Available keys: {available}"
+        )
+    parts = []
+    for key in keys:
+        arr = np.asarray(dataset[key], dtype=np.float32)
+        if arr.ndim == 1:
+            arr = arr[:, None]
+        elif arr.ndim > 2:
+            arr = arr.reshape(arr.shape[0], -1)
+        parts.append(arr)
+    oracle = np.concatenate(parts, axis=1).astype(np.float32)
+
+    if config.dcs_oracle_standardize:
+        mu = oracle.mean(0)
+        sd = oracle.std(0) + 1e-6
+        oracle = ((oracle - mu) / sd).astype(np.float32)
+
+    print(
+        f"Oracle metric space: keys={list(keys)} dim={oracle.shape[1]} "
+        f"standardize={config.dcs_oracle_standardize}"
+    )
+    return oracle
 
 
 def build_coverage_profile_metadata(
@@ -417,8 +524,10 @@ def build_coverage_profile_metadata(
     """Metadata that must match before a cached profile can be reused.
 
     Post-processing knobs (percentiles, diversity mode, gate, bandwidth) are
-    intentionally excluded: they are applied at load time.
+    intentionally excluded: they are applied at load time. The metric source
+    and oracle keys ARE included, since they change neighbor selection.
     """
+    oracle_keys = resolve_oracle_keys(config) if config.dcs_metric_source == "oracle" else None
     return covp.canonicalize_metadata(
         {
             "cache_version": covp.COVERAGE_CACHE_VERSION,
@@ -431,6 +540,11 @@ def build_coverage_profile_metadata(
             "dcs_k": int(config.dcs_k),
             "dcs_subsample": int(config.dcs_subsample),
             "dcs_chunk_size": int(config.dcs_chunk_size),
+            "dcs_dynamics_ridge": float(config.dcs_dynamics_ridge),
+            "dcs_metric_source": config.dcs_metric_source,
+            "dcs_oracle_keys": list(oracle_keys) if oracle_keys else None,
+            "dcs_oracle_standardize": bool(config.dcs_oracle_standardize)
+            if config.dcs_metric_source == "oracle" else None,
         }
     )
 
@@ -454,7 +568,16 @@ def load_or_compute_coverage_profile(
     if cache_path is not None and config.dcs_force_recompute:
         print(f"Ignoring existing coverage cache because dcs_force_recompute=True: {cache_path}")
 
-    print(f"Computing one-time coverage profile for {ALGORITHM_NAME} (k={config.dcs_k})...")
+    # Ceiling test: build the kNN graph in the oracle metric space when asked.
+    metric_space = None
+    if config.dcs_metric_source == "oracle":
+        metric_space = build_oracle_metric_space(config, dataset)
+        print(f"Computing oracle-graph coverage profile for {ALGORITHM_NAME} "
+              f"(k={config.dcs_k}); neighbors selected in oracle space, training "
+              f"still uses standard observations.")
+    else:
+        print(f"Computing one-time coverage profile for {ALGORITHM_NAME} (k={config.dcs_k})...")
+
     profile = covp.compute_coverage_profile(
         observations=dataset["observations"],
         actions=dataset["actions"],
@@ -463,6 +586,8 @@ def load_or_compute_coverage_profile(
         subsample_size=config.dcs_subsample,
         chunk_size=config.dcs_chunk_size,
         seed=config.seed,
+        dynamics_ridge=config.dcs_dynamics_ridge,
+        metric_space=metric_space,
     )
 
     if cache_path is not None:
@@ -479,7 +604,10 @@ def build_neighbor_weights(
 
     Returns:
         neighbor_indices (N, k) int32
-        neighbor_weights (N, k) float32 = gate(J(s_i)) * exp(-(d_ij/h_i)^2)
+        neighbor_weights (N, k) float32
+            = gate(J(s_i)) * exp(-(d_ij/h_i)^2) * g_ij
+              where g_ij is the per-edge dynamics-consistency gate (or 1 when
+              dcs_use_dynamics_gate is False).
         junction         (N,)   float32 (for logging/diagnostics)
     """
     density_conf = covp.percentile_confidence(
@@ -507,14 +635,54 @@ def build_neighbor_weights(
     kernel = covp.neighbor_kernel_weights(
         profile["neighbor_distances"], config.dcs_bandwidth_scale
     )
-    neighbor_weights = (gate[:, None] * kernel).astype(np.float32)
+
+    weights_before_g = (gate[:, None] * kernel).astype(np.float32)
+
+    dynamics_g = None
+    if config.dcs_use_dynamics_gate and "dynamics_residual" in profile:
+        dynamics_g = covp.dynamics_consistency_weights(
+            profile["dynamics_residual"], config.dcs_dynamics_scale
+        )
+        neighbor_weights = (weights_before_g * dynamics_g).astype(np.float32)
+    else:
+        if config.dcs_use_dynamics_gate:
+            print(
+                "dcs_use_dynamics_gate=True but the cached profile has no "
+                "dynamics_residual (old cache?); proceeding without the dynamics "
+                "gate. Recompute the profile with --dcs_force_recompute True."
+            )
+        neighbor_weights = weights_before_g
 
     print(
         "Coverage profile | "
         + covp.summarize_profile(
-            density_conf, action_div_conf, disp_div_conf, junction, gate
+            density_conf, action_div_conf, disp_div_conf, junction, gate, dynamics_g
         )
     )
+
+    # Collapse monitor: how much edge mass survives each gating stage. If the
+    # post-g active-edge fraction is ~0, DCS has silently reverted to IQL and
+    # the dynamics gate is too aggressive (raise dcs_dynamics_scale).
+    active_pre = float(np.mean(weights_before_g > 1e-6))
+    active_post = float(np.mean(neighbor_weights > 1e-6))
+    mass_pre = float(np.mean(np.sum(weights_before_g, axis=1)))
+    mass_post = float(np.mean(np.sum(neighbor_weights, axis=1)))
+    print(
+        f"Edge gating | active-edge frac: gate*kernel={active_pre:.3f} "
+        f"-> *g={active_post:.3f} | mean per-state neighbor mass: "
+        f"{mass_pre:.3f} -> {mass_post:.3f}"
+        + (
+            f" | dynamics gate kept {(active_post / active_pre * 100.0):.1f}% of active edges"
+            if active_pre > 0
+            else ""
+        )
+    )
+    if config.dcs_use_dynamics_gate and active_pre > 0 and active_post < 0.02 * active_pre:
+        print(
+            "WARNING: the dynamics gate removed >98% of active edges. DCS is "
+            "effectively reduced to IQL here; consider raising dcs_dynamics_scale."
+        )
+
     return (
         profile["neighbor_indices"].astype(np.int32),
         neighbor_weights,
@@ -580,13 +748,23 @@ def is_ogbench_env(env_name: str) -> bool:
     return "singletask" in env_name or "oraclerep" in env_name
 
 
-def load_env_and_dataset(env_name: str) -> Tuple[gym.Env, Dict[str, np.ndarray], str]:
+def load_env_and_dataset(env_name: str, add_info: bool = False) -> Tuple[gym.Env, Dict[str, np.ndarray], str]:
     if is_ogbench_env(env_name):
         if ogbench is None:
             raise ImportError(
                 "OGBench environment requested, but the `ogbench` package is not installed."
             )
-        env, train_dataset, _ = ogbench.make_env_and_datasets(env_name)
+        if add_info:
+            try:
+                # add_info=True exposes factored oracle fields such as
+                # button_states (puzzle), qpos, and qvel for the ceiling test.
+                env, train_dataset, _ = ogbench.make_env_and_datasets(env_name, add_info=True)
+            except TypeError:
+                print("ogbench.make_env_and_datasets(..., add_info=True) unavailable; "
+                      "falling back to add_info=False (oracle metric source will fail).")
+                env, train_dataset, _ = ogbench.make_env_and_datasets(env_name)
+        else:
+            env, train_dataset, _ = ogbench.make_env_and_datasets(env_name)
         return env, train_dataset, "ogbench"
 
     global d4rl
@@ -1272,6 +1450,9 @@ class DCSIQLJAX:
                 "gate_active_frac": jnp.mean(
                     (jnp.max(neighbor_weights, axis=1) > 0.0).astype(jnp.float32)
                 ),
+                "active_edge_frac": jnp.mean(
+                    (neighbor_weights > 0.0).astype(jnp.float32)
+                ),
                 "junction_mean": jnp.mean(junction),
                 "junction_max": jnp.max(junction),
             }
@@ -1797,7 +1978,10 @@ def train(config: TrainConfig):
         config = finalize_checkpoint_path(config)
 
     jax_device = select_jax_device(config.device)
-    env, dataset, dataset_backend = load_env_and_dataset(config.env)
+    env, dataset, dataset_backend = load_env_and_dataset(
+        config.env,
+        add_info=(config.use_dcs and config.dcs_metric_source == "oracle"),
+    )
 
     if len(env.observation_space.shape) != 1 or len(env.action_space.shape) != 1:
         raise ValueError(
@@ -1878,6 +2062,26 @@ def train(config: TrainConfig):
         f"gate=[{config.dcs_gate_low_percentile}, {config.dcs_gate_high_percentile}]%% of "
         f"J(mode={config.dcs_diversity_mode})"
     )
+    if config.use_dcs:
+        if config.dcs_use_dynamics_gate:
+            print(
+                f"dynamics gate: ON (scale={config.dcs_dynamics_scale}, "
+                f"ridge={config.dcs_dynamics_ridge}) -> Density-Certified Stitching"
+            )
+        else:
+            print(
+                "dynamics gate: OFF (g=1) -> density-and-diversity gated vicinal IQL "
+                "(ablation)"
+            )
+        if config.dcs_metric_source == "oracle":
+            keys = resolve_oracle_keys(config)
+            print(
+                f"*** ORACLE CEILING TEST: kNN graph built in ORACLE space "
+                f"(keys={list(keys) if keys else 'auto'}); training still uses "
+                f"standard observations. ***"
+            )
+        else:
+            print("metric source: observation (standard L2 kNN graph)")
     print("---------------------------------------")
 
     trainer = DCSIQLJAX(
