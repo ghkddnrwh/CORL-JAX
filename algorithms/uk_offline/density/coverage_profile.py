@@ -332,14 +332,52 @@ def gate_from_junction(
 def neighbor_kernel_weights(
     neighbor_distances: np.ndarray,
     bandwidth_scale: float = 1.0,
+    bandwidth_floor_frac: float = 1.0,
 ) -> np.ndarray:
-    """Per-neighbor distance kernel exp(-(d/h)^2) with self-tuning bandwidth
-    h_i = bandwidth_scale * median_j d_ij. Rows of duplicates (median 0)
-    receive uniform weight 1."""
+    """Per-neighbor distance kernel exp(-(d/h)^2) with self-tuning bandwidth.
+
+    Per-state bandwidth is the local neighbor-distance median, floored at a
+    global scale:
+
+        h_i = bandwidth_scale * max( median_j d_ij ,
+                                     bandwidth_floor_frac * global_scale )
+
+    where ``global_scale`` is the median of all POSITIVE neighbor distances in
+    the dataset (exact-duplicate 0-distance edges are excluded so the global
+    scale reflects the real resolvable distance of the metric space).
+
+    Why the floor: without it, ``h_i`` collapses toward 0 whenever a state's
+    neighbors are (near-)duplicates. That happens systematically when the
+    metric space is DISCRETE -- e.g. the oracle button_states graph, where a
+    state's nearest button-neighbors sit at distance ~0 -- so the local median
+    is 0, ``h_i`` hits the numerical ``_EPS`` floor, and the kernel degenerates
+    to all-or-nothing (weight 1 at d=0, weight 0 at any d>0). The floor keeps
+    ``h_i`` at a meaningful global scale, so mixed neighborhoods (some exact
+    matches, some near matches) get a graded kernel instead of a hard 0/1 cut.
+
+    IMPORTANT / honest scope: the floor cannot help a row whose neighbors are
+    ALL at distance exactly 0 (all exact button matches). There exp(-(0/h)^2)=1
+    for every h>0, so that row still hands uniform weight 1 to every neighbor,
+    no matter the floor -- distance-0 simply carries no information to grade on.
+    Controlling how much such a saturated pool influences training is the job of
+    the neighbor-mass weights (eta_V / eta_pi), NOT of this kernel. The floor is
+    correct, necessary hygiene for continuous and mixed metric spaces; it is not
+    by itself sufficient to tame the fully-degenerate discrete case.
+
+    bandwidth_floor_frac=0.0 recovers the previous (unfloored) behavior.
+    """
     d = np.asarray(neighbor_distances, dtype=np.float32)
     if d.size == 0:
         return d
-    h = bandwidth_scale * np.median(d, axis=1, keepdims=True)
+    local = np.median(d, axis=1, keepdims=True)
+
+    floor = 0.0
+    if bandwidth_floor_frac > 0.0:
+        positive = d[d > _EPS]
+        if positive.size > 0:
+            floor = float(bandwidth_floor_frac) * float(np.median(positive))
+
+    h = bandwidth_scale * np.maximum(local, floor)
     h = np.maximum(h, _EPS).astype(np.float32)
     return np.exp(-((d / h) ** 2)).astype(np.float32)
 

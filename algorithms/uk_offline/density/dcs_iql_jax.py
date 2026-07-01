@@ -186,6 +186,18 @@ class TrainConfig:
     # h_i = dcs_bandwidth_scale * median_j d_ij.
     dcs_bandwidth_scale: float = 1.0
 
+    # Bandwidth floor: h_i is floored at
+    #   dcs_bandwidth_scale * dcs_bandwidth_floor_frac * (global median of
+    #   POSITIVE neighbor distances).
+    # This stops the kernel from saturating to all-or-nothing when neighbors
+    # are (near-)duplicates -- the failure mode of a DISCRETE metric space such
+    # as the oracle button_states graph, where same-button neighbors sit at
+    # distance ~0. Necessary hygiene for continuous/mixed spaces; it does NOT
+    # by itself tame a fully-degenerate (all-exact-match) neighborhood -- that
+    # is controlled by the neighbor-mass weights below. Set 0.0 for the old
+    # (unfloored) behavior.
+    dcs_bandwidth_floor_frac: float = 1.0
+
     # ----- Per-edge dynamics-consistency gate g_ij -------------------------
     # Certifies that neighbor j's transition actually shares s_i's local
     # action->displacement dynamics before its (s_j, a_j) is pooled into the
@@ -282,6 +294,7 @@ def validate_config(config: TrainConfig) -> None:
     assert 0.0 <= config.dcs_percentile_low < config.dcs_percentile_high <= 100.0
     assert 0.0 <= config.dcs_gate_low_percentile <= config.dcs_gate_high_percentile <= 100.0
     assert config.dcs_bandwidth_scale > 0.0
+    assert config.dcs_bandwidth_floor_frac >= 0.0
     assert config.dcs_dynamics_scale > 0.0
     assert config.dcs_dynamics_ridge >= 0.0
     assert config.dcs_metric_source in ("observation", "oracle"), \
@@ -633,8 +646,32 @@ def build_neighbor_weights(
         junction, config.dcs_gate_low_percentile, config.dcs_gate_high_percentile
     )
     kernel = covp.neighbor_kernel_weights(
-        profile["neighbor_distances"], config.dcs_bandwidth_scale
+        profile["neighbor_distances"], config.dcs_bandwidth_scale,
+        config.dcs_bandwidth_floor_frac,
     )
+
+    # Kernel-saturation diagnostic: what fraction of neighbor edges sit at
+    # (near-)zero distance? A high value flags a degenerate/discrete metric
+    # space where the graph cannot grade neighbors by distance (e.g. the oracle
+    # button_states graph). The bandwidth floor keeps mixed neighborhoods
+    # graded, but a high exact-match fraction means most pooling is uniform and
+    # its influence should be controlled via eta_V / eta_pi, not the kernel.
+    dists = profile["neighbor_distances"]
+    zero_edge_frac = float(np.mean(dists <= 1e-6))
+    zero_median_row_frac = float(np.mean(np.median(dists, axis=1) <= 1e-6))
+    print(
+        f"Kernel | zero-distance edges={zero_edge_frac:.3f} | "
+        f"rows with zero median (kernel would saturate w/o floor)="
+        f"{zero_median_row_frac:.3f} | bandwidth_floor_frac="
+        f"{config.dcs_bandwidth_floor_frac}"
+    )
+    if zero_median_row_frac > 0.5:
+        print(
+            "NOTE: >50% of states have a (near-)duplicate-dominated neighborhood "
+            "in this metric space. This is the discrete-oracle regime: the kernel "
+            "cannot discriminate these neighbors, so pooling is largely uniform. "
+            "Prefer eta_V=0 (actor-only) to avoid destabilizing the value backup."
+        )
 
     weights_before_g = (gate[:, None] * kernel).astype(np.float32)
 
