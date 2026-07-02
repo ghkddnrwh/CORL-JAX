@@ -92,6 +92,7 @@ from flax import linen as nn
 from flax import serialization, struct
 
 import coverage_profile as covp
+import temporal_metric as tmet
 
 d4rl = None
 
@@ -227,23 +228,46 @@ class TrainConfig:
     dcs_force_recompute: bool = False
     dcs_cache_by_seed: bool = False
 
-    # ----- ORACLE CEILING TEST --------------------------------------------
+    # ----- METRIC SOURCE: which space the kNN graph is built in -----------
     # Selects the metric space in which the kNN graph is built:
     #   "observation" : default; neighbors from normalized observations (L2).
     #   "oracle"      : neighbors from ground-truth dataset field(s) (e.g.
-    #                   puzzle button_states), loaded via add_info=True. The
-    #                   policy/critic still train on the standard observations;
-    #                   ONLY neighbor selection uses the oracle. This is the
-    #                   upper-bound experiment: if oracle-graph DCS beats
-    #                   L2-graph DCS and plain IQL, the kNN graph was the
-    #                   bottleneck and a learned metric is worth building.
-    dcs_metric_source: str = "observation"  # observation | oracle
+    #                   puzzle button_states), loaded via add_info=True. This is
+    #                   the privileged CEILING TEST -- not deployable.
+    #   "temporal"    : neighbors from a LEARNED temporal representation phi(s)
+    #                   trained on the dataset's (s, s') transitions (see
+    #                   temporal_metric.py). Data-only and deployable: this is
+    #                   the approximation of the oracle graph. Training still
+    #                   uses standard observations; only neighbor selection uses
+    #                   phi(s).
+    dcs_metric_source: str = "observation"  # observation | oracle | temporal
     # Dataset add_info field(s) used as the oracle metric space. Auto-defaults:
     # puzzle -> button_states; cube/antmaze -> qpos,qvel. Comma-separated.
     dcs_oracle_keys: Optional[str] = None
     # Standardize the oracle space per-dim before building the kNN graph so no
     # single field (e.g. a large-magnitude qvel) dominates the distance.
     dcs_oracle_standardize: bool = True
+
+    # ----- Temporal metric (dcs_metric_source="temporal") -----------------
+    # Contrastive encoder phi(s) hyperparameters. Embeddings are cached (keyed
+    # by these + env + seed) so the encoder is trained once. phi is L2-
+    # normalized onto the unit sphere by default, so Euclidean kNN ranks by
+    # cosine similarity; leave dcs_temporal_standardize False in that case.
+    dcs_temporal_dim: int = 32
+    dcs_temporal_hidden: int = 256
+    dcs_temporal_layers: int = 2
+    dcs_temporal_steps: int = 50_000
+    dcs_temporal_batch: int = 512
+    dcs_temporal_lr: float = 3e-4
+    dcs_temporal_temperature: float = 0.1
+    # Positive pairs are k-step successors with k in [1, horizon]. horizon=1
+    # uses next_observations directly (robust, no trajectory bookkeeping);
+    # horizon>1 samples within trajectories (needs terminals/masks or is
+    # detected from observation continuity).
+    dcs_temporal_horizon: int = 1
+    dcs_temporal_normalize: bool = True
+    dcs_temporal_standardize: bool = False
+    dcs_temporal_force_recompute: bool = False
     # -----------------------------------------------------------------------
 
     vf_lr: float = 3e-4
@@ -297,8 +321,17 @@ def validate_config(config: TrainConfig) -> None:
     assert config.dcs_bandwidth_floor_frac >= 0.0
     assert config.dcs_dynamics_scale > 0.0
     assert config.dcs_dynamics_ridge >= 0.0
-    assert config.dcs_metric_source in ("observation", "oracle"), \
-        "dcs_metric_source must be 'observation' or 'oracle'"
+    assert config.dcs_metric_source in ("observation", "oracle", "temporal"), \
+        "dcs_metric_source must be 'observation', 'oracle', or 'temporal'"
+    if config.dcs_metric_source == "temporal":
+        assert config.dcs_temporal_dim >= 1
+        assert config.dcs_temporal_hidden >= 1
+        assert config.dcs_temporal_layers >= 1
+        assert config.dcs_temporal_steps >= 0
+        assert config.dcs_temporal_batch >= 2, "InfoNCE needs batch_size >= 2"
+        assert config.dcs_temporal_lr > 0.0
+        assert config.dcs_temporal_temperature > 0.0
+        assert config.dcs_temporal_horizon >= 1
     assert config.dcs_subsample >= 1
     assert config.dcs_chunk_size >= 1
     if config.dcs_profile_path is not None:
@@ -463,6 +496,8 @@ def get_coverage_profile_cache_path(config: TrainConfig) -> Optional[Path]:
     if config.dcs_metric_source == "oracle":
         keys = resolve_oracle_keys(config) or ("auto",)
         source_tag = "oracle-" + "_".join(keys)
+    elif config.dcs_metric_source == "temporal":
+        source_tag = "temporal-" + tmet.signature_hash(build_temporal_signature(config))
     filename = f"coverage_profile_{_safe_path_name(source_tag)}_k{int(config.dcs_k)}.npz"
 
     if config.dcs_cache_by_seed:
@@ -529,6 +564,101 @@ def build_oracle_metric_space(
     return oracle
 
 
+def build_temporal_signature(
+    config: TrainConfig,
+    observations_shape: Optional[Tuple[int, ...]] = None,
+) -> Dict[str, Any]:
+    """Encoder-defining signature; any change invalidates cached embeddings and
+    the coverage graph built from them."""
+    return {
+        "cache_version": tmet.TEMPORAL_CACHE_VERSION,
+        "env": config.env,
+        "seed": int(config.seed),
+        "normalize": bool(config.dcs_temporal_normalize),
+        "observations_shape": tuple(observations_shape) if observations_shape else None,
+        "embed_dim": int(config.dcs_temporal_dim),
+        "hidden_dim": int(config.dcs_temporal_hidden),
+        "n_hidden": int(config.dcs_temporal_layers),
+        "steps": int(config.dcs_temporal_steps),
+        "batch_size": int(config.dcs_temporal_batch),
+        "lr": float(config.dcs_temporal_lr),
+        "temperature": float(config.dcs_temporal_temperature),
+        "horizon": int(config.dcs_temporal_horizon),
+    }
+
+
+def get_temporal_embeddings_cache_path(config: TrainConfig) -> Optional[Path]:
+    if config.dcs_profile_path is None:
+        return None
+    root = Path(config.dcs_profile_path)
+    env_name = _safe_path_name(config.env)
+    sig_hash = tmet.signature_hash(build_temporal_signature(config))
+    filename = f"temporal_emb_{sig_hash}.npz"
+    if config.dcs_cache_by_seed:
+        return root / env_name / f"seed_{config.seed}" / filename
+    return root / env_name / filename
+
+
+def build_temporal_metric_space(
+    config: TrainConfig,
+    dataset: Dict[str, np.ndarray],
+    device: Any = None,
+) -> np.ndarray:
+    """Return phi(observations) as the (N, dim) temporal metric space, training
+    (or loading cached) the contrastive encoder on the dataset's (s, s')
+    transitions. Data-only: uses observations/next_observations, never any
+    privileged field."""
+    observations = np.asarray(dataset["observations"], dtype=np.float32)
+    if "next_observations" not in dataset:
+        raise SystemExit(
+            "dcs_metric_source='temporal' requires next_observations in the dataset."
+        )
+    next_observations = np.asarray(dataset["next_observations"], dtype=np.float32)
+
+    signature = build_temporal_signature(config, observations_shape=observations.shape)
+    cache_path = get_temporal_embeddings_cache_path(config)
+
+    embeddings = None
+    if cache_path is not None and not config.dcs_temporal_force_recompute:
+        embeddings = tmet.load_temporal_embeddings_cache(cache_path, signature)
+
+    if embeddings is None:
+        next_index = None
+        if config.dcs_temporal_horizon > 1:
+            next_index = tmet.build_successor_index(dataset)
+        embeddings = tmet.train_temporal_encoder(
+            observations,
+            next_observations,
+            embed_dim=config.dcs_temporal_dim,
+            hidden_dim=config.dcs_temporal_hidden,
+            n_hidden=config.dcs_temporal_layers,
+            steps=config.dcs_temporal_steps,
+            batch_size=config.dcs_temporal_batch,
+            lr=config.dcs_temporal_lr,
+            temperature=config.dcs_temporal_temperature,
+            horizon=config.dcs_temporal_horizon,
+            normalize=config.dcs_temporal_normalize,
+            seed=config.seed,
+            next_index=next_index,
+            device=device,
+        )
+        if cache_path is not None:
+            tmet.save_temporal_embeddings_cache(cache_path, embeddings, signature)
+
+    if config.dcs_temporal_standardize:
+        # Only meaningful for UNnormalized embeddings; per-dim standardizing a
+        # unit-sphere embedding distorts the cosine geometry.
+        embeddings = tmet.standardize_embeddings(embeddings)
+
+    print(
+        f"Temporal metric space: dim={embeddings.shape[1]} "
+        f"normalize={config.dcs_temporal_normalize} "
+        f"standardize={config.dcs_temporal_standardize} "
+        f"horizon={config.dcs_temporal_horizon}"
+    )
+    return embeddings.astype(np.float32)
+
+
 def build_coverage_profile_metadata(
     config: TrainConfig,
     observations: np.ndarray,
@@ -541,6 +671,10 @@ def build_coverage_profile_metadata(
     and oracle keys ARE included, since they change neighbor selection.
     """
     oracle_keys = resolve_oracle_keys(config) if config.dcs_metric_source == "oracle" else None
+    temporal_sig = (
+        build_temporal_signature(config, observations_shape=observations.shape)
+        if config.dcs_metric_source == "temporal" else None
+    )
     return covp.canonicalize_metadata(
         {
             "cache_version": covp.COVERAGE_CACHE_VERSION,
@@ -558,6 +692,8 @@ def build_coverage_profile_metadata(
             "dcs_oracle_keys": list(oracle_keys) if oracle_keys else None,
             "dcs_oracle_standardize": bool(config.dcs_oracle_standardize)
             if config.dcs_metric_source == "oracle" else None,
+            "dcs_temporal_signature": tmet.signature_hash(temporal_sig)
+            if temporal_sig is not None else None,
         }
     )
 
@@ -565,6 +701,7 @@ def build_coverage_profile_metadata(
 def load_or_compute_coverage_profile(
     config: TrainConfig,
     dataset: Dict[str, np.ndarray],
+    device: Any = None,
 ) -> Dict[str, np.ndarray]:
     """Load the cached coverage profile, or compute and save it when the cache
     is missing/stale. Observations are expected to be already normalized."""
@@ -581,13 +718,18 @@ def load_or_compute_coverage_profile(
     if cache_path is not None and config.dcs_force_recompute:
         print(f"Ignoring existing coverage cache because dcs_force_recompute=True: {cache_path}")
 
-    # Ceiling test: build the kNN graph in the oracle metric space when asked.
+    # Build the kNN graph in the requested metric space.
     metric_space = None
     if config.dcs_metric_source == "oracle":
         metric_space = build_oracle_metric_space(config, dataset)
         print(f"Computing oracle-graph coverage profile for {ALGORITHM_NAME} "
               f"(k={config.dcs_k}); neighbors selected in oracle space, training "
               f"still uses standard observations.")
+    elif config.dcs_metric_source == "temporal":
+        metric_space = build_temporal_metric_space(config, dataset, device=device)
+        print(f"Computing temporal-graph coverage profile for {ALGORITHM_NAME} "
+              f"(k={config.dcs_k}); neighbors selected in learned temporal space, "
+              f"training still uses standard observations.")
     else:
         print(f"Computing one-time coverage profile for {ALGORITHM_NAME} (k={config.dcs_k})...")
 
@@ -2049,7 +2191,7 @@ def train(config: TrainConfig):
     junction = None
     buffer_neighbor_k = config.dcs_k
     if config.use_dcs:
-        profile = load_or_compute_coverage_profile(config, dataset)
+        profile = load_or_compute_coverage_profile(config, dataset, device=jax_device)
         neighbor_indices, neighbor_weights, junction = build_neighbor_weights(config, profile)
         buffer_neighbor_k = neighbor_indices.shape[1]
         if buffer_neighbor_k != config.dcs_k:
@@ -2116,6 +2258,14 @@ def train(config: TrainConfig):
                 f"*** ORACLE CEILING TEST: kNN graph built in ORACLE space "
                 f"(keys={list(keys) if keys else 'auto'}); training still uses "
                 f"standard observations. ***"
+            )
+        elif config.dcs_metric_source == "temporal":
+            print(
+                f"*** TEMPORAL METRIC: kNN graph built in a LEARNED temporal "
+                f"space phi(s) (dim={config.dcs_temporal_dim}, "
+                f"horizon={config.dcs_temporal_horizon}, "
+                f"steps={config.dcs_temporal_steps}); data-only, deployable. "
+                f"Training still uses standard observations. ***"
             )
         else:
             print("metric source: observation (standard L2 kNN graph)")
