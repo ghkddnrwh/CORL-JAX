@@ -1188,8 +1188,7 @@ def resolve_checkpoint_path(load_model: Union[str, Path], run_name: Optional[str
 # Main train entry
 # -----------------------------------------------------------------------------
 
-@pyrallis.wrap()
-def train(config: TrainConfig):
+def _train_impl(config: TrainConfig):
     normalize_config_aliases(config)
     config = apply_env_hyperparams(config)
     config = finalize_checkpoint_path(config)
@@ -1353,6 +1352,19 @@ def train(config: TrainConfig):
         if config.save_best_model:
             print(f"Saved best checkpoint to:  {os.path.join(config.checkpoints_path, 'best_checkpoint.pkl')}")
         print("---------------------------------------")
+
+
+@pyrallis.wrap()
+def train(config: TrainConfig):
+    exit_code = 0
+    try:
+        return _train_impl(config)
+    except BaseException:
+        exit_code = 1
+        raise
+    finally:
+        if getattr(wandb, "run", None) is not None:
+            wandb.finish(exit_code=exit_code)
 
 
 if __name__ == "__main__":

@@ -1521,8 +1521,7 @@ def save_checkpoint(
     #     wandb.save(str(checkpoint_path), policy="now")
 
 
-@pyrallis.wrap()
-def train(config: TrainConfig):
+def _train_impl(config: TrainConfig):
     normalize_config_aliases(config)
     actor_refit_only = config.mode == "actor_refit"
     loaded_run_dir: Optional[Path] = None
@@ -1707,6 +1706,26 @@ def train(config: TrainConfig):
 
     if config.checkpoints_path is not None:
         save_and_upload_eval_logs(eval_logs, config.checkpoints_path, config.log_wandb)
+
+
+@pyrallis.wrap()
+def train(config: TrainConfig):
+    """Run training and always close an active W&B run.
+
+    This wrapper keeps the original training code in _train_impl(), while
+    ensuring wandb.finish() is called for normal completion, exceptions, and
+    KeyboardInterrupt. It cannot run after SIGKILL/kill -9, so jobs should still
+    be stopped gracefully whenever possible.
+    """
+    exit_code = 0
+    try:
+        return _train_impl(config)
+    except BaseException:
+        exit_code = 1
+        raise
+    finally:
+        if getattr(wandb, "run", None) is not None:
+            wandb.finish(exit_code=exit_code)
 
 
 if __name__ == "__main__":

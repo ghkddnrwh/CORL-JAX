@@ -1174,8 +1174,7 @@ def resolve_checkpoint_path(
     return checkpoint_path.parent, checkpoint_path
 
 
-@pyrallis.wrap()
-def train(config: TrainConfig):
+def _train_impl(config: TrainConfig):
     config = apply_env_hyperparams(config)
     refit_only = config.mode == "refit"
     if refit_only and config.load_model == "":
@@ -1383,6 +1382,19 @@ def train(config: TrainConfig):
             checkpoints_path=config.checkpoints_path,
             log_wandb=config.log_wandb,
         )
+
+
+@pyrallis.wrap()
+def train(config: TrainConfig):
+    exit_code = 0
+    try:
+        return _train_impl(config)
+    except BaseException:
+        exit_code = 1
+        raise
+    finally:
+        if getattr(wandb, "run", None) is not None:
+            wandb.finish(exit_code=exit_code)
 
 
 if __name__ == "__main__":

@@ -1626,8 +1626,7 @@ def load_run_config_for_refit(
     return loaded_config
 
 
-@pyrallis.wrap()
-def train(config: TrainConfig):
+def _train_impl(config: TrainConfig):
     refit_only = config.mode == "refit"
 
     loaded_run_dir: Optional[Path] = None
@@ -3576,3 +3575,18 @@ if __name__ == "__main__":
 
 # if __name__ == "__main__":
 #     train()
+
+
+@pyrallis.wrap()
+def train(config: TrainConfig):
+    exit_code = 0
+    try:
+        return _train_impl(config)
+    except BaseException:
+        exit_code = 1
+        raise
+    finally:
+        if getattr(wandb, "run", None) is not None:
+            wandb.finish(exit_code=exit_code)
+
+
