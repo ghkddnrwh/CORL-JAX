@@ -1628,6 +1628,19 @@ def _train_impl(config: TrainConfig):
         )
 
 
+@pyrallis.wrap()
+def train(config: TrainConfig):
+    exit_code = 0
+    try:
+        return _train_impl(config)
+    except BaseException:
+        exit_code = 1
+        raise
+    finally:
+        if getattr(wandb, "run", None) is not None:
+            wandb.finish(exit_code=exit_code)
+
+            
 if __name__ == "__main__":
     train()
 
@@ -2892,16 +2905,6 @@ if __name__ == "__main__":
 #     train()
 
 
-@pyrallis.wrap()
-def train(config: TrainConfig):
-    exit_code = 0
-    try:
-        return _train_impl(config)
-    except BaseException:
-        exit_code = 1
-        raise
-    finally:
-        if getattr(wandb, "run", None) is not None:
-            wandb.finish(exit_code=exit_code)
+
 
 
