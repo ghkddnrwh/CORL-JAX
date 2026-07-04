@@ -325,7 +325,15 @@ def gate_from_junction(
     lo = float(np.percentile(junction, gate_low_percentile))
     hi = float(np.percentile(junction, gate_high_percentile))
     if hi <= lo:
-        return (junction >= hi).astype(np.float32)
+        # Degenerate score distribution: the old behavior returned all ones
+        # when junction == 0 everywhere, which accidentally enabled every
+        # neighbor edge in exactly the regime where the certificate carries no
+        # information. Treat a near-zero degenerate score as "no certified
+        # support" and return all zeros. If all scores are tied at a positive
+        # value, return all ones because every point is equally certified.
+        if hi <= _EPS:
+            return np.zeros_like(junction, dtype=np.float32)
+        return np.ones_like(junction, dtype=np.float32)
     return np.clip((junction - lo) / (hi - lo), 0.0, 1.0).astype(np.float32)
 
 
