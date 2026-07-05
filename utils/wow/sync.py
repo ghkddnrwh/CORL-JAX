@@ -14,15 +14,15 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 # ====== 환경 설정(필요하면 여기만 바꿔도 됨) ======
-SRC_USER = "ukjo2"
-SRC_HOST = "166.104.35.89"
+SRC_USER = "ukjo703"
+SRC_HOST = "166.104.44.19"
 # SRC_ROOT = "/home/ukjo1/work/fed_rl/moderate-rl/logs/action_robust/sam/exclude_critic/ver2/single"
 
 # DST_ROOT = "/home/ukjo2/work/fed_rl/expectile-rl/logs/action_robust/sam/exclude_critic/ver2/single"
-SRC_ROOT = "/home/ukjo2/work/fed_rl/expectile-rl/logs/action_robust/ga_sac_total"
+SRC_ROOT = "/home/ukjo703/work/offline_rl/CORL-JAX/logs/density"
 
 
-DST_ROOT = "/home/ukjo1/work/fed_rl/moderate-rl/logs/tnnls_revision/meso/ga_sac"
+DST_ROOT = "/home/ukjo616/work/offline_rl/CORL-JAX/logs/density2"
 
 LEAF_DEPTH = 1
 
@@ -41,6 +41,7 @@ SSH_OPTS = [
     "-o", "PasswordAuthentication=no",
     "-o", "StrictHostKeyChecking=no",
     "-o", "UserKnownHostsFile=/dev/null",
+    "-p", "7031",
 ]
 
 # ==============================================
@@ -244,6 +245,7 @@ def rsync_copy(rel_dir: str, dry_run: bool = False) -> None:
 def save_report(report: Dict[str, Any]) -> Path:
     ts = report["generated_at"]
     p = Path(f"logs/sync_report/sync_report_{ts}.json")
+    p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(report, indent=2, ensure_ascii=False))
     return p
 
@@ -275,7 +277,10 @@ def main():
 
     dst_root = Path(DST_ROOT)
     if not dst_root.exists():
-        print(f"[ERROR] DST_ROOT does not exist: {DST_ROOT}", file=sys.stderr)
+        print(f"[INFO] DST_ROOT does not exist. Creating: {DST_ROOT}")
+        dst_root.mkdir(parents=True, exist_ok=True)
+    elif not dst_root.is_dir():
+        print(f"[ERROR] DST_ROOT exists but is not a directory: {DST_ROOT}", file=sys.stderr)
         sys.exit(2)
 
     # 0) ssh 사전 체크(실패하면 여기서 바로 에러)
