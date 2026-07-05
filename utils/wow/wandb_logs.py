@@ -206,8 +206,8 @@ def export_wandb_run_for_gpt(
 
 if __name__ == "__main__":
     export_wandb_run_for_gpt(
-        run_path="/ukjo19/ORL-BIAS/runs/2715d0d6-96b9-4823-908d-f6a677eded71",
-        out_dir="logs/wandb_logs/2715d0d6-96b9-4823-908d-f6a677eded71",
+        run_path="/ukjo19/ORL-BIAS/runs/e3351733-a73f-49d1-b65d-631be7d7a9bd",
+        out_dir="logs/wandb_logs/kes_dyn/e3351733-a73f-49d1-b65d-631be7d7a9bd",
         page_size=1000,
         # max_rows=None,
         # max_rows=1000,
