@@ -9,9 +9,10 @@
 #     tau_i = tau_min + (tau_max - tau_min) * c_i
 # but changes the support edge weight to
 #     w_ij = G_i * K_ij,
-# where K_ij is the distance kernel and G_i is a state-level gate derived from
-# density/diversity junction score J_i. No dynamics gate and no neighbor
-# Q/action pooling are used.
+# where K_ij is the distance kernel and G_i is a configurable state-level gate.
+# The dcs_gate_source option supports ablations over density, action diversity,
+# displacement diversity, diversity product, and their density-weighted variants.
+# No dynamics gate and no neighbor Q/action pooling are used.
 #
 import copy
 import json
@@ -85,6 +86,16 @@ EXP_ADV_MAX = 100.0
 LOG_STD_MIN = -20.0
 LOG_STD_MAX = 2.0
 
+DCS_GATE_SOURCES = (
+    "density",
+    "action",
+    "displacement",
+    "product_diversity",
+    "density_x_action",
+    "density_x_displacement",
+    "density_x_product",
+)
+
 
 @dataclass
 class TrainConfig:
@@ -150,11 +161,22 @@ class TrainConfig:
     dcs_value_neighbor_weight: float = 0.0
     dcs_actor_neighbor_weight: float = 0.0
 
-    # Junction score J(s) = density_conf x diversity_conf.
-    #   diversity mode: "action" (spread of neighbor actions),
-    #                   "displacement" (directional dispersion of neighbor
-    #                                   next-state displacements),
-    #                   "product" (geometric mean of both).
+    # Junction score source used to build the state gate G_i.
+    # This is the main ablation knob for testing which coverage statistic makes
+    # IQL's optimistic expectile trustworthy:
+    #   density                : G_i from density confidence only
+    #   action                 : G_i from action-spread diversity only
+    #   displacement           : G_i from next-displacement diversity only
+    #   product_diversity      : G_i from sqrt(action_div * disp_div), no density
+    #   density_x_action       : G_i from density * action diversity
+    #   density_x_displacement : G_i from density * displacement diversity
+    #   density_x_product      : G_i from density * sqrt(action_div * disp_div)
+    dcs_gate_source: str = "density_x_product"
+
+    # Backward-compatible alias used only when old hyperparameter files/scripts
+    # still pass --dcs_diversity_mode. If dcs_gate_source is not explicitly
+    # overridden, apply_env_hyperparams maps dcs_diversity_mode to the matching
+    # density_x_* gate source.
     dcs_diversity_mode: str = "product"
 
     # Percentile scaling of raw kNN statistics into [0, 1] confidences.
@@ -279,7 +301,10 @@ class TrainConfig:
 def refresh_algorithm_names(config: TrainConfig) -> None:
     config.project = "ORL-BIAS"
     config.group = f"{ALGORITHM_NAME}-JAX"
-    config.name = f"{ALGORITHM_NAME}-JAX-{config.env}"
+    # Include the gate source in the run name so ablation runs do not overwrite
+    # each other when the same env/seed/checkpoints_path is reused.
+    gate_source = getattr(config, "dcs_gate_source", "density_x_product")
+    config.name = f"{ALGORITHM_NAME}-JAX-{config.env}-gate_{gate_source}"
 
 
 def validate_config(config: TrainConfig) -> None:
@@ -300,6 +325,9 @@ def validate_config(config: TrainConfig) -> None:
     assert config.dcs_k >= 1
     assert config.dcs_value_neighbor_weight >= 0.0
     assert config.dcs_actor_neighbor_weight >= 0.0
+    assert config.dcs_gate_source in DCS_GATE_SOURCES, (
+        f"dcs_gate_source must be one of {DCS_GATE_SOURCES}, got {config.dcs_gate_source}"
+    )
     assert config.dcs_diversity_mode in ("action", "displacement", "product")
     assert 0.0 <= config.dcs_percentile_low < config.dcs_percentile_high <= 100.0
     assert 0.0 <= config.dcs_gate_low_percentile <= config.dcs_gate_high_percentile <= 100.0
@@ -408,6 +436,20 @@ def apply_env_hyperparams(config: TrainConfig) -> TrainConfig:
         setattr(config, key, _coerce_hparam_value(raw_value))
         applied.append(f"{raw_key}->{key}" if raw_key != key else key)
         applied_fields.add(key)
+
+    # Backward compatibility: old YAML/scripts may only specify
+    # dcs_diversity_mode. In the new ablation interface, that corresponds to
+    # density_x_{action, displacement, product}. Do this only when the new knob
+    # was not explicitly set by CLI/YAML.
+    if "dcs_gate_source" not in applied_fields and "dcs_gate_source" not in cli_overrides:
+        legacy_to_gate_source = {
+            "action": "density_x_action",
+            "displacement": "density_x_displacement",
+            "product": "density_x_product",
+        }
+        config.dcs_gate_source = legacy_to_gate_source.get(
+            config.dcs_diversity_mode, config.dcs_gate_source
+        )
 
     refresh_algorithm_names(config)
     validate_config(config)
@@ -737,6 +779,50 @@ def load_or_compute_coverage_profile(
     return profile
 
 
+def build_gate_signal(
+    config: TrainConfig,
+    density_conf: np.ndarray,
+    action_div_conf: np.ndarray,
+    disp_div_conf: np.ndarray,
+) -> Tuple[np.ndarray, str]:
+    """Return the pre-gate scalar signal used to produce G_i.
+
+    The returned signal is later passed through gate_from_junction(), preserving
+    the same low/high percentile ramp used by the original KES-G-IQL code.
+    """
+    density_conf = np.asarray(density_conf, dtype=np.float32)
+    action_div_conf = np.asarray(action_div_conf, dtype=np.float32)
+    disp_div_conf = np.asarray(disp_div_conf, dtype=np.float32)
+
+    if config.dcs_gate_source == "density":
+        return density_conf, "density"
+    if config.dcs_gate_source == "action":
+        return action_div_conf, "action_diversity"
+    if config.dcs_gate_source == "displacement":
+        return disp_div_conf, "displacement_diversity"
+    if config.dcs_gate_source == "product_diversity":
+        diversity = np.sqrt(
+            np.clip(action_div_conf, 0.0, 1.0) * np.clip(disp_div_conf, 0.0, 1.0)
+        ).astype(np.float32)
+        return diversity, "sqrt(action_diversity * displacement_diversity)"
+    if config.dcs_gate_source == "density_x_action":
+        return (density_conf * action_div_conf).astype(np.float32), "density * action_diversity"
+    if config.dcs_gate_source == "density_x_displacement":
+        return (density_conf * disp_div_conf).astype(np.float32), "density * displacement_diversity"
+    if config.dcs_gate_source == "density_x_product":
+        diversity = np.sqrt(
+            np.clip(action_div_conf, 0.0, 1.0) * np.clip(disp_div_conf, 0.0, 1.0)
+        ).astype(np.float32)
+        return (density_conf * diversity).astype(np.float32), (
+            "density * sqrt(action_diversity * displacement_diversity)"
+        )
+
+    raise ValueError(
+        f"Unknown dcs_gate_source={config.dcs_gate_source}. "
+        f"Valid values: {DCS_GATE_SOURCES}"
+    )
+
+
 def build_neighbor_weights(
     config: TrainConfig,
     profile: Dict[str, np.ndarray],
@@ -774,11 +860,11 @@ def build_neighbor_weights(
         config.dcs_percentile_low,
         config.dcs_percentile_high,
     )
-    junction = covp.build_junction_score(
-        density_conf, action_div_conf, disp_div_conf, config.dcs_diversity_mode
+    gate_signal, gate_signal_name = build_gate_signal(
+        config, density_conf, action_div_conf, disp_div_conf
     )
     gate = covp.gate_from_junction(
-        junction, config.dcs_gate_low_percentile, config.dcs_gate_high_percentile
+        gate_signal, config.dcs_gate_low_percentile, config.dcs_gate_high_percentile
     )
     kernel = covp.neighbor_kernel_weights(
         profile["neighbor_distances"],
@@ -799,6 +885,7 @@ def build_neighbor_weights(
 
     print(
         "KES-G support profile | "
+        f"gate_source={config.dcs_gate_source} ({gate_signal_name}) | "
         f"weights=G_i*K_ij | mean edge weight={mean_weight:.4f} | "
         f"mean per-state mass={mean_mass:.4f} | "
         f"active-row frac={active_row_frac:.4f} | active-edge frac={active_edge_frac:.4f}"
@@ -806,14 +893,15 @@ def build_neighbor_weights(
     print(
         "Coverage profile | "
         + covp.summarize_profile(
-            density_conf, action_div_conf, disp_div_conf, junction, gate, None
+            density_conf, action_div_conf, disp_div_conf, gate_signal, gate, None
         )
     )
     print(
         f"Kernel diagnostics | zero-distance edges={zero_edge_frac:.3f} | "
         f"rows with zero median={zero_median_row_frac:.3f} | "
         f"bandwidth_scale={config.dcs_bandwidth_scale} | "
-        f"bandwidth_floor_frac={config.dcs_bandwidth_floor_frac}"
+        f"bandwidth_floor_frac={config.dcs_bandwidth_floor_frac} | "
+        f"gate_percentiles=({config.dcs_gate_low_percentile}, {config.dcs_gate_high_percentile})"
     )
 
     return (
@@ -2186,7 +2274,7 @@ def train(config: TrainConfig):
         f"support_power={config.scv_support_power} | metric={config.dcs_metric_source}"
     )
     if config.use_dcs:
-        print("support weights: kernel-only K_ij; no junction gate, no dynamics gate, no neighbor Q/action pooling")
+        print(f"support weights: G_i*K_ij with gate_source={config.dcs_gate_source}; no dynamics gate, no neighbor Q/action pooling")
         if config.dcs_metric_source == "oracle":
             keys = resolve_oracle_keys(config)
             print(
