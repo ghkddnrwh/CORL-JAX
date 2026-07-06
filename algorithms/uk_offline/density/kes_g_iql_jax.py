@@ -304,7 +304,8 @@ def refresh_algorithm_names(config: TrainConfig) -> None:
     # Include the gate source in the run name so ablation runs do not overwrite
     # each other when the same env/seed/checkpoints_path is reused.
     gate_source = getattr(config, "dcs_gate_source", "density_x_product")
-    config.name = f"{ALGORITHM_NAME}-JAX-{config.env}-gate_{gate_source}"
+    # config.name = f"{ALGORITHM_NAME}-JAX-{config.env}-gate_{gate_source}"
+    config.name = f"{ALGORITHM_NAME}-JAX-{config.env}"
 
 
 def validate_config(config: TrainConfig) -> None:
