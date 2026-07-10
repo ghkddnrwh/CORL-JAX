@@ -285,6 +285,15 @@ class TrainConfig:
     dcs_temporal_normalize: bool = True
     dcs_temporal_standardize: bool = False
     dcs_temporal_force_recompute: bool = False
+
+    # ----- Network input representation ablations --------------------------
+    # These switches independently control whether each learned function sees
+    # the frozen temporal embedding phi(s) or the normalized raw observation s.
+    # They require dcs_metric_source="temporal" because only that metric has a
+    # deployable encoder that can transform unseen evaluation states online.
+    actor_use_embedding: bool = False
+    q_use_embedding: bool = False
+    v_use_embedding: bool = False
     # -----------------------------------------------------------------------
 
     vf_lr: float = 3e-4
@@ -359,6 +368,15 @@ def validate_config(config: TrainConfig) -> None:
         assert config.dcs_temporal_lr > 0.0
         assert config.dcs_temporal_temperature > 0.0
         assert config.dcs_temporal_horizon >= 1
+    uses_embedding_input = (
+        config.actor_use_embedding or config.q_use_embedding or config.v_use_embedding
+    )
+    if uses_embedding_input:
+        assert config.dcs_metric_source == "temporal", (
+            "actor_use_embedding/q_use_embedding/v_use_embedding require "
+            "dcs_metric_source='temporal' so unseen evaluation states can be "
+            "encoded by the learned temporal encoder."
+        )
     assert config.dcs_subsample >= 1
     assert config.dcs_chunk_size >= 1
     if config.dcs_profile_path is not None:
@@ -640,64 +658,233 @@ def get_temporal_embeddings_cache_path(config: TrainConfig) -> Optional[Path]:
     return root / env_name / filename
 
 
-def build_temporal_metric_space(
+def get_temporal_representation_cache_path(config: TrainConfig) -> Optional[Path]:
+    """Cache path for the deployable temporal representation bundle.
+
+    Unlike the legacy embedding-only .npz cache, this bundle also stores the
+    frozen encoder parameters and the embedding standardization statistics, so
+    the same phi(s) can be applied to unseen evaluation states.
+    """
+    if config.dcs_profile_path is None:
+        return None
+    root = Path(config.dcs_profile_path)
+    env_name = _safe_path_name(config.env)
+    sig_hash = tmet.signature_hash(build_temporal_signature(config))
+    filename = f"temporal_repr_{sig_hash}.pkl"
+    if config.dcs_cache_by_seed:
+        return root / env_name / f"seed_{config.seed}" / filename
+    return root / env_name / filename
+
+
+def _temporal_cross_entropy(logits: jnp.ndarray, labels: jnp.ndarray) -> jnp.ndarray:
+    logp = jax.nn.log_softmax(logits, axis=-1)
+    return -jnp.mean(logp[jnp.arange(logits.shape[0]), labels])
+
+
+def _encode_temporal_array(
+    encoder: Any,
+    params: Any,
+    observations: np.ndarray,
+    device: Any,
+    chunk_size: int = 100_000,
+) -> np.ndarray:
+    """Encode an arbitrary array with the frozen temporal encoder."""
+    observations = np.asarray(observations, dtype=np.float32)
+    if observations.shape[0] == 0:
+        return np.zeros((0, int(encoder.embed_dim)), dtype=np.float32)
+
+    output = np.empty((observations.shape[0], int(encoder.embed_dim)), dtype=np.float32)
+    apply_fn = jax.jit(lambda p, x: encoder.apply({"params": p}, x))
+    for start in range(0, observations.shape[0], int(chunk_size)):
+        end = min(start + int(chunk_size), observations.shape[0])
+        z = apply_fn(
+            params,
+            jax.device_put(jnp.asarray(observations[start:end]), device),
+        )
+        output[start:end] = np.asarray(jax.device_get(z), dtype=np.float32)
+    return output
+
+
+def train_temporal_representation(
     config: TrainConfig,
     dataset: Dict[str, np.ndarray],
     device: Any = None,
-) -> np.ndarray:
-    """Return phi(observations) as the (N, dim) temporal metric space, training
-    (or loading cached) the contrastive encoder on the dataset's (s, s')
-    transitions. Data-only: uses observations/next_observations, never any
-    privileged field."""
+) -> Dict[str, Any]:
+    """Train phi and return everything needed for graph construction and RL.
+
+    The encoder is trained once and then frozen. Dataset states are pre-encoded
+    for efficient minibatch training, while the saved encoder parameters are
+    used to encode unseen environment states during actor evaluation.
+    """
     observations = np.asarray(dataset["observations"], dtype=np.float32)
     if "next_observations" not in dataset:
         raise SystemExit(
             "dcs_metric_source='temporal' requires next_observations in the dataset."
         )
     next_observations = np.asarray(dataset["next_observations"], dtype=np.float32)
+    n = observations.shape[0]
 
-    signature = build_temporal_signature(config, observations_shape=observations.shape)
-    cache_path = get_temporal_embeddings_cache_path(config)
+    if device is None:
+        device = jax.devices()[0]
 
-    embeddings = None
-    if cache_path is not None and not config.dcs_temporal_force_recompute:
-        embeddings = tmet.load_temporal_embeddings_cache(cache_path, signature)
+    encoder = tmet.TemporalEncoder(
+        embed_dim=config.dcs_temporal_dim,
+        hidden_dim=config.dcs_temporal_hidden,
+        n_hidden=config.dcs_temporal_layers,
+        normalize=config.dcs_temporal_normalize,
+    )
+    key = jax.random.PRNGKey(config.seed)
+    key, init_key = jax.random.split(key)
+    params = encoder.init(
+        init_key,
+        jnp.zeros((1, observations.shape[1]), dtype=jnp.float32),
+    )["params"]
 
-    if embeddings is None:
-        next_index = None
-        if config.dcs_temporal_horizon > 1:
-            next_index = tmet.build_successor_index(dataset)
-        embeddings = tmet.train_temporal_encoder(
-            observations,
-            next_observations,
-            embed_dim=config.dcs_temporal_dim,
-            hidden_dim=config.dcs_temporal_hidden,
-            n_hidden=config.dcs_temporal_layers,
-            steps=config.dcs_temporal_steps,
-            batch_size=config.dcs_temporal_batch,
-            lr=config.dcs_temporal_lr,
-            temperature=config.dcs_temporal_temperature,
-            horizon=config.dcs_temporal_horizon,
-            normalize=config.dcs_temporal_normalize,
-            seed=config.seed,
-            next_index=next_index,
-            device=device,
+    tx = optax.adam(config.dcs_temporal_lr)
+    opt_state = tx.init(params)
+    inv_temp = 1.0 / max(float(config.dcs_temporal_temperature), 1e-8)
+
+    @jax.jit
+    def temporal_train_step(params, opt_state, anchor_obs, positive_obs):
+        def loss_fn(p):
+            za = encoder.apply({"params": p}, anchor_obs)
+            zp = encoder.apply({"params": p}, positive_obs)
+            logits = (za @ zp.T) * inv_temp
+            labels = jnp.arange(logits.shape[0])
+            loss = 0.5 * (
+                _temporal_cross_entropy(logits, labels)
+                + _temporal_cross_entropy(logits.T, labels)
+            )
+            pos_sim = jnp.mean(jnp.sum(za * zp, axis=-1))
+            return loss, pos_sim
+
+        (loss, pos_sim), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
+        updates, opt_state = tx.update(grads, opt_state, params)
+        params = optax.apply_updates(params, updates)
+        return params, opt_state, loss, pos_sim
+
+    next_index = None
+    use_kstep = config.dcs_temporal_horizon > 1
+    if use_kstep:
+        next_index = tmet.build_successor_index(dataset)
+
+    rng = np.random.default_rng(config.seed)
+    print(
+        f"Training deployable temporal representation: N={n} "
+        f"dim={config.dcs_temporal_dim} steps={config.dcs_temporal_steps} "
+        f"batch={config.dcs_temporal_batch} horizon={config.dcs_temporal_horizon} "
+        f"temp={config.dcs_temporal_temperature} "
+        f"positives={'k-step' if use_kstep else '1-step successor'}"
+    )
+    for it in range(int(config.dcs_temporal_steps)):
+        if use_kstep:
+            anchor_idx, positive_idx = tmet.sample_kstep_pairs(
+                next_index,
+                config.dcs_temporal_horizon,
+                config.dcs_temporal_batch,
+                rng,
+            )
+            anchor_obs = observations[anchor_idx]
+            positive_obs = observations[positive_idx]
+        else:
+            anchor_idx = rng.integers(0, n, size=config.dcs_temporal_batch)
+            anchor_obs = observations[anchor_idx]
+            positive_obs = next_observations[anchor_idx]
+
+        params, opt_state, loss, pos_sim = temporal_train_step(
+            params,
+            opt_state,
+            jax.device_put(jnp.asarray(anchor_obs), device),
+            jax.device_put(jnp.asarray(positive_obs), device),
         )
-        if cache_path is not None:
-            tmet.save_temporal_embeddings_cache(cache_path, embeddings, signature)
+        if (it + 1) % 5_000 == 0:
+            print(
+                f"  temporal step {it + 1}/{config.dcs_temporal_steps}: "
+                f"infonce={float(jax.device_get(loss)):.4f} "
+                f"pos_cos={float(jax.device_get(pos_sim)):.4f}"
+            )
+
+    embeddings = _encode_temporal_array(encoder, params, observations, device)
+    next_embeddings = _encode_temporal_array(encoder, params, next_observations, device)
 
     if config.dcs_temporal_standardize:
-        # Only meaningful for UNnormalized embeddings; per-dim standardizing a
-        # unit-sphere embedding distorts the cosine geometry.
-        embeddings = tmet.standardize_embeddings(embeddings)
+        embedding_mean = embeddings.mean(axis=0).astype(np.float32)
+        embedding_std = (embeddings.std(axis=0) + 1e-6).astype(np.float32)
+        embeddings = ((embeddings - embedding_mean) / embedding_std).astype(np.float32)
+        next_embeddings = (
+            (next_embeddings - embedding_mean) / embedding_std
+        ).astype(np.float32)
+    else:
+        embedding_mean = np.zeros((config.dcs_temporal_dim,), dtype=np.float32)
+        embedding_std = np.ones((config.dcs_temporal_dim,), dtype=np.float32)
+
+    return {
+        "signature": tmet.temporal_signature(
+            build_temporal_signature(config, observations_shape=observations.shape)
+        ),
+        "embeddings": embeddings.astype(np.float32),
+        "next_embeddings": next_embeddings.astype(np.float32),
+        "encoder_params": serialization.to_state_dict(params),
+        "embedding_mean": embedding_mean,
+        "embedding_std": embedding_std,
+    }
+
+
+def load_or_build_temporal_representation(
+    config: TrainConfig,
+    dataset: Dict[str, np.ndarray],
+    device: Any = None,
+) -> Dict[str, Any]:
+    """Load or train the deployable temporal representation bundle."""
+    observations = np.asarray(dataset["observations"], dtype=np.float32)
+    expected_signature = tmet.temporal_signature(
+        build_temporal_signature(config, observations_shape=observations.shape)
+    )
+    cache_path = get_temporal_representation_cache_path(config)
+
+    if cache_path is not None and cache_path.exists() and not config.dcs_temporal_force_recompute:
+        try:
+            with open(cache_path, "rb") as f:
+                payload = pickle.load(f)
+            required = {
+                "signature",
+                "embeddings",
+                "next_embeddings",
+                "encoder_params",
+                "embedding_mean",
+                "embedding_std",
+            }
+            if payload.get("signature") == expected_signature and required.issubset(payload.keys()):
+                print(f"Loaded deployable temporal representation from: {cache_path}")
+                return payload
+            print(f"Temporal representation cache is stale/incomplete; retraining: {cache_path}")
+        except Exception as exc:
+            print(f"Failed to load temporal representation cache {cache_path}: {exc}; retraining.")
+
+    representation = train_temporal_representation(config, dataset, device=device)
+    if cache_path is not None:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(cache_path, "wb") as f:
+            pickle.dump(representation, f)
+        print(f"Saved deployable temporal representation to: {cache_path}")
 
     print(
-        f"Temporal metric space: dim={embeddings.shape[1]} "
+        f"Temporal representation: dim={representation['embeddings'].shape[1]} "
         f"normalize={config.dcs_temporal_normalize} "
         f"standardize={config.dcs_temporal_standardize} "
         f"horizon={config.dcs_temporal_horizon}"
     )
-    return embeddings.astype(np.float32)
+    return representation
+
+
+def build_temporal_metric_space(
+    config: TrainConfig,
+    dataset: Dict[str, np.ndarray],
+    device: Any = None,
+) -> np.ndarray:
+    """Backward-compatible wrapper returning phi(observations)."""
+    representation = load_or_build_temporal_representation(config, dataset, device=device)
+    return np.asarray(representation["embeddings"], dtype=np.float32)
 
 
 def build_coverage_profile_metadata(
@@ -743,6 +930,7 @@ def load_or_compute_coverage_profile(
     config: TrainConfig,
     dataset: Dict[str, np.ndarray],
     device: Any = None,
+    temporal_representation: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, np.ndarray]:
     """Load the cached coverage profile, or compute and save it when the cache
     is missing/stale. Observations are expected to be already normalized."""
@@ -751,13 +939,26 @@ def load_or_compute_coverage_profile(
         config, dataset["observations"], dataset["actions"]
     )
 
-    if cache_path is not None and not config.dcs_force_recompute:
+    temporal_force_recompute = (
+        config.dcs_metric_source == "temporal"
+        and config.dcs_temporal_force_recompute
+    )
+    if (
+        cache_path is not None
+        and not config.dcs_force_recompute
+        and not temporal_force_recompute
+    ):
         cached = covp.load_coverage_profile_cache(cache_path, metadata)
         if cached is not None:
             return cached
 
     if cache_path is not None and config.dcs_force_recompute:
         print(f"Ignoring existing coverage cache because dcs_force_recompute=True: {cache_path}")
+    elif cache_path is not None and temporal_force_recompute:
+        print(
+            "Ignoring existing coverage cache because "
+            f"dcs_temporal_force_recompute=True: {cache_path}"
+        )
 
     # Build the kNN graph in the requested metric space.
     metric_space = None
@@ -767,10 +968,13 @@ def load_or_compute_coverage_profile(
               f"(k={config.dcs_k}); neighbors selected in oracle space, training "
               f"still uses standard observations.")
     elif config.dcs_metric_source == "temporal":
-        metric_space = build_temporal_metric_space(config, dataset, device=device)
+        if temporal_representation is None:
+            temporal_representation = load_or_build_temporal_representation(
+                config, dataset, device=device
+            )
+        metric_space = np.asarray(temporal_representation["embeddings"], dtype=np.float32)
         print(f"Computing temporal-graph coverage profile for {ALGORITHM_NAME} "
-              f"(k={config.dcs_k}); neighbors selected in learned temporal space, "
-              f"training still uses standard observations.")
+              f"(k={config.dcs_k}); neighbors selected in learned temporal space.")
     else:
         print(f"Computing one-time coverage profile for {ALGORITHM_NAME} (k={config.dcs_k})...")
 
@@ -1054,9 +1258,13 @@ class ReplayBuffer:
         buffer_size: int,
         neighbor_k: int,
         device: Any,
+        embedding_dim: int = 0,
     ):
         self._buffer_size = buffer_size
         self._neighbor_k = int(neighbor_k)
+        self._embedding_dim = int(embedding_dim)
+        if self._embedding_dim < 0:
+            raise ValueError("embedding_dim must be >= 0")
         self._pointer = 0
         self._size = 0
         self._states = np.zeros((buffer_size, state_dim), dtype=np.float32)
@@ -1064,6 +1272,8 @@ class ReplayBuffer:
         self._rewards = np.zeros((buffer_size, 1), dtype=np.float32)
         self._next_states = np.zeros((buffer_size, state_dim), dtype=np.float32)
         self._dones = np.zeros((buffer_size, 1), dtype=np.float32)
+        self._embeddings = np.zeros((buffer_size, self._embedding_dim), dtype=np.float32)
+        self._next_embeddings = np.zeros((buffer_size, self._embedding_dim), dtype=np.float32)
         self._neighbor_indices = np.zeros((buffer_size, self._neighbor_k), dtype=np.int32)
         self._neighbor_weights = np.zeros((buffer_size, self._neighbor_k), dtype=np.float32)
         self._junction = np.zeros((buffer_size, 1), dtype=np.float32)
@@ -1075,6 +1285,8 @@ class ReplayBuffer:
         neighbor_indices: Optional[np.ndarray] = None,
         neighbor_weights: Optional[np.ndarray] = None,
         junction: Optional[np.ndarray] = None,
+        embeddings: Optional[np.ndarray] = None,
+        next_embeddings: Optional[np.ndarray] = None,
     ):
         if self._size != 0:
             raise ValueError("Trying to load data into non-empty replay buffer")
@@ -1088,6 +1300,25 @@ class ReplayBuffer:
         self._next_states[:n_transitions] = data["next_observations"].astype(np.float32)
         done_values = 1.0 - data["masks"] if "masks" in data else data["terminals"]
         self._dones[:n_transitions] = done_values[..., None].astype(np.float32)
+
+        if self._embedding_dim > 0:
+            if embeddings is None or next_embeddings is None:
+                raise ValueError(
+                    "embedding_dim > 0 requires both embeddings and next_embeddings"
+                )
+            embeddings = np.asarray(embeddings, dtype=np.float32)
+            next_embeddings = np.asarray(next_embeddings, dtype=np.float32)
+            expected_shape = (n_transitions, self._embedding_dim)
+            if embeddings.shape != expected_shape:
+                raise ValueError(
+                    f"embeddings must have shape {expected_shape}, got {embeddings.shape}"
+                )
+            if next_embeddings.shape != expected_shape:
+                raise ValueError(
+                    f"next_embeddings must have shape {expected_shape}, got {next_embeddings.shape}"
+                )
+            self._embeddings[:n_transitions] = embeddings
+            self._next_embeddings[:n_transitions] = next_embeddings
 
         if neighbor_indices is None:
             # DCS disabled: pool collapses onto the sample itself (weights 0),
@@ -1133,6 +1364,8 @@ class ReplayBuffer:
             "rewards": self._rewards[indices],
             "next_observations": self._next_states[indices],
             "dones": self._dones[indices],
+            "embeddings": self._embeddings[indices],
+            "next_embeddings": self._next_embeddings[indices],
             "neighbor_observations": self._states[nbr_idx],   # (B, k, Ds)
             "neighbor_actions": self._actions[nbr_idx],       # (B, k, Da)
             "neighbor_weights": self._neighbor_weights[indices],  # (B, k)
@@ -1405,6 +1638,16 @@ class KernelEffectiveSupportIQLJAX:
         actor_dropout: Optional[float] = None,
         hidden_dim: int = 256,
         n_hidden: int = 2,
+        embedding_dim: int = 0,
+        actor_use_embedding: bool = False,
+        q_use_embedding: bool = False,
+        v_use_embedding: bool = False,
+        temporal_encoder_params: Optional[Any] = None,
+        temporal_embedding_mean: Optional[np.ndarray] = None,
+        temporal_embedding_std: Optional[np.ndarray] = None,
+        temporal_hidden_dim: int = 256,
+        temporal_n_hidden: int = 2,
+        temporal_normalize: bool = True,
         seed: int = 0,
         device: Any = None,
     ):
@@ -1426,12 +1669,61 @@ class KernelEffectiveSupportIQLJAX:
         self.actor_dropout = actor_dropout
         self.hidden_dim = int(hidden_dim)
         self.n_hidden = int(n_hidden)
+        self.embedding_dim = int(embedding_dim)
+        self.actor_use_embedding = bool(actor_use_embedding)
+        self.q_use_embedding = bool(q_use_embedding)
+        self.v_use_embedding = bool(v_use_embedding)
+        self.uses_embedding_input = (
+            self.actor_use_embedding or self.q_use_embedding or self.v_use_embedding
+        )
         self.device = device if device is not None else jax.devices()[0]
 
         if self.hidden_dim <= 0:
             raise ValueError("hidden_dim must be > 0")
         if self.n_hidden <= 0:
             raise ValueError("n_hidden must be > 0")
+        if self.uses_embedding_input and self.embedding_dim <= 0:
+            raise ValueError(
+                "At least one network uses embeddings, but embedding_dim <= 0."
+            )
+        if self.uses_embedding_input and temporal_encoder_params is None:
+            raise ValueError(
+                "Embedding-based network inputs require frozen temporal encoder parameters."
+            )
+
+        self.temporal_encoder_def = None
+        self.temporal_encoder_params = None
+        self.temporal_embedding_mean = None
+        self.temporal_embedding_std = None
+        if self.uses_embedding_input:
+            self.temporal_encoder_def = tmet.TemporalEncoder(
+                embed_dim=self.embedding_dim,
+                hidden_dim=int(temporal_hidden_dim),
+                n_hidden=int(temporal_n_hidden),
+                normalize=bool(temporal_normalize),
+            )
+            encoder_template = self.temporal_encoder_def.init(
+                jax.random.PRNGKey(seed + 100003),
+                jnp.zeros((1, state_dim), dtype=jnp.float32),
+            )["params"]
+            self.temporal_encoder_params = serialization.from_state_dict(
+                encoder_template,
+                temporal_encoder_params,
+            )
+            if temporal_embedding_mean is None:
+                temporal_embedding_mean = np.zeros((self.embedding_dim,), dtype=np.float32)
+            if temporal_embedding_std is None:
+                temporal_embedding_std = np.ones((self.embedding_dim,), dtype=np.float32)
+            self.temporal_embedding_mean = jnp.asarray(
+                np.asarray(temporal_embedding_mean, dtype=np.float32).reshape(1, -1)
+            )
+            self.temporal_embedding_std = jnp.asarray(
+                np.asarray(temporal_embedding_std, dtype=np.float32).reshape(1, -1)
+            )
+            if self.temporal_embedding_mean.shape[-1] != self.embedding_dim:
+                raise ValueError("temporal_embedding_mean has the wrong dimension")
+            if self.temporal_embedding_std.shape[-1] != self.embedding_dim:
+                raise ValueError("temporal_embedding_std has the wrong dimension")
 
         if iql_deterministic:
             self.actor_def = DeterministicPolicy(
@@ -1461,12 +1753,19 @@ class KernelEffectiveSupportIQLJAX:
 
         key = jax.random.PRNGKey(seed)
         key_actor, key_q, key_v, actor_key = jax.random.split(key, 4)
-        dummy_state = jnp.zeros((1, state_dim), dtype=jnp.float32)
+        actor_input_dim = self.embedding_dim if self.actor_use_embedding else state_dim
+        q_input_dim = self.embedding_dim if self.q_use_embedding else state_dim
+        v_input_dim = self.embedding_dim if self.v_use_embedding else state_dim
+        dummy_actor_state = jnp.zeros((1, actor_input_dim), dtype=jnp.float32)
+        dummy_q_state = jnp.zeros((1, q_input_dim), dtype=jnp.float32)
+        dummy_v_state = jnp.zeros((1, v_input_dim), dtype=jnp.float32)
         dummy_action = jnp.zeros((1, action_dim), dtype=jnp.float32)
 
-        actor_params = self.actor_def.init(key_actor, dummy_state, training=False)["params"]
-        q_params = self.q_def.init(key_q, dummy_state, dummy_action)["params"]
-        v_params = self.v_def.init(key_v, dummy_state)["params"]
+        actor_params = self.actor_def.init(
+            key_actor, dummy_actor_state, training=False
+        )["params"]
+        q_params = self.q_def.init(key_q, dummy_q_state, dummy_action)["params"]
+        v_params = self.v_def.init(key_v, dummy_v_state)["params"]
 
         self.initial_actor_params = copy.deepcopy(actor_params)
         self.initial_actor_opt_state = self.actor_tx.init(actor_params)
@@ -1488,8 +1787,27 @@ class KernelEffectiveSupportIQLJAX:
         self.initial_actor_params = tree_to_device(self.initial_actor_params, self.device)
         self.initial_actor_opt_state = tree_to_device(self.initial_actor_opt_state, self.device)
         self.initial_actor_key = tree_to_device(self.initial_actor_key, self.device)
+        if self.uses_embedding_input:
+            self.temporal_encoder_params = tree_to_device(
+                self.temporal_encoder_params, self.device
+            )
+            self.temporal_embedding_mean = tree_to_device(
+                self.temporal_embedding_mean, self.device
+            )
+            self.temporal_embedding_std = tree_to_device(
+                self.temporal_embedding_std, self.device
+            )
         self._train_step = self._build_train_step()
         self._actor_refit_step = self._build_actor_refit_step()
+
+    def _encode_observations(self, observations: jnp.ndarray) -> jnp.ndarray:
+        """Apply the frozen temporal encoder and the training-time standardizer."""
+        if not self.uses_embedding_input:
+            raise RuntimeError("Temporal encoder requested but no network uses embeddings.")
+        z = self.temporal_encoder_def.apply(
+            {"params": self.temporal_encoder_params}, observations
+        )
+        return (z - self.temporal_embedding_mean) / self.temporal_embedding_std
 
     def _apply_actor(self, actor_params: Any, observations: jnp.ndarray, training: bool, rng: Optional[jnp.ndarray] = None):
         if self.actor_dropout is not None and training:
@@ -1544,6 +1862,9 @@ class KernelEffectiveSupportIQLJAX:
         support_power = self.scv_support_power
         support_eps = self.scv_support_eps
         iql_deterministic = self.iql_deterministic
+        actor_use_embedding = self.actor_use_embedding
+        q_use_embedding = self.q_use_embedding
+        v_use_embedding = self.v_use_embedding
         use_dropout = self.actor_dropout is not None
         actor_apply_fn = self.actor_def.apply
 
@@ -1564,8 +1885,19 @@ class KernelEffectiveSupportIQLJAX:
             actions = batch["actions"]
             rewards = jnp.squeeze(batch["rewards"], axis=-1)
             next_observations = batch["next_observations"]
+            embeddings = batch["embeddings"]
+            next_embeddings = batch["next_embeddings"]
             dones = jnp.squeeze(batch["dones"], axis=-1)
             neighbor_weights = jnp.clip(batch["neighbor_weights"], 0.0, 1.0)
+
+            q_observations = embeddings if q_use_embedding else observations
+            v_observations = embeddings if v_use_embedding else observations
+            next_v_observations = (
+                next_embeddings if v_use_embedding else next_observations
+            )
+            actor_observations = (
+                embeddings if actor_use_embedding else observations
+            )
 
             # Junction-gated certificate c(s).
             # JG-IQL does NOT compute kernel ESS. The ReplayBuffer stores the
@@ -1579,12 +1911,14 @@ class KernelEffectiveSupportIQLJAX:
             neighbor_mass = jnp.sum(neighbor_weights, axis=1)
             gate_effective_count_proxy = gate_conf * k
 
-            tq1, tq2 = q_apply({"params": state.q_target_params}, observations, actions)
+            tq1, tq2 = q_apply(
+                {"params": state.q_target_params}, q_observations, actions
+            )
             self_target_q = jnp.minimum(tq1, tq2)
 
-            next_v = v_apply({"params": state.v_params}, next_observations)
+            next_v = v_apply({"params": state.v_params}, next_v_observations)
             target_q_for_backup = rewards + (1.0 - dones) * discount * next_v
-            old_v = v_apply({"params": state.v_params}, observations)
+            old_v = v_apply({"params": state.v_params}, v_observations)
             adv = self_target_q - old_v
             exp_adv = jnp.minimum(
                 jnp.exp(beta * jax.lax.stop_gradient(adv)), EXP_ADV_MAX
@@ -1592,7 +1926,7 @@ class KernelEffectiveSupportIQLJAX:
 
             # ----- Support-certified expectile V update.
             def v_loss_fn(v_params):
-                v = v_apply({"params": v_params}, observations)
+                v = v_apply({"params": v_params}, v_observations)
                 diff = jax.lax.stop_gradient(self_target_q) - v
                 expectile_weight = jnp.abs(tau_s - (diff < 0.0).astype(jnp.float32))
                 value_loss = jnp.mean(expectile_weight * diff ** 2)
@@ -1604,7 +1938,7 @@ class KernelEffectiveSupportIQLJAX:
 
             # ----- Q update: standard IQL TD backup.
             def q_loss_fn(q_params):
-                q1, q2 = q_apply({"params": q_params}, observations, actions)
+                q1, q2 = q_apply({"params": q_params}, q_observations, actions)
                 target = jax.lax.stop_gradient(target_q_for_backup)
                 q_loss = 0.5 * (jnp.mean((q1 - target) ** 2) + jnp.mean((q2 - target) ** 2))
                 return q_loss, (q1, q2)
@@ -1618,7 +1952,12 @@ class KernelEffectiveSupportIQLJAX:
 
             # ----- Standard IQL AWR actor: no neighbor action copying.
             def actor_loss_fn(actor_params):
-                policy_out = apply_actor(actor_params, observations, training=True, rng=dropout_key)
+                policy_out = apply_actor(
+                    actor_params,
+                    actor_observations,
+                    training=True,
+                    rng=dropout_key,
+                )
                 if iql_deterministic:
                     bc_loss = jnp.sum((policy_out - actions) ** 2, axis=-1)
                     policy_mean = policy_out
@@ -1703,8 +2042,15 @@ class KernelEffectiveSupportIQLJAX:
         return {key: float(jax.device_get(value)) for key, value in log_dict.items()}
 
     def actor_act(self, actor_params: Any, state: np.ndarray) -> np.ndarray:
-        state_jnp = tree_to_device(jnp.asarray(state.reshape(1, -1), dtype=jnp.float32), self.device)
-        policy_out = self._apply_actor(actor_params, state_jnp, training=False)
+        state_jnp = tree_to_device(
+            jnp.asarray(state.reshape(1, -1), dtype=jnp.float32), self.device
+        )
+        actor_input = (
+            self._encode_observations(state_jnp)
+            if self.actor_use_embedding
+            else state_jnp
+        )
+        policy_out = self._apply_actor(actor_params, actor_input, training=False)
         action = policy_out if self.iql_deterministic else policy_out[0]
         action = jnp.clip(self.max_action * action, -self.max_action, self.max_action)
         return np.asarray(jax.device_get(action))[0]
@@ -1742,6 +2088,9 @@ class KernelEffectiveSupportIQLJAX:
         actor_tx = self.actor_tx
         beta = self.beta
         iql_deterministic = self.iql_deterministic
+        actor_use_embedding = self.actor_use_embedding
+        q_use_embedding = self.q_use_embedding
+        v_use_embedding = self.v_use_embedding
         use_dropout = self.actor_dropout is not None
         actor_apply_fn = self.actor_def.apply
 
@@ -1758,11 +2107,20 @@ class KernelEffectiveSupportIQLJAX:
         @jax.jit
         def actor_refit_step(actor_state: ActorState, iql_state: IQLState, batch: TensorBatch):
             observations = batch["observations"]
+            embeddings = batch["embeddings"]
             actions = batch["actions"]
 
-            tq1, tq2 = q_apply({"params": iql_state.q_target_params}, observations, actions)
+            q_observations = embeddings if q_use_embedding else observations
+            v_observations = embeddings if v_use_embedding else observations
+            actor_observations = (
+                embeddings if actor_use_embedding else observations
+            )
+
+            tq1, tq2 = q_apply(
+                {"params": iql_state.q_target_params}, q_observations, actions
+            )
             target_q = jnp.minimum(tq1, tq2)
-            v = v_apply({"params": iql_state.v_params}, observations)
+            v = v_apply({"params": iql_state.v_params}, v_observations)
             adv = target_q - v
             exp_adv = jnp.minimum(
                 jnp.exp(beta * jax.lax.stop_gradient(adv)), EXP_ADV_MAX
@@ -1771,7 +2129,12 @@ class KernelEffectiveSupportIQLJAX:
             actor_key, dropout_key = jax.random.split(actor_state.key)
 
             def actor_loss_fn(actor_params):
-                policy_out = apply_actor(actor_params, observations, training=True, rng=dropout_key)
+                policy_out = apply_actor(
+                    actor_params,
+                    actor_observations,
+                    training=True,
+                    rng=dropout_key,
+                )
                 if iql_deterministic:
                     bc_loss = jnp.sum((policy_out - actions) ** 2, axis=-1)
                     policy_mean = policy_out
@@ -1982,13 +2345,28 @@ class KernelEffectiveSupportIQLJAX:
         return actor_state, refit_log
 
     def state_dict(self) -> Dict[str, Any]:
-        return {
+        payload = {
             "iql_state": serialization.to_state_dict(self.state),
             "initial_actor_params": serialization.to_state_dict(self.initial_actor_params),
             "initial_actor_opt_state": serialization.to_state_dict(self.initial_actor_opt_state),
             "initial_actor_key": serialization.to_state_dict(self.initial_actor_key),
             "iql_deterministic": self.iql_deterministic,
+            "actor_use_embedding": self.actor_use_embedding,
+            "q_use_embedding": self.q_use_embedding,
+            "v_use_embedding": self.v_use_embedding,
+            "embedding_dim": self.embedding_dim,
         }
+        if self.uses_embedding_input:
+            payload["temporal_encoder_params"] = serialization.to_state_dict(
+                self.temporal_encoder_params
+            )
+            payload["temporal_embedding_mean"] = np.asarray(
+                jax.device_get(self.temporal_embedding_mean), dtype=np.float32
+            )
+            payload["temporal_embedding_std"] = np.asarray(
+                jax.device_get(self.temporal_embedding_std), dtype=np.float32
+            )
+        return payload
 
     def load_state_dict(self, state_dict: Dict[str, Any]):
         self.state = serialization.from_state_dict(self.state, state_dict["iql_state"])
@@ -2007,10 +2385,33 @@ class KernelEffectiveSupportIQLJAX:
                 self.initial_actor_key,
                 state_dict["initial_actor_key"],
             )
+        if self.uses_embedding_input and "temporal_encoder_params" in state_dict:
+            self.temporal_encoder_params = serialization.from_state_dict(
+                self.temporal_encoder_params,
+                state_dict["temporal_encoder_params"],
+            )
+        if self.uses_embedding_input and "temporal_embedding_mean" in state_dict:
+            self.temporal_embedding_mean = jnp.asarray(
+                state_dict["temporal_embedding_mean"], dtype=jnp.float32
+            )
+        if self.uses_embedding_input and "temporal_embedding_std" in state_dict:
+            self.temporal_embedding_std = jnp.asarray(
+                state_dict["temporal_embedding_std"], dtype=jnp.float32
+            )
         self.state = tree_to_device(self.state, self.device)
         self.initial_actor_params = tree_to_device(self.initial_actor_params, self.device)
         self.initial_actor_opt_state = tree_to_device(self.initial_actor_opt_state, self.device)
         self.initial_actor_key = tree_to_device(self.initial_actor_key, self.device)
+        if self.uses_embedding_input:
+            self.temporal_encoder_params = tree_to_device(
+                self.temporal_encoder_params, self.device
+            )
+            self.temporal_embedding_mean = tree_to_device(
+                self.temporal_embedding_mean, self.device
+            )
+            self.temporal_embedding_std = tree_to_device(
+                self.temporal_embedding_std, self.device
+            )
 
 
 def save_pickle(path: Union[str, Path], obj: Any) -> None:
@@ -2231,13 +2632,27 @@ def train(config: TrainConfig):
     dataset["next_observations"] = normalize_states(dataset["next_observations"], state_mean, state_std)
     env = wrap_env(env, state_mean=state_mean, state_std=state_std)
 
-    # ----- KES support profile: one-time kNN graph + kernel weights ---------
+    network_uses_embedding = (
+        config.actor_use_embedding or config.q_use_embedding or config.v_use_embedding
+    )
+    temporal_representation: Optional[Dict[str, Any]] = None
+    if config.dcs_metric_source == "temporal" and (config.use_dcs or network_uses_embedding):
+        temporal_representation = load_or_build_temporal_representation(
+            config, dataset, device=jax_device
+        )
+
+    # ----- JG support profile: one-time kNN graph + gate statistics --------
     neighbor_indices = None
     neighbor_weights = None
     junction = None
     buffer_neighbor_k = config.dcs_k
     if config.use_dcs:
-        profile = load_or_compute_coverage_profile(config, dataset, device=jax_device)
+        profile = load_or_compute_coverage_profile(
+            config,
+            dataset,
+            device=jax_device,
+            temporal_representation=temporal_representation,
+        )
         neighbor_indices, neighbor_weights, junction = build_neighbor_weights(config, profile)
         buffer_neighbor_k = neighbor_indices.shape[1]
         if buffer_neighbor_k != config.dcs_k:
@@ -2248,18 +2663,34 @@ def train(config: TrainConfig):
     else:
         print("use_dcs=False: support graph disabled; tau(s)=scv_tau_min. Set scv_tau_min=scv_tau_max for a plain IQL baseline.")
 
+    embedding_dim = (
+        int(temporal_representation["embeddings"].shape[1])
+        if temporal_representation is not None and network_uses_embedding
+        else 0
+    )
     replay_buffer = ReplayBuffer(
         state_dim=state_dim,
         action_dim=action_dim,
         buffer_size=config.buffer_size,
         neighbor_k=buffer_neighbor_k,
         device=jax_device,
+        embedding_dim=embedding_dim,
     )
     replay_buffer.load_d4rl_dataset(
         dataset,
         neighbor_indices=neighbor_indices,
         neighbor_weights=neighbor_weights,
         junction=junction,
+        embeddings=(
+            temporal_representation["embeddings"]
+            if temporal_representation is not None and network_uses_embedding
+            else None
+        ),
+        next_embeddings=(
+            temporal_representation["next_embeddings"]
+            if temporal_representation is not None and network_uses_embedding
+            else None
+        ),
     )
 
     max_action = float(env.action_space.high[0])
@@ -2285,6 +2716,12 @@ def train(config: TrainConfig):
         f"k={buffer_neighbor_k} | bandwidth_scale={config.dcs_bandwidth_scale} | "
         f"support_power={config.scv_support_power} | metric={config.dcs_metric_source}"
     )
+    print(
+        "network inputs | "
+        f"actor={'embedding' if config.actor_use_embedding else 'observation'} | "
+        f"Q={'embedding' if config.q_use_embedding else 'observation'} | "
+        f"V={'embedding' if config.v_use_embedding else 'observation'}"
+    )
     if config.use_dcs:
         print("support confidence: c_i = G_i^p; no kernel ESS, no dynamics gate, no neighbor Q/action pooling")
         if config.dcs_metric_source == "oracle":
@@ -2300,7 +2737,7 @@ def train(config: TrainConfig):
                 f"space phi(s) (dim={config.dcs_temporal_dim}, "
                 f"horizon={config.dcs_temporal_horizon}, "
                 f"steps={config.dcs_temporal_steps}); data-only, deployable. "
-                f"Training still uses standard observations. ***"
+                f"Each of actor/Q/V can independently consume phi(s). ***"
             )
         else:
             print("metric source: observation (standard L2 kNN graph)")
@@ -2328,6 +2765,28 @@ def train(config: TrainConfig):
         actor_dropout=config.actor_dropout,
         hidden_dim=config.hidden_dim,
         n_hidden=config.n_hidden,
+        embedding_dim=embedding_dim,
+        actor_use_embedding=config.actor_use_embedding,
+        q_use_embedding=config.q_use_embedding,
+        v_use_embedding=config.v_use_embedding,
+        temporal_encoder_params=(
+            temporal_representation["encoder_params"]
+            if temporal_representation is not None and network_uses_embedding
+            else None
+        ),
+        temporal_embedding_mean=(
+            temporal_representation["embedding_mean"]
+            if temporal_representation is not None and network_uses_embedding
+            else None
+        ),
+        temporal_embedding_std=(
+            temporal_representation["embedding_std"]
+            if temporal_representation is not None and network_uses_embedding
+            else None
+        ),
+        temporal_hidden_dim=config.dcs_temporal_hidden,
+        temporal_n_hidden=config.dcs_temporal_layers,
+        temporal_normalize=config.dcs_temporal_normalize,
         seed=seed,
         device=jax_device,
     )
