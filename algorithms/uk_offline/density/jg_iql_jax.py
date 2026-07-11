@@ -11,7 +11,7 @@
 #   action_div_conf_i = action-spread diversity confidence
 #   disp_div_conf_i = next-displacement diversity confidence
 #   gate_signal_i = configurable density/diversity signal selected by dcs_gate_source
-#   G_i = ramp_gate(gate_signal_i) in [0, 1]
+#   G_i = P(high-mean Beta-mixture component | gate_signal_i) in [0, 1]
 #   c_i = G_i^p
 #   tau_i = tau_min + (tau_max - tau_min) * c_i
 #
@@ -44,13 +44,16 @@ import numpy as np
 
 try:
     import scipy.linalg as scipy_linalg
+    from scipy.special import betaln as scipy_betaln
+    from scipy.special import logsumexp as scipy_logsumexp
 
     if not hasattr(scipy_linalg, "tril"):
         scipy_linalg.tril = np.tril
     if not hasattr(scipy_linalg, "triu"):
         scipy_linalg.triu = np.triu
 except ImportError:
-    pass
+    scipy_betaln = None
+    scipy_logsumexp = None
 
 import optax
 import pyrallis
@@ -195,10 +198,33 @@ class TrainConfig:
     dcs_percentile_low: float = 5.0
     dcs_percentile_high: float = 95.0
 
-    # Gate(s): 0 below the low percentile of J, 1 above the high percentile.
-    # Pooling is only active on the gated (junction-like) part of the data.
+    # ----- Gate calibration -----------------------------------------------
+    # beta_mixture (default): fit a two-component Beta mixture to the bounded
+    # gate signal J_i in [0, 1]. The component with the larger mean is treated
+    # as the junction-like population, and its posterior probability is used
+    # directly as the state gate:
+    #
+    #   G_i = P(z_i = high-mean component | J_i).
+    #
+    # This removes the need to manually tune low/high gate percentiles.
+    # percentile: legacy ramp gate kept only for backward-compatible ablations.
+    dcs_gate_calibration: str = "beta_mixture"  # beta_mixture | percentile
+
+    # Legacy percentile-ramp settings. Ignored when dcs_gate_calibration is
+    # "beta_mixture", except when dcs_beta_mixture_fallback="percentile".
     dcs_gate_low_percentile: float = 60.0
     dcs_gate_high_percentile: float = 95.0
+
+    # Numerical controls for the automatic two-component Beta mixture. These
+    # are optimization safeguards rather than task-level gate thresholds.
+    dcs_beta_mixture_max_iter: int = 200
+    dcs_beta_mixture_tol: float = 1e-6
+    dcs_beta_mixture_eps: float = 1e-4
+    dcs_beta_mixture_fit_samples: int = 200_000
+    # Degenerate distributions have no identifiable two-population structure.
+    # "zero" is conservative and fully automatic; "percentile" recovers the
+    # old manually specified ramp as a compatibility fallback.
+    dcs_beta_mixture_fallback: str = "zero"  # zero | percentile
 
     # Distance kernel exp(-(d/h)^2) with per-state bandwidth
     # h_i = dcs_bandwidth_scale * median_j d_ij.
@@ -352,7 +378,13 @@ def validate_config(config: TrainConfig) -> None:
     )
     assert config.dcs_diversity_mode in ("action", "displacement", "product")
     assert 0.0 <= config.dcs_percentile_low < config.dcs_percentile_high <= 100.0
+    assert config.dcs_gate_calibration in ("beta_mixture", "percentile")
     assert 0.0 <= config.dcs_gate_low_percentile <= config.dcs_gate_high_percentile <= 100.0
+    assert config.dcs_beta_mixture_max_iter >= 1
+    assert config.dcs_beta_mixture_tol > 0.0
+    assert 0.0 < config.dcs_beta_mixture_eps < 0.5
+    assert config.dcs_beta_mixture_fit_samples >= 2
+    assert config.dcs_beta_mixture_fallback in ("zero", "percentile")
     assert config.dcs_bandwidth_scale > 0.0
     assert config.dcs_bandwidth_floor_frac >= 0.0
     assert config.dcs_dynamics_scale > 0.0
@@ -1002,10 +1034,11 @@ def build_gate_signal(
     action_div_conf: np.ndarray,
     disp_div_conf: np.ndarray,
 ) -> Tuple[np.ndarray, str]:
-    """Return the pre-gate scalar signal used to produce G_i.
+    """Return the bounded pre-gate scalar signal J_i used to produce G_i.
 
-    The returned signal is later passed through gate_from_junction(), preserving
-    the same low/high percentile ramp used by the original JG-IQL code.
+    By default, a two-component Beta mixture is fitted to this signal and the
+    posterior probability of the higher-mean component is used directly as G_i.
+    The legacy percentile ramp remains available as an ablation.
     """
     density_conf = np.asarray(density_conf, dtype=np.float32)
     action_div_conf = np.asarray(action_div_conf, dtype=np.float32)
@@ -1038,6 +1071,264 @@ def build_gate_signal(
         f"Unknown dcs_gate_source={config.dcs_gate_source}. "
         f"Valid values: {DCS_GATE_SOURCES}"
     )
+
+
+
+def _weighted_beta_moments(
+    x: np.ndarray,
+    weights: np.ndarray,
+    eps: float,
+) -> Tuple[float, float]:
+    """Estimate Beta(alpha, beta) by weighted method of moments.
+
+    This is used as the M-step inside a lightweight two-component EM routine.
+    The gate signal is clipped away from exact 0/1 before fitting, so both
+    shape parameters remain finite.
+    """
+    x = np.asarray(x, dtype=np.float64).reshape(-1)
+    weights = np.asarray(weights, dtype=np.float64).reshape(-1)
+    mass = float(np.sum(weights))
+    if mass <= 1e-12:
+        return 1.0, 1.0
+
+    mean = float(np.sum(weights * x) / mass)
+    mean = float(np.clip(mean, eps, 1.0 - eps))
+    var = float(np.sum(weights * (x - mean) ** 2) / mass)
+
+    # A Beta distribution requires var < mean * (1 - mean). Keep a small
+    # numerical margin and avoid an excessively concentrated component.
+    max_var = max(mean * (1.0 - mean), 1e-12)
+    var = float(np.clip(var, 1e-8, max_var * (1.0 - 1e-6)))
+    concentration = mean * (1.0 - mean) / var - 1.0
+    concentration = float(np.clip(concentration, 1e-3, 1e6))
+
+    alpha = max(mean * concentration, eps)
+    beta = max((1.0 - mean) * concentration, eps)
+    return float(alpha), float(beta)
+
+
+def _beta_log_pdf(x: np.ndarray, alpha: float, beta: float) -> np.ndarray:
+    if scipy_betaln is None:
+        raise ImportError(
+            "dcs_gate_calibration='beta_mixture' requires scipy.special.betaln."
+        )
+    x = np.asarray(x, dtype=np.float64)
+    return (
+        (alpha - 1.0) * np.log(x)
+        + (beta - 1.0) * np.log1p(-x)
+        - scipy_betaln(alpha, beta)
+    )
+
+
+def _initialize_beta_mixture_responsibilities(
+    x: np.ndarray,
+    low_q: float,
+    high_q: float,
+) -> np.ndarray:
+    """Deterministic soft initialization for the high-signal component."""
+    q_lo, q_hi = np.quantile(x, [low_q, high_q])
+    if q_hi <= q_lo + 1e-12:
+        # Fall back to centered min-max scaling when quantiles are tied.
+        x_min, x_max = float(np.min(x)), float(np.max(x))
+        if x_max <= x_min + 1e-12:
+            return np.full_like(x, 0.5, dtype=np.float64)
+        return np.clip((x - x_min) / (x_max - x_min), 1e-3, 1.0 - 1e-3)
+    return np.clip((x - q_lo) / (q_hi - q_lo), 1e-3, 1.0 - 1e-3)
+
+
+def fit_two_component_beta_mixture_gate(
+    signal: np.ndarray,
+    max_iter: int = 200,
+    tol: float = 1e-6,
+    eps: float = 1e-4,
+    fit_samples: int = 200_000,
+    seed: int = 0,
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Fit a two-component Beta mixture and return high-component posterior G_i.
+
+    The component with the larger Beta mean alpha / (alpha + beta) is defined
+    as the junction-like component. Its posterior responsibility becomes the
+    state-level gate G_i. Multiple deterministic initializations are evaluated,
+    and the fit with the highest log-likelihood is retained.
+    """
+    if scipy_betaln is None or scipy_logsumexp is None:
+        raise ImportError(
+            "dcs_gate_calibration='beta_mixture' requires scipy.special."
+        )
+
+    raw = np.asarray(signal, dtype=np.float64).reshape(-1)
+    finite_mask = np.isfinite(raw)
+    if not np.all(finite_mask):
+        raise ValueError("Non-finite values found in JG-IQL gate signal.")
+    if raw.size < 2:
+        return np.zeros_like(raw, dtype=np.float32), {
+            "status": "degenerate_too_few_samples",
+            "fit_size": int(raw.size),
+        }
+
+    # J_i is theoretically bounded in [0, 1]. Clip only for Beta log-density;
+    # the original un-clipped values are retained for diagnostics.
+    x_all = np.clip(raw, eps, 1.0 - eps)
+    raw_range = float(np.max(raw) - np.min(raw))
+    if raw_range <= 1e-10:
+        return np.zeros_like(raw, dtype=np.float32), {
+            "status": "degenerate_constant_signal",
+            "fit_size": int(raw.size),
+            "signal_min": float(np.min(raw)),
+            "signal_max": float(np.max(raw)),
+        }
+
+    # Fitting on a capped random subset keeps preprocessing practical for very
+    # large offline datasets; posterior inference is still performed on all N.
+    if x_all.size > int(fit_samples):
+        rng = np.random.default_rng(seed)
+        fit_idx = rng.choice(x_all.size, size=int(fit_samples), replace=False)
+        x_fit = x_all[fit_idx]
+    else:
+        x_fit = x_all
+
+    # Different soft quantile splits make the fit less sensitive to one
+    # initialization while staying deterministic.
+    init_quantiles = ((0.25, 0.75), (0.35, 0.65), (0.45, 0.55))
+    best = None
+
+    for low_q, high_q in init_quantiles:
+        r_high = _initialize_beta_mixture_responsibilities(x_fit, low_q, high_q)
+        responsibilities = np.stack([1.0 - r_high, r_high], axis=1)
+        prev_ll = -np.inf
+
+        for iteration in range(int(max_iter)):
+            mixture_weights = np.mean(responsibilities, axis=0)
+            mixture_weights = np.clip(mixture_weights, 1e-6, 1.0)
+            mixture_weights /= np.sum(mixture_weights)
+
+            params = [
+                _weighted_beta_moments(x_fit, responsibilities[:, k], eps)
+                for k in range(2)
+            ]
+
+            log_joint = np.empty((x_fit.shape[0], 2), dtype=np.float64)
+            for k, (alpha, beta) in enumerate(params):
+                log_joint[:, k] = (
+                    np.log(mixture_weights[k]) + _beta_log_pdf(x_fit, alpha, beta)
+                )
+
+            log_norm = scipy_logsumexp(log_joint, axis=1)
+            ll = float(np.sum(log_norm))
+            responsibilities = np.exp(log_joint - log_norm[:, None])
+
+            if np.isfinite(prev_ll):
+                relative_change = abs(ll - prev_ll) / max(abs(prev_ll), 1.0)
+                if relative_change < tol:
+                    break
+            prev_ll = ll
+
+        means = np.asarray(
+            [alpha / (alpha + beta) for alpha, beta in params], dtype=np.float64
+        )
+        candidate = {
+            "ll": ll,
+            "iterations": int(iteration + 1),
+            "weights": mixture_weights.copy(),
+            "params": tuple(params),
+            "means": means,
+        }
+        if best is None or candidate["ll"] > best["ll"]:
+            best = candidate
+
+    assert best is not None
+    high_component = int(np.argmax(best["means"]))
+    low_component = 1 - high_component
+
+    # Infer posterior responsibilities for every dataset state.
+    log_joint_all = np.empty((x_all.shape[0], 2), dtype=np.float64)
+    for k, (alpha, beta) in enumerate(best["params"]):
+        log_joint_all[:, k] = (
+            np.log(best["weights"][k]) + _beta_log_pdf(x_all, alpha, beta)
+        )
+    log_norm_all = scipy_logsumexp(log_joint_all, axis=1)
+    posterior = np.exp(log_joint_all - log_norm_all[:, None])
+    gate = np.clip(posterior[:, high_component], 0.0, 1.0).astype(np.float32)
+
+    low_alpha, low_beta = best["params"][low_component]
+    high_alpha, high_beta = best["params"][high_component]
+    diagnostics = {
+        "status": "ok",
+        "fit_size": int(x_fit.size),
+        "full_size": int(x_all.size),
+        "iterations": int(best["iterations"]),
+        "log_likelihood": float(best["ll"]),
+        "low_weight": float(best["weights"][low_component]),
+        "high_weight": float(best["weights"][high_component]),
+        "low_alpha": float(low_alpha),
+        "low_beta": float(low_beta),
+        "high_alpha": float(high_alpha),
+        "high_beta": float(high_beta),
+        "low_mean": float(best["means"][low_component]),
+        "high_mean": float(best["means"][high_component]),
+        "mean_gap": float(
+            best["means"][high_component] - best["means"][low_component]
+        ),
+        "posterior_mean": float(np.mean(gate)),
+        "posterior_gt_05_frac": float(np.mean(gate >= 0.5)),
+        "signal_min": float(np.min(raw)),
+        "signal_max": float(np.max(raw)),
+    }
+    return gate, diagnostics
+
+
+def build_data_adaptive_gate(
+    config: TrainConfig,
+    gate_signal: np.ndarray,
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Build G_i using either the automatic Beta mixture or legacy percentile ramp."""
+    if config.dcs_gate_calibration == "percentile":
+        gate = covp.gate_from_junction(
+            gate_signal,
+            config.dcs_gate_low_percentile,
+            config.dcs_gate_high_percentile,
+        ).astype(np.float32)
+        return gate, {
+            "status": "legacy_percentile",
+            "low_percentile": float(config.dcs_gate_low_percentile),
+            "high_percentile": float(config.dcs_gate_high_percentile),
+        }
+
+    try:
+        gate, diagnostics = fit_two_component_beta_mixture_gate(
+            gate_signal,
+            max_iter=config.dcs_beta_mixture_max_iter,
+            tol=config.dcs_beta_mixture_tol,
+            eps=config.dcs_beta_mixture_eps,
+            fit_samples=config.dcs_beta_mixture_fit_samples,
+            seed=config.seed,
+        )
+    except Exception as exc:
+        diagnostics = {
+            "status": "fit_failed",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        gate = np.zeros_like(np.asarray(gate_signal).reshape(-1), dtype=np.float32)
+
+    if diagnostics.get("status") != "ok":
+        if config.dcs_beta_mixture_fallback == "percentile":
+            gate = covp.gate_from_junction(
+                gate_signal,
+                config.dcs_gate_low_percentile,
+                config.dcs_gate_high_percentile,
+            ).astype(np.float32)
+            diagnostics["fallback"] = "percentile"
+            diagnostics["fallback_low_percentile"] = float(
+                config.dcs_gate_low_percentile
+            )
+            diagnostics["fallback_high_percentile"] = float(
+                config.dcs_gate_high_percentile
+            )
+        else:
+            gate = np.zeros_like(np.asarray(gate_signal).reshape(-1), dtype=np.float32)
+            diagnostics["fallback"] = "zero"
+
+    return gate, diagnostics
 
 
 def build_neighbor_weights(
@@ -1081,9 +1372,7 @@ def build_neighbor_weights(
     gate_signal, gate_signal_name = build_gate_signal(
         config, density_conf, action_div_conf, disp_div_conf
     )
-    gate = covp.gate_from_junction(
-        gate_signal, config.dcs_gate_low_percentile, config.dcs_gate_high_percentile
-    ).astype(np.float32)
+    gate, gate_diagnostics = build_data_adaptive_gate(config, gate_signal)
 
     # Legacy diagnostic weights only. The train step reads batch["junction"]
     # as G_i and ignores these weights for tau(s). Repeating G_i keeps old
@@ -1101,9 +1390,34 @@ def build_neighbor_weights(
     print(
         "JG support profile | "
         f"gate_source={config.dcs_gate_source} ({gate_signal_name}) | "
+        f"gate_calibration={config.dcs_gate_calibration} | "
         f"confidence=G_i | mean gate={mean_gate:.4f} | "
         f"active-row frac={active_row_frac:.4f}"
     )
+    if config.dcs_gate_calibration == "beta_mixture":
+        if gate_diagnostics.get("status") == "ok":
+            print(
+                "Beta-mixture gate | "
+                f"low: weight={gate_diagnostics['low_weight']:.4f}, "
+                f"mean={gate_diagnostics['low_mean']:.4f}, "
+                f"alpha={gate_diagnostics['low_alpha']:.4f}, "
+                f"beta={gate_diagnostics['low_beta']:.4f} | "
+                f"high: weight={gate_diagnostics['high_weight']:.4f}, "
+                f"mean={gate_diagnostics['high_mean']:.4f}, "
+                f"alpha={gate_diagnostics['high_alpha']:.4f}, "
+                f"beta={gate_diagnostics['high_beta']:.4f} | "
+                f"mean_gap={gate_diagnostics['mean_gap']:.4f} | "
+                f"P(high)>=0.5 frac={gate_diagnostics['posterior_gt_05_frac']:.4f} | "
+                f"fit_size={gate_diagnostics['fit_size']} | "
+                f"iterations={gate_diagnostics['iterations']}"
+            )
+        else:
+            print(
+                "Beta-mixture gate | "
+                f"status={gate_diagnostics.get('status')} | "
+                f"fallback={gate_diagnostics.get('fallback', 'none')} | "
+                f"error={gate_diagnostics.get('error', 'n/a')}"
+            )
     print(
         "Coverage profile | "
         + covp.summarize_profile(
@@ -1115,7 +1429,7 @@ def build_neighbor_weights(
         f"rows with zero median={zero_median_row_frac:.3f} | "
         f"gate_source={config.dcs_gate_source} | "
         f"diversity_mode={config.dcs_diversity_mode} | "
-        f"gate_percentiles=({config.dcs_gate_low_percentile}, {config.dcs_gate_high_percentile})"
+        f"gate_calibration={config.dcs_gate_calibration}"
     )
 
     return (
