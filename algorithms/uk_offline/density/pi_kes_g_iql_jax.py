@@ -25,6 +25,7 @@ import json
 import os
 import pickle
 import random
+import re
 import sys
 import uuid
 from dataclasses import asdict, dataclass
@@ -543,6 +544,28 @@ def _safe_path_name(name: str) -> str:
     return name.replace("/", "_").replace(":", "_")
 
 
+def get_dataset_cache_id(env_name: str) -> str:
+    """Return a canonical transition-dataset ID for cache sharing.
+
+    OGBench single-task variants such as
+
+        cube-double-play-singletask-task1-v0
+        cube-double-play-singletask-task2-v0
+
+    share the same underlying transition tuples (s, a, s') and differ only in
+    task-dependent rewards / masks. Since the temporal encoder, coverage
+    profile, and prototype-indexed profile use transition information rather
+    than rewards, all ``taskN`` variants should reuse the same cache.
+
+    Non-matching environment names are returned unchanged.
+    """
+    return re.sub(
+        r"-singletask-task\d+-v(\d+)$",
+        r"-singletask-v\1",
+        env_name,
+    )
+
+
 def get_coverage_profile_cache_path(config: TrainConfig) -> Optional[Path]:
     """Return the cache file path for the precomputed coverage profile.
 
@@ -553,7 +576,7 @@ def get_coverage_profile_cache_path(config: TrainConfig) -> Optional[Path]:
         return None
 
     root = Path(config.dcs_profile_path)
-    env_name = _safe_path_name(config.env)
+    env_name = _safe_path_name(get_dataset_cache_id(config.env))
     source_tag = "obs" if config.dcs_metric_source == "observation" else "oracle"
     if config.dcs_metric_source == "oracle":
         keys = resolve_oracle_keys(config) or ("auto",)
@@ -634,7 +657,7 @@ def build_temporal_signature(
     the coverage graph built from them."""
     return {
         "cache_version": tmet.TEMPORAL_CACHE_VERSION,
-        "env": config.env,
+        "env": get_dataset_cache_id(config.env),
         "seed": int(config.seed),
         "normalize": bool(config.dcs_temporal_normalize),
         "observations_shape": tuple(observations_shape) if observations_shape else None,
@@ -653,7 +676,7 @@ def get_temporal_embeddings_cache_path(config: TrainConfig) -> Optional[Path]:
     if config.dcs_profile_path is None:
         return None
     root = Path(config.dcs_profile_path)
-    env_name = _safe_path_name(config.env)
+    env_name = _safe_path_name(get_dataset_cache_id(config.env))
     sig_hash = tmet.signature_hash(build_temporal_signature(config))
     filename = f"temporal_emb_{sig_hash}.npz"
     if config.dcs_cache_by_seed:
@@ -740,7 +763,7 @@ def build_coverage_profile_metadata(
     return covp.canonicalize_metadata(
         {
             "cache_version": covp.COVERAGE_CACHE_VERSION,
-            "env": config.env,
+            "env": get_dataset_cache_id(config.env),
             "seed": int(config.seed) if config.dcs_cache_by_seed else None,
             "normalize": bool(config.normalize),
             "observations_shape": tuple(observations.shape),
@@ -846,7 +869,7 @@ def build_prototype_index_signature(
 
     return {
         "version": 1,
-        "env": config.env,
+        "env": get_dataset_cache_id(config.env),
         "seed": int(config.seed) if config.dcs_cache_by_seed else None,
         "metric_source": config.dcs_metric_source,
         "metric_shape": tuple(metric_space.shape),
@@ -884,7 +907,7 @@ def get_prototype_index_cache_path(
     sig_hash = hashlib.sha1(payload).hexdigest()[:12]
 
     root = Path(config.dcs_profile_path)
-    env_name = _safe_path_name(config.env)
+    env_name = _safe_path_name(get_dataset_cache_id(config.env))
     filename = f"prototype_indexed_kes_g_profile_{sig_hash}.npz"
 
     if config.dcs_cache_by_seed:
