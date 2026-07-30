@@ -41,6 +41,24 @@ import yaml
 from flax import linen as nn
 from flax import serialization, struct
 
+
+# Automatic training resume utilities shared by all offline-RL algorithms.
+_PROJECT_ROOT = next(
+    parent for parent in Path(__file__).resolve().parents
+    if (parent / "algorithms").is_dir()
+)
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from algorithms.uk_offline.common.checkpointing import (
+    DEFAULT_IDENTITY_IGNORED_FIELDS,
+    TrainingCheckpointManager,
+    best_eval_metric,
+    evaluation_is_due,
+    find_eval_log,
+    upsert_eval_log,
+)
+
 TensorBatch = Dict[str, jnp.ndarray]
 
 ALGORITHM_NAME = "DelayedIQL"
@@ -114,6 +132,10 @@ class TrainConfig:
     log_wandb: bool = True
     log_every: int = 500
 
+    checkpoint_freq: int = int(25e3)
+    save_final_model: bool = True
+    wandb_entity: Optional[str] = None
+
     def __post_init__(self):
         refresh_algorithm_names(self)
         validate_config(self)
@@ -133,6 +155,7 @@ def validate_config(config: TrainConfig) -> None:
     assert config.n_episodes > 0
     assert config.max_timesteps >= 0
     assert config.log_every > 0
+    assert config.checkpoint_freq > 0
     assert config.discount >= 0.0 and config.discount <= 1.0
     assert config.tau >= 0.0 and config.tau <= 1.0
     assert config.beta >= 0.0
@@ -1182,6 +1205,29 @@ def _train_impl(config: TrainConfig):
     if not refit_only:
         config = finalize_checkpoint_path(config)
 
+    checkpoint_manager = None
+    checkpoint_preparation = None
+    if config.checkpoints_path is not None and (not refit_only):
+        current_config_dict = asdict(config)
+        checkpoint_manager = TrainingCheckpointManager(
+            run_dir=config.checkpoints_path,
+            current_config=current_config_dict,
+            default_config=asdict(TrainConfig()),
+            max_timesteps=int(config.max_timesteps),
+            checkpoint_type="delayed_iql_jax_training_progress",
+            identity_ignored_fields=DEFAULT_IDENTITY_IGNORED_FIELDS,
+            checkpoint_version=2,
+            accepted_checkpoint_versions=(1, 2),
+            wandb_enabled=bool(config.log_wandb),
+            wandb_entity=getattr(config, "wandb_entity", None),
+            wandb_project=config.project,
+            final_checkpoint_name="checkpoint.pkl",
+        )
+        checkpoint_preparation = checkpoint_manager.prepare()
+        print(checkpoint_preparation.message)
+        if checkpoint_preparation.is_completed:
+            return
+
     jax_device = select_jax_device(config.device)
     env = gym.make(config.env)
 
@@ -1211,15 +1257,6 @@ def _train_impl(config: TrainConfig):
 
     max_action = float(env.action_space.high[0])
 
-    if config.checkpoints_path is not None and not refit_only:
-        print(f"Checkpoints path: {config.checkpoints_path}")
-        os.makedirs(config.checkpoints_path, exist_ok=True)
-        config_path = os.path.join(config.checkpoints_path, "config.yaml")
-        if os.path.exists(config_path):
-            print(f"Error: The file '{config_path}' already exists.")
-            exit(1)
-        with open(config_path, "w") as f:
-            pyrallis.dump(config, f)
 
     seed = config.seed
     set_seed(seed, env)
@@ -1260,8 +1297,66 @@ def _train_impl(config: TrainConfig):
         checkpoint = load_pickle(checkpoint_path)
         trainer.load_state_dict(checkpoint)
 
+    def _progress_state():
+        return trainer.state_dict()
+
+    def _final_state():
+        return trainer.state_dict()
+
+    def _load_progress_state(payload):
+        trainer.load_state_dict(payload)
+
+    def _training_timestep():
+        return int(jax.device_get(trainer.state.total_it))
+
+    start_timestep = _training_timestep()
+    eval_logs: List[Dict[str, Any]] = []
+    if checkpoint_manager is not None:
+        if checkpoint_preparation.is_resuming:
+            start_timestep, eval_logs, _ = checkpoint_manager.restore(
+                load_trainer_state=_load_progress_state,
+                get_restored_timestep=_training_timestep,
+            )
+            print(f"Restored training at timestep {start_timestep}.")
+        else:
+            start_timestep = _training_timestep()
+            checkpoint_manager.save_progress(
+                timestep=start_timestep,
+                trainer_state=_progress_state(),
+                eval_logs=eval_logs,
+                status="running",
+            )
+
     if config.log_wandb:
-        wandb_init(asdict(config))
+        if checkpoint_manager is not None:
+            try:
+                checkpoint_manager.initialize_wandb(
+                    wandb_module=wandb,
+                    config=asdict(config),
+                    code_root=_PROJECT_ROOT,
+                )
+            except Exception as exc:
+                print(f"Warning: W&B resume failed: {exc}")
+                print("Continuing local training with a new W&B run.")
+                if getattr(wandb, "run", None) is not None:
+                    wandb.finish(exit_code=1)
+                checkpoint_manager.initialize_fresh_wandb(
+                    wandb_module=wandb,
+                    config=asdict(config),
+                    code_root=_PROJECT_ROOT,
+                )
+        else:
+            wandb_init(asdict(config))
+
+
+    def _wandb_log(metrics, step):
+        if not config.log_wandb:
+            return
+        if checkpoint_manager is not None:
+            checkpoint_manager.log_wandb(metrics, int(step))
+        else:
+            wandb.log(metrics, step=int(step))
+
 
     if refit_only:
         if loaded_run_dir is None:
@@ -1322,66 +1417,102 @@ def _train_impl(config: TrainConfig):
         print("---------------------------------------")
         return
 
-    eval_logs: List[Dict[str, Any]] = []
-    for t in range(int(config.max_timesteps)):
-        batch = replay_buffer.sample(config.batch_size)
-        log_dict = trainer.train(batch)
+    def _evaluation_required(step):
+        return evaluation_is_due(int(step), int(config.eval_freq))
 
-        if config.log_wandb and (t + 1) % config.log_every == 0:
-            wandb.log(log_dict, step=int(jax.device_get(trainer.state.total_it)))
-
-        if (t + 1) % config.eval_freq == 0:
-            print(f"Time steps: {t + 1}")
-            eval_scores = trainer.eval_actor(
-                env,
-                trainer.state.actor_params,
-                n_episodes=config.n_episodes,
-                seed=config.seed,
-            )
-            normalized_eval_scores = normalize_episode_scores(env, eval_scores)
-
-            eval_log: Dict[str, Any] = {
-                "timestep": int(t + 1),
-                "eval/reward_mean": float(np.mean(eval_scores)),
-                "eval/reward_std": float(np.std(eval_scores)),
-                "eval/normalized_score_mean": float(np.mean(normalized_eval_scores)),
-                "eval/normalized_score_std": float(np.std(normalized_eval_scores)),
-            }
-            eval_logs.append(eval_log.copy())
-
-            print(
-                f"Evaluation over {config.n_episodes} episodes: "
-                f"reward={eval_log['eval/reward_mean']:.3f} ± {eval_log['eval/reward_std']:.3f}, "
-                f"D4RL={eval_log['eval/normalized_score_mean']:.3f} ± "
-                f"{eval_log['eval/normalized_score_std']:.3f}"
-            )
-
-            if config.log_wandb:
-                wandb_eval_log = {
-                    key: to_python_scalar(value)
-                    for key, value in eval_log.items()
-                    if is_scalar_value(value)
+    try:
+        for t in range(start_timestep, int(config.max_timesteps)):
+            batch = replay_buffer.sample(config.batch_size)
+            log_dict = trainer.train(batch)
+    
+            if config.log_wandb and (t + 1) % config.log_every == 0:
+                _wandb_log(log_dict, int(jax.device_get(trainer.state.total_it)))
+    
+            if (t + 1) % config.eval_freq == 0:
+                print(f"Time steps: {t + 1}")
+                eval_scores = trainer.eval_actor(
+                    env,
+                    trainer.state.actor_params,
+                    n_episodes=config.n_episodes,
+                    seed=config.seed,
+                )
+                normalized_eval_scores = normalize_episode_scores(env, eval_scores)
+    
+                eval_log: Dict[str, Any] = {
+                    "timestep": int(t + 1),
+                    "eval/reward_mean": float(np.mean(eval_scores)),
+                    "eval/reward_std": float(np.std(eval_scores)),
+                    "eval/normalized_score_mean": float(np.mean(normalized_eval_scores)),
+                    "eval/normalized_score_std": float(np.std(normalized_eval_scores)),
                 }
-                wandb.log(wandb_eval_log, step=int(jax.device_get(trainer.state.total_it)))
-
-            save_and_upload_eval_logs(
-                eval_logs=eval_logs,
-                checkpoints_path=config.checkpoints_path,
-                log_wandb=config.log_wandb,
+                upsert_eval_log(eval_logs, eval_log)
+    
+                print(
+                    f"Evaluation over {config.n_episodes} episodes: "
+                    f"reward={eval_log['eval/reward_mean']:.3f} ± {eval_log['eval/reward_std']:.3f}, "
+                    f"D4RL={eval_log['eval/normalized_score_mean']:.3f} ± "
+                    f"{eval_log['eval/normalized_score_std']:.3f}"
+                )
+    
+                if config.log_wandb:
+                    wandb_eval_log = {
+                        key: to_python_scalar(value)
+                        for key, value in eval_log.items()
+                        if is_scalar_value(value)
+                    }
+                    _wandb_log(wandb_eval_log, int(jax.device_get(trainer.state.total_it)))
+    
+                save_and_upload_eval_logs(
+                    eval_logs=eval_logs,
+                    checkpoints_path=config.checkpoints_path,
+                    log_wandb=config.log_wandb,
+                )
+    
+            current_timestep = _training_timestep()
+            if (
+                checkpoint_manager is not None
+                and current_timestep % int(config.checkpoint_freq) == 0
+            ):
+                checkpoint_manager.save_progress(
+                    timestep=current_timestep,
+                    trainer_state=_progress_state(),
+                    eval_logs=eval_logs,
+                    status="running",
+                )
+    except BaseException:
+        if checkpoint_manager is not None:
+            interrupted_timestep = _training_timestep()
+            evaluation_complete = (
+                not _evaluation_required(interrupted_timestep)
+                or find_eval_log(eval_logs, interrupted_timestep) is not None
             )
-
-    if config.checkpoints_path is not None:
-        checkpoint_path = os.path.join(config.checkpoints_path, "checkpoint.pkl")
-        save_pickle(checkpoint_path, trainer.state_dict())
-
-        # if config.log_wandb and wandb.run is not None:
-        #     wandb.save(checkpoint_path, policy="now")
-
-        save_and_upload_eval_logs(
+            if evaluation_complete:
+                checkpoint_manager.save_progress(
+                    timestep=interrupted_timestep,
+                    trainer_state=_progress_state(),
+                    eval_logs=eval_logs,
+                    status="interrupted",
+                )
+                print(f"Saved interrupted checkpoint at timestep {interrupted_timestep}.")
+            else:
+                print(
+                    "Evaluation was interrupted before its result was committed; "
+                    "retaining the previous safe checkpoint so evaluation cannot be skipped."
+                )
+        raise
+    final_timestep = _training_timestep()
+    if checkpoint_manager is not None:
+        final_path = checkpoint_manager.complete(
+            timestep=final_timestep,
+            final_state=_final_state(),
+            save_final_model=bool(config.save_final_model),
             eval_logs=eval_logs,
-            checkpoints_path=config.checkpoints_path,
-            log_wandb=config.log_wandb,
         )
+        if final_path is not None:
+            print("---------------------------------------")
+            print(f"Saved final checkpoint to: {final_path}")
+            print("---------------------------------------")
+
 
 
 @pyrallis.wrap()

@@ -77,6 +77,24 @@ except ImportError:
 
 
 d4rl = None
+
+# Automatic training resume utilities shared by all offline-RL algorithms.
+_PROJECT_ROOT = next(
+    parent for parent in Path(__file__).resolve().parents
+    if (parent / "algorithms").is_dir()
+)
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from algorithms.uk_offline.common.checkpointing import (
+    DEFAULT_IDENTITY_IGNORED_FIELDS,
+    TrainingCheckpointManager,
+    best_eval_metric,
+    evaluation_is_due,
+    find_eval_log,
+    upsert_eval_log,
+)
+
 TensorBatch = Dict[str, jnp.ndarray]
 
 ALGORITHM_NAME = "DD-ReBRAC"
@@ -143,6 +161,9 @@ class TrainConfig:
     save_best_model: bool = False
     eval_at_first_step: bool = True
 
+    checkpoint_freq: int = int(25e3)
+    wandb_entity: Optional[str] = None
+
     def __post_init__(self):
         normalize_config_aliases(self)
         refresh_algorithm_names(self)
@@ -173,6 +194,7 @@ def validate_config(config: TrainConfig) -> None:
     assert config.n_episodes > 0
     assert config.max_timesteps >= 0
     assert config.log_every > 0
+    assert config.checkpoint_freq > 0
     assert config.num_critics > 0
     assert config.discount >= 0.0 and config.discount <= 1.0
     assert config.tau >= 0.0 and config.tau <= 1.0
@@ -1570,6 +1592,29 @@ def _train_impl(config: TrainConfig):
         config = apply_env_hyperparams(config)
         config = finalize_checkpoint_path(config)
 
+    checkpoint_manager = None
+    checkpoint_preparation = None
+    if config.checkpoints_path is not None and (not actor_refit_only):
+        current_config_dict = asdict(config)
+        checkpoint_manager = TrainingCheckpointManager(
+            run_dir=config.checkpoints_path,
+            current_config=current_config_dict,
+            default_config=asdict(TrainConfig()),
+            max_timesteps=int(config.max_timesteps),
+            checkpoint_type="dd_rebrac_jax_training_progress",
+            identity_ignored_fields=DEFAULT_IDENTITY_IGNORED_FIELDS,
+            checkpoint_version=2,
+            accepted_checkpoint_versions=(1, 2),
+            wandb_enabled=bool(config.log_wandb),
+            wandb_entity=getattr(config, "wandb_entity", None),
+            wandb_project=config.project,
+            final_checkpoint_name="checkpoint.pkl",
+        )
+        checkpoint_preparation = checkpoint_manager.prepare()
+        print(checkpoint_preparation.message)
+        if checkpoint_preparation.is_completed:
+            return
+
     jax_device = select_jax_device(config.device)
     env, eval_env, train_dataset, val_dataset = make_env_and_datasets(
         config.env,
@@ -1605,14 +1650,6 @@ def _train_impl(config: TrainConfig):
         print("Warning: normalize_states=True changes the original FQL/OGBench ReBRAC codepath.")
     set_seed(config.seed, eval_env)
 
-    if config.checkpoints_path is not None and not actor_refit_only:
-        print(f"Checkpoints path: {config.checkpoints_path}")
-        os.makedirs(config.checkpoints_path, exist_ok=True)
-        config_path = os.path.join(config.checkpoints_path, "config.yaml")
-        if os.path.exists(config_path):
-            raise FileExistsError(f"The file '{config_path}' already exists.")
-        with open(config_path, "w") as f:
-            pyrallis.dump(config, f)
 
     print("---------------------------------------")
     run_mode_name = "Actor refit" if actor_refit_only else "Training"
@@ -1641,8 +1678,72 @@ def _train_impl(config: TrainConfig):
         else:
             trainer.load_state_dict(checkpoint)
 
+    def _progress_state():
+        return make_checkpoint_payload(
+            trainer=trainer,
+            config=config,
+            state_mean=state_mean,
+            state_std=state_std,
+        )
+
+    def _final_state():
+        return _progress_state()
+
+    def _load_progress_state(payload):
+        raw_trainer = payload["trainer"] if isinstance(payload, dict) and "trainer" in payload else payload
+        trainer.load_state_dict(raw_trainer)
+
+    def _training_timestep():
+        return int(trainer.total_it)
+
+    start_timestep = _training_timestep()
+    eval_logs: List[Dict[str, Any]] = []
+    if checkpoint_manager is not None:
+        if checkpoint_preparation.is_resuming:
+            start_timestep, eval_logs, _ = checkpoint_manager.restore(
+                load_trainer_state=_load_progress_state,
+                get_restored_timestep=_training_timestep,
+            )
+            print(f"Restored training at timestep {start_timestep}.")
+        else:
+            start_timestep = _training_timestep()
+            checkpoint_manager.save_progress(
+                timestep=start_timestep,
+                trainer_state=_progress_state(),
+                eval_logs=eval_logs,
+                status="running",
+            )
+
     if config.log_wandb:
-        wandb_init(asdict(config))
+        if checkpoint_manager is not None:
+            try:
+                checkpoint_manager.initialize_wandb(
+                    wandb_module=wandb,
+                    config=asdict(config),
+                    code_root=_PROJECT_ROOT,
+                )
+            except Exception as exc:
+                print(f"Warning: W&B resume failed: {exc}")
+                print("Continuing local training with a new W&B run.")
+                if getattr(wandb, "run", None) is not None:
+                    wandb.finish(exit_code=1)
+                checkpoint_manager.initialize_fresh_wandb(
+                    wandb_module=wandb,
+                    config=asdict(config),
+                    code_root=_PROJECT_ROOT,
+                )
+        else:
+            wandb_init(asdict(config))
+
+
+    def _wandb_log(metrics, step):
+        if not config.log_wandb:
+            return
+        if checkpoint_manager is not None:
+            checkpoint_manager.log_wandb(metrics, int(step))
+        else:
+            wandb.log(metrics, step=int(step))
+
 
     if actor_refit_only:
         actor_refit_dir = loaded_run_dir / config.actor_refit_dir_name
@@ -1669,79 +1770,116 @@ def _train_impl(config: TrainConfig):
         print("Actor refit finished")
         return
 
-    eval_logs: List[Dict[str, Any]] = []
-    best_eval_metric_mean = -np.inf
+    best_eval_metric_mean = best_eval_metric(eval_logs)
     last_train_log: Dict[str, float] = {}
 
-    for t in trange(int(config.max_timesteps), desc=f"{ALGORITHM_NAME}-FQL Training"):
-        i = t + 1
-        batch = replay_buffer.sample_batch(None, batch_size=config.batch_size)
-        update_actor_now = (i % config.policy_freq) == 0
-        log_dict = trainer.train(batch, update_actor_now=update_actor_now)
-        train_step = int(trainer.total_it)
-        last_train_log = {**last_train_log, **log_dict}
-
-        if config.log_wandb and train_step % config.log_every == 0:
-            wandb.log({f"train/{key}": value for key, value in last_train_log.items()}, step=train_step)
-
-        if val_buffer is not None and train_step % config.log_every == 0:
-            val_batch = val_buffer.sample_batch(None, batch_size=config.batch_size)
-            _, val_info = trainer.agent.total_loss(val_batch, grad_params=None, full_update=True)
-            val_info = {f"validation/{key}": float(jax.device_get(value)) for key, value in val_info.items()}
-            if config.log_wandb:
-                wandb.log(val_info, step=train_step)
-
-        should_eval = (
-            (config.eval_at_first_step and train_step == 1)
-            or train_step % config.eval_freq == 0
-            or train_step == int(config.max_timesteps)
+    def _evaluation_required(step):
+        step = int(step)
+        return (
+            (config.eval_at_first_step and step == 1)
+            or step % int(config.eval_freq) == 0
+            or step == int(config.max_timesteps)
         )
-        if should_eval:
-            print(f"Time steps: {train_step}")
-            eval_stats = trainer.eval_current_actor(eval_env, n_episodes=config.n_episodes)
-            eval_log = eval_stats_to_eval_log(eval_stats, train_step)
-            eval_logs.append(eval_log.copy())
-            print(
-                f"Evaluation over {config.n_episodes} episodes: "
-                f"reward={eval_log['eval/reward_mean']:.3f}, "
-                f"d4rl_normalized={eval_log['eval/d4rl_normalized_score_mean']:.3f}, "
-                f"success_rate={eval_log['eval/success_rate']:.3f}"
+
+    try:
+        for t in trange(start_timestep, int(config.max_timesteps), desc=f"{ALGORITHM_NAME}-FQL Training"):
+            i = t + 1
+            batch = replay_buffer.sample_batch(None, batch_size=config.batch_size)
+            update_actor_now = (i % config.policy_freq) == 0
+            log_dict = trainer.train(batch, update_actor_now=update_actor_now)
+            train_step = int(trainer.total_it)
+            last_train_log = {**last_train_log, **log_dict}
+    
+            if config.log_wandb and train_step % config.log_every == 0:
+                _wandb_log({f"train/{key}": value for key, value in last_train_log.items()}, train_step)
+    
+            if val_buffer is not None and train_step % config.log_every == 0:
+                val_batch = val_buffer.sample_batch(None, batch_size=config.batch_size)
+                _, val_info = trainer.agent.total_loss(val_batch, grad_params=None, full_update=True)
+                val_info = {f"validation/{key}": float(jax.device_get(value)) for key, value in val_info.items()}
+                if config.log_wandb:
+                    _wandb_log(val_info, train_step)
+    
+            should_eval = (
+                (config.eval_at_first_step and train_step == 1)
+                or train_step % config.eval_freq == 0
+                or train_step == int(config.max_timesteps)
             )
-            if config.log_wandb:
-                wandb.log({key: to_python_scalar(value) for key, value in eval_log.items() if is_scalar_value(value)}, step=train_step)
-            save_and_upload_eval_logs(eval_logs, config.checkpoints_path, config.log_wandb)
-            if config.checkpoints_path is not None and config.save_best_model:
-                metric = eval_log["eval/success_rate"] if np.isfinite(eval_log["eval/success_rate"]) else eval_log["eval/d4rl_normalized_score_mean"]
-                if not np.isfinite(metric):
-                    metric = eval_log["eval/reward_mean"]
-                is_best = np.isfinite(metric) and metric > best_eval_metric_mean
-                if is_best:
-                    best_eval_metric_mean = metric
-                    save_checkpoint(
-                        os.path.join(config.checkpoints_path, "best_checkpoint.pkl"),
-                        trainer=trainer,
-                        config=config,
-                        state_mean=state_mean,
-                        state_std=state_std,
-                        log_wandb=config.log_wandb,
-                    )
-
-    if config.checkpoints_path is not None and config.save_final_model:
-        checkpoint_path = os.path.join(config.checkpoints_path, "checkpoint.pkl")
-        save_checkpoint(
-            checkpoint_path,
-            trainer=trainer,
-            config=config,
-            state_mean=state_mean,
-            state_std=state_std,
-            log_wandb=config.log_wandb,
+            if should_eval:
+                print(f"Time steps: {train_step}")
+                eval_stats = trainer.eval_current_actor(eval_env, n_episodes=config.n_episodes)
+                eval_log = eval_stats_to_eval_log(eval_stats, train_step)
+                upsert_eval_log(eval_logs, eval_log)
+                print(
+                    f"Evaluation over {config.n_episodes} episodes: "
+                    f"reward={eval_log['eval/reward_mean']:.3f}, "
+                    f"d4rl_normalized={eval_log['eval/d4rl_normalized_score_mean']:.3f}, "
+                    f"success_rate={eval_log['eval/success_rate']:.3f}"
+                )
+                if config.log_wandb:
+                    _wandb_log({key: to_python_scalar(value) for key, value in eval_log.items() if is_scalar_value(value)}, train_step)
+                save_and_upload_eval_logs(eval_logs, config.checkpoints_path, config.log_wandb)
+                if config.checkpoints_path is not None and config.save_best_model:
+                    metric = eval_log["eval/success_rate"] if np.isfinite(eval_log["eval/success_rate"]) else eval_log["eval/d4rl_normalized_score_mean"]
+                    if not np.isfinite(metric):
+                        metric = eval_log["eval/reward_mean"]
+                    is_best = np.isfinite(metric) and metric > best_eval_metric_mean
+                    if is_best:
+                        best_eval_metric_mean = metric
+                        save_checkpoint(
+                            os.path.join(config.checkpoints_path, "best_checkpoint.pkl"),
+                            trainer=trainer,
+                            config=config,
+                            state_mean=state_mean,
+                            state_std=state_std,
+                            log_wandb=config.log_wandb,
+                        )
+    
+            current_timestep = _training_timestep()
+            if (
+                checkpoint_manager is not None
+                and current_timestep % int(config.checkpoint_freq) == 0
+            ):
+                checkpoint_manager.save_progress(
+                    timestep=current_timestep,
+                    trainer_state=_progress_state(),
+                    eval_logs=eval_logs,
+                    status="running",
+                )
+    except BaseException:
+        if checkpoint_manager is not None:
+            interrupted_timestep = _training_timestep()
+            evaluation_complete = (
+                not _evaluation_required(interrupted_timestep)
+                or find_eval_log(eval_logs, interrupted_timestep) is not None
+            )
+            if evaluation_complete:
+                checkpoint_manager.save_progress(
+                    timestep=interrupted_timestep,
+                    trainer_state=_progress_state(),
+                    eval_logs=eval_logs,
+                    status="interrupted",
+                )
+                print(f"Saved interrupted checkpoint at timestep {interrupted_timestep}.")
+            else:
+                print(
+                    "Evaluation was interrupted before its result was committed; "
+                    "retaining the previous safe checkpoint so evaluation cannot be skipped."
+                )
+        raise
+    final_timestep = _training_timestep()
+    if checkpoint_manager is not None:
+        final_path = checkpoint_manager.complete(
+            timestep=final_timestep,
+            final_state=_final_state(),
+            save_final_model=bool(config.save_final_model),
+            eval_logs=eval_logs,
         )
-        print("---------------------------------------")
-        print(f"Saved final checkpoint to: {checkpoint_path}")
-        print("---------------------------------------")
+        if final_path is not None:
+            print("---------------------------------------")
+            print(f"Saved final checkpoint to: {final_path}")
+            print("---------------------------------------")
 
-    if config.checkpoints_path is not None:
-        save_and_upload_eval_logs(eval_logs, config.checkpoints_path, config.log_wandb)
 
 
 @pyrallis.wrap()

@@ -23,6 +23,24 @@ import os
 
 
 
+
+# Automatic training resume utilities shared by all offline-RL algorithms.
+_PROJECT_ROOT = next(
+    parent for parent in Path(__file__).resolve().parents
+    if (parent / "algorithms").is_dir()
+)
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from algorithms.uk_offline.common.checkpointing import (
+    DEFAULT_IDENTITY_IGNORED_FIELDS,
+    TrainingCheckpointManager,
+    best_eval_metric,
+    evaluation_is_due,
+    find_eval_log,
+    upsert_eval_log,
+)
+
 TensorBatch = List[torch.Tensor]
 
 
@@ -62,6 +80,10 @@ class TrainConfig:
     name: str = "IQL"
     log_wandb: bool = True
     log_every: int = 100
+
+    checkpoint_freq: int = int(25e3)
+    save_final_model: bool = True
+    wandb_entity: Optional[str] = None
 
     def __post_init__(self):
         self.project = "ORL-SMOOTH"
@@ -505,6 +527,7 @@ class ImplicitQLearning:
     def state_dict(self) -> Dict[str, Any]:
         return {
             "qf": self.qf.state_dict(),
+            "q_target": self.q_target.state_dict(),
             "q_optimizer": self.q_optimizer.state_dict(),
             "vf": self.vf.state_dict(),
             "v_optimizer": self.v_optimizer.state_dict(),
@@ -518,6 +541,8 @@ class ImplicitQLearning:
         self.qf.load_state_dict(state_dict["qf"])
         self.q_optimizer.load_state_dict(state_dict["q_optimizer"])
         self.q_target = copy.deepcopy(self.qf)
+        if "q_target" in state_dict:
+            self.q_target.load_state_dict(state_dict["q_target"])
 
         self.vf.load_state_dict(state_dict["vf"])
         self.v_optimizer.load_state_dict(state_dict["v_optimizer"])
@@ -531,6 +556,29 @@ class ImplicitQLearning:
 
 @pyrallis.wrap()
 def train(config: TrainConfig):
+    checkpoint_manager = None
+    checkpoint_preparation = None
+    if config.checkpoints_path is not None and (True):
+        current_config_dict = asdict(config)
+        checkpoint_manager = TrainingCheckpointManager(
+            run_dir=config.checkpoints_path,
+            current_config=current_config_dict,
+            default_config=asdict(TrainConfig()),
+            max_timesteps=int(config.max_timesteps),
+            checkpoint_type="iql_training_progress",
+            identity_ignored_fields=DEFAULT_IDENTITY_IGNORED_FIELDS,
+            checkpoint_version=2,
+            accepted_checkpoint_versions=(1, 2),
+            wandb_enabled=bool(config.log_wandb),
+            wandb_entity=getattr(config, "wandb_entity", None),
+            wandb_project=config.project,
+            final_checkpoint_name="checkpoint.pt",
+        )
+        checkpoint_preparation = checkpoint_manager.prepare()
+        print(checkpoint_preparation.message)
+        if checkpoint_preparation.is_completed:
+            return
+
     env = gym.make(config.env)
 
     state_dim = env.observation_space.shape[0]
@@ -563,19 +611,6 @@ def train(config: TrainConfig):
 
     max_action = float(env.action_space.high[0])
 
-    if config.checkpoints_path is not None:
-        print(f"Checkpoints path: {config.checkpoints_path}")
-        
-        os.makedirs(config.checkpoints_path, exist_ok=True)  # 폴더는 그냥 만들되 존재해도 OK
-
-        # checkpoint_file = os.path.join(config.checkpoints_path, "checkpoint.pt")
-        checkpoint_file = os.path.join(config.checkpoints_path, "config.yaml")
-        if os.path.exists(checkpoint_file):
-            print(f"Error: The file '{checkpoint_file}' already exists.")
-            exit(1)
-
-        with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
-            pyrallis.dump(config, f)
 
     # Set seeds
     seed = config.seed
@@ -625,67 +660,165 @@ def train(config: TrainConfig):
         trainer.load_state_dict(torch.load(policy_file))
         actor = trainer.actor
 
+    def _progress_state():
+        return trainer.state_dict()
+
+    def _final_state():
+        return trainer.state_dict()
+
+    def _load_progress_state(payload):
+        trainer.load_state_dict(payload)
+
+    def _training_timestep():
+        return int(trainer.total_it)
+
+    start_timestep = _training_timestep()
+    eval_logs: List[Dict[str, Any]] = []
+    if checkpoint_manager is not None:
+        if checkpoint_preparation.is_resuming:
+            start_timestep, eval_logs, _ = checkpoint_manager.restore(
+                load_trainer_state=_load_progress_state,
+                get_restored_timestep=_training_timestep,
+            )
+            print(f"Restored training at timestep {start_timestep}.")
+        else:
+            start_timestep = _training_timestep()
+            checkpoint_manager.save_progress(
+                timestep=start_timestep,
+                trainer_state=_progress_state(),
+                eval_logs=eval_logs,
+                status="running",
+            )
+
     if config.log_wandb:
-        wandb_init(asdict(config))
+        if checkpoint_manager is not None:
+            try:
+                checkpoint_manager.initialize_wandb(
+                    wandb_module=wandb,
+                    config=asdict(config),
+                    code_root=_PROJECT_ROOT,
+                )
+            except Exception as exc:
+                print(f"Warning: W&B resume failed: {exc}")
+                print("Continuing local training with a new W&B run.")
+                if getattr(wandb, "run", None) is not None:
+                    wandb.finish(exit_code=1)
+                checkpoint_manager.initialize_fresh_wandb(
+                    wandb_module=wandb,
+                    config=asdict(config),
+                    code_root=_PROJECT_ROOT,
+                )
+        else:
+            wandb_init(asdict(config))
+
+
+    def _wandb_log(metrics, step):
+        if not config.log_wandb:
+            return
+        if checkpoint_manager is not None:
+            checkpoint_manager.log_wandb(metrics, int(step))
+        else:
+            wandb.log(metrics, step=int(step))
+
 
     # evaluations = []
-    eval_logs = []
-    for t in range(int(config.max_timesteps)):
-        batch = replay_buffer.sample(config.batch_size)
-        batch = [b.to(config.device) for b in batch]
-        log_dict = trainer.train(batch)
-        if config.log_wandb and (t + 1) % config.log_every == 0:
-            wandb.log(log_dict, step=trainer.total_it)
-        # Evaluate episode
-        if (t + 1) % config.eval_freq == 0:
-            # print(f"Time steps: {t + 1}")
-            eval_scores = eval_actor(
-                env,
-                actor,
-                device=config.device,
-                n_episodes=config.n_episodes,
-                seed=config.seed,
+    def _evaluation_required(step):
+        return evaluation_is_due(int(step), int(config.eval_freq))
+
+    try:
+        for t in range(start_timestep, int(config.max_timesteps)):
+            batch = replay_buffer.sample(config.batch_size)
+            batch = [b.to(config.device) for b in batch]
+            log_dict = trainer.train(batch)
+            if config.log_wandb and (t + 1) % config.log_every == 0:
+                _wandb_log(log_dict, trainer.total_it)
+            # Evaluate episode
+            if (t + 1) % config.eval_freq == 0:
+                # print(f"Time steps: {t + 1}")
+                eval_scores = eval_actor(
+                    env,
+                    actor,
+                    device=config.device,
+                    n_episodes=config.n_episodes,
+                    seed=config.seed,
+                )
+                # eval_score = eval_scores.mean()
+                normalized_eval_score = env.get_normalized_score(eval_scores) * 100.0
+                # evaluations.append(normalized_eval_score)
+                # print("---------------------------------------")
+                # print(
+                #     f"Evaluation over {config.n_episodes} episodes: "
+                #     f"{eval_score:.3f} , D4RL score: {normalized_eval_score:.3f}"
+                # )
+                # print("---------------------------------------")
+                # if config.checkpoints_path is not None:
+                #     torch.save(
+                #         trainer.state_dict(),
+                #         os.path.join(config.checkpoints_path, f"checkpoint_{t}.pt"),
+                #     )
+                # wandb.log(
+                #     {"d4rl_normalized_score": normalized_eval_score}, step=trainer.total_it
+                # )
+    
+                eval_log = {
+                    "eval/reward_mean": np.mean(eval_scores),
+                    "eval/reward_std": np.std(eval_scores),
+                    # "epoch": (t + 1) % ,
+                    "timestep": t + 1,
+                }
+                eval_log["eval/normalized_score_mean"] = np.mean(normalized_eval_score)
+                eval_log["eval/normalized_score_std"] = np.std(normalized_eval_score)
+    
+                upsert_eval_log(eval_logs, eval_log)
+                if config.log_wandb:
+                    _wandb_log(eval_log, _training_timestep())
+    
+            current_timestep = _training_timestep()
+            if (
+                checkpoint_manager is not None
+                and current_timestep % int(config.checkpoint_freq) == 0
+            ):
+                checkpoint_manager.save_progress(
+                    timestep=current_timestep,
+                    trainer_state=_progress_state(),
+                    eval_logs=eval_logs,
+                    status="running",
+                )
+    except BaseException:
+        if checkpoint_manager is not None:
+            interrupted_timestep = _training_timestep()
+            evaluation_complete = (
+                not _evaluation_required(interrupted_timestep)
+                or find_eval_log(eval_logs, interrupted_timestep) is not None
             )
-            # eval_score = eval_scores.mean()
-            normalized_eval_score = env.get_normalized_score(eval_scores) * 100.0
-            # evaluations.append(normalized_eval_score)
-            # print("---------------------------------------")
-            # print(
-            #     f"Evaluation over {config.n_episodes} episodes: "
-            #     f"{eval_score:.3f} , D4RL score: {normalized_eval_score:.3f}"
-            # )
-            # print("---------------------------------------")
-            # if config.checkpoints_path is not None:
-            #     torch.save(
-            #         trainer.state_dict(),
-            #         os.path.join(config.checkpoints_path, f"checkpoint_{t}.pt"),
-            #     )
-            # wandb.log(
-            #     {"d4rl_normalized_score": normalized_eval_score}, step=trainer.total_it
-            # )
-
-            eval_log = {
-                "eval/reward_mean": np.mean(eval_scores),
-                "eval/reward_std": np.std(eval_scores),
-                # "epoch": (t + 1) % ,
-                "timestep": t + 1,
-            }
-            eval_log["eval/normalized_score_mean"] = np.mean(normalized_eval_score)
-            eval_log["eval/normalized_score_std"] = np.std(normalized_eval_score)
-
-            eval_logs.append(eval_log.copy())
-            if config.log_wandb:
-                wandb.log(eval_log)
-            
-    if config.checkpoints_path is not None:
-        torch.save(
-            trainer.state_dict(),
-            os.path.join(config.checkpoints_path, f"checkpoint.pt"),
+            if evaluation_complete:
+                checkpoint_manager.save_progress(
+                    timestep=interrupted_timestep,
+                    trainer_state=_progress_state(),
+                    eval_logs=eval_logs,
+                    status="interrupted",
+                )
+                print(f"Saved interrupted checkpoint at timestep {interrupted_timestep}.")
+            else:
+                print(
+                    "Evaluation was interrupted before its result was committed; "
+                    "retaining the previous safe checkpoint so evaluation cannot be skipped."
+                )
+        raise
+    final_timestep = _training_timestep()
+    if checkpoint_manager is not None:
+        final_path = checkpoint_manager.complete(
+            timestep=final_timestep,
+            final_state=_final_state(),
+            save_final_model=bool(config.save_final_model),
+            eval_logs=eval_logs,
+        final_saver=lambda path, state: torch.save(state, path),
         )
+        if final_path is not None:
+            print("---------------------------------------")
+            print(f"Saved final checkpoint to: {final_path}")
+            print("---------------------------------------")
 
-        keys = eval_logs[0].keys()
-        eval_dict = {key: np.array([log[key] for log in eval_logs]) for key in keys}
-        np.savez(os.path.join(config.checkpoints_path, "eval_logs.npz"), **eval_dict)
 
 
 if __name__ == "__main__":
