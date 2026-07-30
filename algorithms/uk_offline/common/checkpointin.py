@@ -475,22 +475,63 @@ class TrainingCheckpointManager:
         self._next_wandb_sequence = 1
         self._remote_wandb_sequence = 0
 
+    @staticmethod
+    def _canonical_config_value(value: Any) -> Any:
+        """Normalize serialization-only type differences before comparison.
+
+        YAML stores tuples as lists, while pyrallis/dataclass configs often keep
+        them as tuples. Those values are semantically identical for training and
+        must not cause a false configuration mismatch. The normalization is
+        recursive so nested hidden-dimension structures are handled as well.
+        """
+        if is_dataclass(value):
+            value = asdict(value)
+        if isinstance(value, np.generic):
+            value = value.item()
+        if isinstance(value, np.ndarray):
+            value = value.tolist()
+        if isinstance(value, os.PathLike):
+            return os.fspath(value)
+        if isinstance(value, Mapping):
+            return {
+                key: TrainingCheckpointManager._canonical_config_value(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return [
+                TrainingCheckpointManager._canonical_config_value(item)
+                for item in value
+            ]
+        if isinstance(value, (set, frozenset)):
+            normalized_items = [
+                TrainingCheckpointManager._canonical_config_value(item)
+                for item in value
+            ]
+            return sorted(normalized_items, key=repr)
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        return value
+
     @property
     def critical_config(self) -> Dict[str, Any]:
-        return {key: self.current_config.get(key) for key in self.critical_config_fields}
+        return {
+            key: self._canonical_config_value(self.current_config.get(key))
+            for key in self.critical_config_fields
+        }
 
     @property
     def pending_wandb_log_count(self) -> int:
         return len(self._pending_wandb_logs)
 
     def _normalized_config(self, raw: Mapping[str, Any]) -> Dict[str, Any]:
-        normalized = dict(self.default_config)
+        normalized = {
+            key: self._canonical_config_value(value)
+            for key, value in self.default_config.items()
+        }
         for key, value in raw.items():
             if key not in normalized:
                 continue
-            if isinstance(value, float) and value.is_integer():
-                value = int(value)
-            normalized[key] = value
+            normalized[key] = self._canonical_config_value(value)
         return normalized
 
     def _identity(self, raw: Mapping[str, Any]) -> Dict[str, Any]:
@@ -963,7 +1004,15 @@ class TrainingCheckpointManager:
         version = int(payload.get("version", -1))
         if version not in self.accepted_checkpoint_versions:
             raise ValueError(f"Unsupported checkpoint version: {version}")
-        saved_critical = payload.get("critical_config", {})
+        saved_critical_raw = payload.get("critical_config", {})
+        saved_critical = {
+            key: self._canonical_config_value(value)
+            for key, value in (
+                saved_critical_raw.items()
+                if isinstance(saved_critical_raw, Mapping)
+                else ()
+            )
+        }
         mismatch = {
             key: (saved_critical.get(key), value)
             for key, value in self.critical_config.items()
