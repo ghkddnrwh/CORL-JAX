@@ -93,6 +93,7 @@ from algorithms.uk_offline.common.checkpointing import (
     best_eval_metric,
     evaluation_is_due,
     find_eval_log,
+    log_training_exceptions,
     upsert_eval_log,
 )
 
@@ -1245,8 +1246,6 @@ def save_and_upload_eval_logs(
         return
     eval_logs_path = os.path.join(checkpoints_path, "eval_logs.npz")
     save_logs_npz(eval_logs, eval_logs_path)
-    if log_wandb and wandb.run is not None:
-        wandb.save(eval_logs_path, policy="now")
 
 
 def normalize_episode_scores(env: gym.Env, eval_scores: np.ndarray) -> np.ndarray:
@@ -2209,6 +2208,7 @@ def load_run_config_for_refit(
 
 
 @pyrallis.wrap()
+@log_training_exceptions
 def train(config: TrainConfig):
     refit_only = config.mode == "refit"
 
@@ -2425,24 +2425,19 @@ def train(config: TrainConfig):
 
     if config.log_wandb:
         if checkpoint_manager is not None:
-            try:
-                checkpoint_manager.initialize_wandb(
-                    wandb_module=wandb,
-                    config=asdict(config),
-                    code_root=_PROJECT_ROOT,
-                )
-            except Exception as exc:
-                print(f"Warning: W&B resume failed: {exc}")
-                print("Continuing local training with a new W&B run.")
-                if getattr(wandb, "run", None) is not None:
-                    wandb.finish(exit_code=1)
-                checkpoint_manager.initialize_fresh_wandb(
-                    wandb_module=wandb,
-                    config=asdict(config),
-                    code_root=_PROJECT_ROOT,
-                )
+            if not checkpoint_manager.initialize_wandb_with_fallback(
+                wandb_module=wandb,
+                config=asdict(config),
+                code_root=_PROJECT_ROOT,
+            ):
+                config.log_wandb = False
         else:
-            wandb_init(asdict(config))
+            try:
+                wandb_init(asdict(config))
+            except Exception as exc:
+                print(f"Warning: W&B initialization failed: {exc}")
+                print("Continuing local training with W&B disabled.")
+                config.log_wandb = False
 
 
     def _wandb_log(metrics, step):

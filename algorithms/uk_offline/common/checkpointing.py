@@ -20,9 +20,13 @@ import copy
 import os
 import pickle
 import random
+import socket
 import sys
+import traceback
 import uuid
-from dataclasses import dataclass
+from datetime import datetime
+from dataclasses import asdict, dataclass, is_dataclass
+from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
@@ -32,6 +36,7 @@ import yaml
 LATEST_CHECKPOINT_NAME = "latest_checkpoint.pkl"
 FINAL_CHECKPOINT_NAME = "checkpoint.pkl"
 TRAINING_STATUS_NAME = "training_status.yaml"
+ERROR_LOG_NAME = "training_errors.log"
 DEFAULT_CHECKPOINT_VERSION = 2
 
 PathLike = Union[str, Path]
@@ -163,6 +168,109 @@ def save_yaml_atomic(path: PathLike, data: Mapping[str, Any]) -> None:
     finally:
         if temporary.exists():
             temporary.unlink()
+
+
+def infer_last_eval_timestep(path: PathLike) -> Optional[int]:
+    """Return the largest recorded evaluation timestep from a legacy NPZ log.
+
+    Legacy training scripts did not write ``training_status.yaml``. A run is
+    considered complete only when an explicit evaluation timestep reaches or
+    exceeds ``max_timesteps``; earlier logs are not enough to distinguish an
+    interrupted run from a completed run safely.
+    """
+    path = Path(path)
+    if not path.exists():
+        return None
+    try:
+        with np.load(path, allow_pickle=True) as data:
+            for key in ("timestep", "timesteps", "training/timestep"):
+                if key not in data.files:
+                    continue
+                values = np.asarray(data[key]).reshape(-1)
+                timesteps: List[int] = []
+                for value in values:
+                    try:
+                        numeric = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if np.isfinite(numeric):
+                        timesteps.append(int(numeric))
+                if timesteps:
+                    return max(timesteps)
+    except Exception as exc:
+        print(f"Warning: failed to inspect legacy eval log {path}: {exc}")
+    return None
+
+
+def append_exception_log(
+    run_dir: PathLike,
+    exc: BaseException,
+    *,
+    context: str = "training",
+    config: Any = None,
+    filename: str = ERROR_LOG_NAME,
+) -> Path:
+    """Append a timestamped traceback to the run directory and fsync it."""
+    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log_path = run_dir / filename
+    timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    try:
+        if is_dataclass(config):
+            config_snapshot: Any = asdict(config)
+        elif isinstance(config, Mapping):
+            config_snapshot = dict(config)
+        elif config is not None and hasattr(config, "__dict__"):
+            config_snapshot = dict(vars(config))
+        else:
+            config_snapshot = config
+    except Exception:
+        config_snapshot = repr(config)
+
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write("\n" + "=" * 88 + "\n")
+        f.write(f"timestamp: {timestamp}\n")
+        f.write(f"context: {context}\n")
+        f.write(f"pid: {os.getpid()}\n")
+        f.write(f"host: {socket.gethostname()}\n")
+        f.write(f"exception: {type(exc).__name__}: {exc}\n")
+        if config_snapshot is not None:
+            f.write(f"config: {config_snapshot!r}\n")
+        f.write("traceback:\n")
+        traceback.print_exception(type(exc), exc, exc.__traceback__, file=f)
+        f.flush()
+        os.fsync(f.fileno())
+    _fsync_parent_directory(log_path)
+    return log_path
+
+
+def log_training_exceptions(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Decorator that records uncaught training errors in ``training_errors.log``."""
+    @wraps(func)
+    def wrapped(config: Any, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return func(config, *args, **kwargs)
+        except BaseException as exc:
+            run_dir_raw = getattr(config, "checkpoints_path", None)
+            if not run_dir_raw:
+                load_model = getattr(config, "load_model", None)
+                if load_model:
+                    load_path = Path(load_model)
+                    run_dir_raw = load_path if load_path.is_dir() else load_path.parent
+            if run_dir_raw:
+                try:
+                    path = append_exception_log(
+                        run_dir_raw,
+                        exc,
+                        context=f"{func.__module__}.{func.__name__}",
+                        config=config,
+                    )
+                    print(f"Saved error traceback to: {path}")
+                except Exception as log_exc:
+                    print(f"Warning: failed to write training error log: {log_exc}")
+            raise
+
+    return wrapped
 
 
 def save_logs_npz(logs: List[Dict[str, Any]], path: PathLike) -> None:
@@ -514,6 +622,30 @@ class TrainingCheckpointManager:
             self.preparation_mode = "completed"
             return RunPreparation("completed", "A final checkpoint already exists. Nothing to do.")
 
+        # Legacy scripts had no training_status.yaml. If their local eval log
+        # explicitly contains max_timesteps, the run reached the final
+        # scheduled evaluation and can be migrated safely as completed.
+        if not status and self.eval_logs_path.exists():
+            last_eval_timestep = infer_last_eval_timestep(self.eval_logs_path)
+            if (
+                last_eval_timestep is not None
+                and last_eval_timestep >= self.max_timesteps
+            ):
+                self._update_status("completed", self.max_timesteps, None)
+                self.preparation_mode = "completed"
+                return RunPreparation(
+                    "completed",
+                    "Legacy completed run detected from eval_logs.npz "
+                    f"(last timestep={last_eval_timestep}).",
+                )
+            raise RuntimeError(
+                "Legacy eval_logs.npz was found, but completion cannot be "
+                "confirmed safely: "
+                f"last_eval_timestep={last_eval_timestep}, "
+                f"max_timesteps={self.max_timesteps}. Refusing to restart "
+                "from timestep 0 and overwrite the existing run."
+            )
+
         if status.get("status") in (None, "running", "interrupted") and int(status.get("timestep", 0)) == 0:
             self.preparation_mode = "new"
             return RunPreparation(
@@ -629,6 +761,48 @@ class TrainingCheckpointManager:
         self._remote_wandb_sequence = 0
         return self.initialize_wandb(wandb_module, config, code_root)
 
+    def disable_wandb_transport(self) -> None:
+        """Disable W&B network activity without affecting local training."""
+        self.wandb_enabled = False
+        self._wandb_module = None
+        self._wandb_run = None
+
+    def initialize_wandb_with_fallback(
+        self,
+        wandb_module: Any,
+        config: Mapping[str, Any],
+        code_root: PathLike = ".",
+    ) -> bool:
+        """Resume W&B, then try a fresh run; never abort local training."""
+        try:
+            self.initialize_wandb(wandb_module, config, code_root)
+            return True
+        except Exception as resume_exc:
+            print(f"Warning: W&B resume failed: {resume_exc}")
+            print("Trying a new W&B run while preserving local training.")
+            active_run = getattr(wandb_module, "run", None)
+            if active_run is not None:
+                try:
+                    wandb_module.finish(exit_code=1, quiet=True)
+                except Exception as finish_exc:
+                    print(f"Warning: failed to close the partial W&B run: {finish_exc}")
+            self._wandb_run = None
+
+        try:
+            self.initialize_fresh_wandb(wandb_module, config, code_root)
+            return True
+        except Exception as fresh_exc:
+            print(f"Warning: new W&B run initialization failed: {fresh_exc}")
+            print("Continuing local training with W&B disabled.")
+            active_run = getattr(wandb_module, "run", None)
+            if active_run is not None:
+                try:
+                    wandb_module.finish(exit_code=1, quiet=True)
+                except Exception as finish_exc:
+                    print(f"Warning: failed to close the partial W&B run: {finish_exc}")
+            self.disable_wandb_transport()
+            return False
+
     def log_wandb(self, metrics: Mapping[str, Any], step: int) -> None:
         """Buffer a metric record; do not contact W&B until a checkpoint exists."""
         if not self.wandb_enabled:
@@ -727,8 +901,20 @@ class TrainingCheckpointManager:
             "next_wandb_sequence": int(self._next_wandb_sequence),
         }
 
-    def save_progress(self, timestep: int, trainer_state: Any, eval_logs: List[Dict[str, Any]], status: str = "running") -> None:
-        """Commit model first, then deliver only checkpoint-protected W&B rows."""
+    def save_progress(
+        self,
+        timestep: int,
+        trainer_state: Any,
+        eval_logs: List[Dict[str, Any]],
+        status: str = "running",
+        *,
+        finalizing: bool = False,
+    ) -> bool:
+        """Commit model first, then deliver checkpoint-protected W&B rows.
+
+        Returns ``True`` when no pending W&B records remain. Local checkpoint
+        success is independent of this return value.
+        """
         if status not in ("running", "interrupted"):
             raise ValueError(f"Invalid progress status: {status}")
         timestep = int(timestep)
@@ -753,10 +939,18 @@ class TrainingCheckpointManager:
                         f"through training timestep {timestep}."
                     )
             except Exception as exc:
-                # The checkpoint still contains every unsent record. A later
-                # process will resume the same run and retry them.
                 print(f"Warning: failed to flush checkpoint-protected W&B logs: {exc}")
-                print("Local training state is safe; W&B delivery will be retried on resume.")
+                if finalizing:
+                    print(
+                        "Local training completed safely, but final W&B records "
+                        "remain undelivered."
+                    )
+                else:
+                    print(
+                        "Local training state is safe; W&B delivery will be "
+                        "retried on resume."
+                    )
+        return self.pending_wandb_log_count == 0
 
     def restore(
         self,
@@ -829,6 +1023,7 @@ class TrainingCheckpointManager:
             trainer_state=final_state,
             eval_logs=logs,
             status="running",
+            finalizing=True,
         )
 
         final_name: Optional[str] = None
@@ -849,6 +1044,13 @@ class TrainingCheckpointManager:
             final_path = self.final_checkpoint_path
         if logs:
             save_logs_npz(logs, self.eval_logs_path)
+        if self.pending_wandb_log_count:
+            print(
+                "Warning: training completed, but "
+                f"{self.pending_wandb_log_count} buffered W&B record(s) were "
+                "not delivered. Local model and evaluation logs are complete; "
+                "these W&B records will not be retried automatically."
+            )
         self._update_status("completed", timestep, final_name)
         if self.latest_checkpoint_path.exists():
             self.latest_checkpoint_path.unlink()
