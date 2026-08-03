@@ -6,8 +6,9 @@
 #   - Q_i is always bootstrapped from its own V_i.
 #   - V_i is regressed to its own Q_i, but its asymmetric expectile weight is
 #     computed from a delayed, decoupled pair j(i): Q_j_delayed - V_j_delayed.
-#   - If N=1, j(i)=i. If N=2, the two members filter each other. If N>=3,
-#     the one-to-one filtering assignment cycles whenever delayed networks refresh.
+#   - By default, if N=1, j(i)=i; if N=2, the two members filter each other;
+#     if N>=3, the one-to-one filtering assignment cycles on delayed refreshes.
+#   - delayed_expectile_self_index=True instead fixes j(i)=i for every member.
 #   - Actor updates always use ensemble-mean Q and ensemble-mean V.
 #
 # Experiment plumbing:
@@ -157,6 +158,8 @@ class TrainConfig:
     # Decoupled delayed ensemble learning
     ensemble_size: int = 2
     delayed_update_period: int = 250
+    # False: use another ensemble member (original behavior). True: use the same index.
+    delayed_expectile_self_index: bool = False
 
     # Standalone actor refit output directory.
     # Refit reuses the shared training schedule fields above:
@@ -203,6 +206,7 @@ def validate_config(config: TrainConfig) -> None:
     assert config.iql_tau >= 0.0 and config.iql_tau <= 1.0
     assert config.ensemble_size >= 1
     assert config.delayed_update_period > 0
+    assert isinstance(config.delayed_expectile_self_index, bool)
     if config.actor_dropout is not None:
         assert config.actor_dropout >= 0.0 and config.actor_dropout < 1.0
     assert config.hidden_dim > 0
@@ -338,7 +342,12 @@ def cycle_filter_indices(ensemble_size: int, shift: Union[int, jnp.ndarray]) -> 
     return (indices + jnp.asarray(shift, dtype=jnp.int32)) % jnp.asarray(ensemble_size, dtype=jnp.int32)
 
 
-def initial_filter_indices(ensemble_size: int) -> jnp.ndarray:
+def initial_filter_indices(
+    ensemble_size: int,
+    delayed_expectile_self_index: bool = False,
+) -> jnp.ndarray:
+    if delayed_expectile_self_index:
+        return jnp.arange(ensemble_size, dtype=jnp.int32)
     return cycle_filter_indices(ensemble_size, shift=1)
 
 
@@ -736,8 +745,9 @@ class DDIQLJAX:
         V_i target: Q_i_target(s, a)
         V_i weight: |tau - 1[Q_j_delayed(s, a) - V_j_delayed(s) < 0]|
 
-    where j = filter_indices[i]. The mapping i -> j is one-to-one, never self
-    for N>=2, and cycles with delayed-network updates for N>=3.
+    where j = filter_indices[i]. By default, the mapping is one-to-one, never
+    self for N>=2, and cycles with delayed-network updates for N>=3. When
+    delayed_expectile_self_index=True, the mapping is fixed to j(i)=i.
 
     Actor AWBC uses ensemble means:
 
@@ -759,6 +769,7 @@ class DDIQLJAX:
         iql_tau: float = 0.7,
         ensemble_size: int = 2,
         delayed_update_period: int = 250,
+        delayed_expectile_self_index: bool = False,
         iql_deterministic: bool = False,
         actor_dropout: Optional[float] = None,
         hidden_dim: int = 256,
@@ -776,6 +787,7 @@ class DDIQLJAX:
         self.iql_tau = iql_tau
         self.ensemble_size = int(ensemble_size)
         self.delayed_update_period = int(delayed_update_period)
+        self.delayed_expectile_self_index = bool(delayed_expectile_self_index)
         self.iql_deterministic = iql_deterministic
         self.actor_dropout = actor_dropout
         self.hidden_dim = int(hidden_dim)
@@ -849,7 +861,10 @@ class DDIQLJAX:
             v_params=v_params,
             v_delayed_params=copy.deepcopy(v_params),
             v_opt_state=self.v_tx.init(v_params),
-            filter_indices=initial_filter_indices(self.ensemble_size),
+            filter_indices=initial_filter_indices(
+                self.ensemble_size,
+                delayed_expectile_self_index=self.delayed_expectile_self_index,
+            ),
             actor_params=actor_params,
             actor_opt_state=copy.deepcopy(self.initial_actor_opt_state),
             actor_key=actor_key,
@@ -884,6 +899,7 @@ class DDIQLJAX:
         iql_tau = self.iql_tau
         ensemble_size = self.ensemble_size
         delayed_update_period = self.delayed_update_period
+        delayed_expectile_self_index = self.delayed_expectile_self_index
         iql_deterministic = self.iql_deterministic
         use_dropout = self.actor_dropout is not None
         actor_apply_fn = self.actor_def.apply
@@ -906,6 +922,8 @@ class DDIQLJAX:
             return actor_apply_fn({"params": actor_params}, observations, training=training)
 
         def cycle_shift_for_update(total_it_: jnp.ndarray) -> jnp.ndarray:
+            if delayed_expectile_self_index:
+                return ensemble_indices
             if ensemble_size == 1:
                 return jnp.zeros((1,), dtype=jnp.int32)
             delayed_round = total_it_ // jnp.asarray(delayed_update_period, dtype=jnp.int32)
@@ -933,7 +951,10 @@ class DDIQLJAX:
             delayed_q_all = apply_q_ensemble(state.q_delayed_params, observations, actions)  # [N, B]
             delayed_v_all = apply_v_ensemble(state.v_delayed_params, observations)  # [N, B]
             delayed_adv_all = delayed_q_all - delayed_v_all
-            delayed_adv_for_filter = delayed_adv_all[state.filter_indices, :]  # [N, B]
+            effective_filter_indices = (
+                ensemble_indices if delayed_expectile_self_index else state.filter_indices
+            )
+            delayed_adv_for_filter = delayed_adv_all[effective_filter_indices, :]  # [N, B]
             delayed_value_weight = jnp.abs(
                 iql_tau - (delayed_adv_for_filter < 0.0).astype(jnp.float32)
             )
@@ -1053,6 +1074,9 @@ class DDIQLJAX:
                 "delayed_negative_adv_frac": jnp.mean((delayed_adv_for_filter < 0.0).astype(jnp.float32)),
                 "delayed_update": should_update_delayed.astype(jnp.float32),
                 "ensemble_size": jnp.asarray(ensemble_size, dtype=jnp.float32),
+                "delayed_expectile_self_index": jnp.asarray(
+                    delayed_expectile_self_index, dtype=jnp.float32
+                ),
                 "filter_index_mean": jnp.mean(filter_indices.astype(jnp.float32)),
                 "filter_shift": jnp.where(
                     jnp.asarray(ensemble_size, dtype=jnp.int32) > 1,
@@ -1462,6 +1486,7 @@ class DDIQLJAX:
             "iql_deterministic": self.iql_deterministic,
             "ensemble_size": self.ensemble_size,
             "delayed_update_period": self.delayed_update_period,
+            "delayed_expectile_self_index": self.delayed_expectile_self_index,
         }
 
     def load_state_dict(self, state_dict: Dict[str, Any]):
@@ -1483,6 +1508,10 @@ class DDIQLJAX:
             self.initial_actor_key = serialization.from_state_dict(
                 self.initial_actor_key,
                 state_dict["initial_actor_key"],
+            )
+        if self.delayed_expectile_self_index:
+            self.state = self.state.replace(
+                filter_indices=jnp.arange(self.ensemble_size, dtype=jnp.int32)
             )
         self.state = tree_to_device(self.state, self.device)
         self.initial_actor_params = tree_to_device(self.initial_actor_params, self.device)
@@ -1744,7 +1773,8 @@ def _train_impl(config: TrainConfig):
     print(f"{run_mode_name} {ALGORITHM_NAME}-JAX, Env: {config.env}, Seed: {seed}")
     print(
         f"ensemble_size={config.ensemble_size}, "
-        f"delayed_update_period={config.delayed_update_period}"
+        f"delayed_update_period={config.delayed_update_period}, "
+        f"delayed_expectile_self_index={config.delayed_expectile_self_index}"
     )
     print("---------------------------------------")
 
@@ -1762,6 +1792,7 @@ def _train_impl(config: TrainConfig):
         iql_tau=config.iql_tau,
         ensemble_size=config.ensemble_size,
         delayed_update_period=config.delayed_update_period,
+        delayed_expectile_self_index=config.delayed_expectile_self_index,
         iql_deterministic=config.iql_deterministic,
         actor_dropout=config.actor_dropout,
         hidden_dim=config.hidden_dim,
