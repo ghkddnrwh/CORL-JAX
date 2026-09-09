@@ -11,7 +11,7 @@
 #   - Expectile filtering supports three index schedules:
 #       cross         -> always use another ensemble member (for N>=2).
 #       self          -> always use the same ensemble member.
-#       periodic_self -> mostly cross-filter, but periodically use self-filtering.
+#       periodic_self -> repeat a configurable mix of cross/self delayed phases.
 #   - Actor updates always use ensemble-mean Q and ensemble-mean V.
 #
 # Experiment plumbing:
@@ -166,10 +166,20 @@ class TrainConfig:
     #   "legacy"        : preserve delayed_expectile_self_index behavior below.
     #   "cross"         : always use another ensemble member (original False behavior).
     #   "self"          : always use the same ensemble member (original True behavior).
-    #   "periodic_self" : use cross filtering most of the time and self filtering
-    #                       once every delayed_expectile_self_period delayed phases.
+    #   "periodic_self" : repeat a cycle containing configurable cross/self phases.
+    #
+    # For periodic_self:
+    #   delayed_expectile_self_period = total delayed phases per cycle
+    #   delayed_expectile_self_count  = number of self-filter phases in that cycle
+    #
+    # Examples (S=self, C=cross):
+    #   period=5, count=1 -> C C C C S   (self:cross = 1:4; legacy behavior)
+    #   period=2, count=1 -> C S         (self:cross = 1:1)
+    #   period=3, count=2 -> C S S       (self:cross = 2:1)
+    #   period=4, count=3 -> C S S S     (self:cross = 3:1)
     delayed_expectile_index_mode: str = "legacy"
     delayed_expectile_self_period: int = 5
+    delayed_expectile_self_count: int = 1
 
     # Backward compatibility for existing YAML/checkpoints. Used only when
     # delayed_expectile_index_mode == "legacy".
@@ -224,6 +234,8 @@ def validate_config(config: TrainConfig) -> None:
         "legacy", "cross", "self", "periodic_self"
     )
     assert config.delayed_expectile_self_period > 0
+    assert config.delayed_expectile_self_count > 0
+    assert config.delayed_expectile_self_count <= config.delayed_expectile_self_period
     assert isinstance(config.delayed_expectile_self_index, bool)
     if config.actor_dropout is not None:
         assert config.actor_dropout >= 0.0 and config.actor_dropout < 1.0
@@ -384,17 +396,30 @@ def scheduled_filter_indices(
     delayed_round: Union[int, jnp.ndarray],
     mode: str,
     self_period: int,
+    self_count: int = 1,
 ) -> jnp.ndarray:
     """Return j(i) for a delayed-refresh phase.
 
-    periodic_self starts in cross mode. With self_period=5, the phases are
-    cross, cross, cross, cross, self, then repeat. Cross phases continue the
-    original non-self cycle while skipping self phases in the cross counter.
+    For periodic_self, ``self_period`` is the total number of delayed phases
+    in one cycle and ``self_count`` is the number of self-filter phases. Cross
+    phases come first and self phases follow. For example:
+
+        self_period=5, self_count=1 -> cross, cross, cross, cross, self
+        self_period=3, self_count=2 -> cross, self, self
+        self_period=4, self_count=3 -> cross, self, self, self
+
+    Keeping self_count=1 exactly preserves the previous periodic_self schedule.
+    Cross phases continue the original non-self cycle while self phases do not
+    advance the cross-cycle counter.
     """
     if ensemble_size < 1:
         raise ValueError("ensemble_size must be >= 1")
     if self_period <= 0:
         raise ValueError("self_period must be > 0")
+    if self_count <= 0:
+        raise ValueError("self_count must be > 0")
+    if self_count > self_period:
+        raise ValueError("self_count must be <= self_period")
     if mode not in ("cross", "self", "periodic_self"):
         raise ValueError(f"scheduled_filter_indices requires a resolved mode, got {mode!r}")
 
@@ -410,14 +435,17 @@ def scheduled_filter_indices(
         shift = jnp.asarray(1, dtype=jnp.int32) + (delayed_round % cross_mod)
         return (indices + shift) % ensemble_mod
 
-    # periodic_self: every K-th phase is self, with phase 0 starting as cross.
+    # periodic_self: one cycle = cross phases followed by self phases.
     period = jnp.asarray(self_period, dtype=jnp.int32)
-    is_self_round = ((delayed_round + 1) % period) == 0
+    n_self = jnp.asarray(self_count, dtype=jnp.int32)
+    n_cross = period - n_self
+    cycle_pos = delayed_round % period
+    is_self_round = cycle_pos >= n_cross
 
-    # Remove completed self phases from the cross-cycle counter so that, for
-    # N>=3, cross shifts continue 1,2,...,N-1 without being advanced by self.
-    completed_self_rounds = (delayed_round + 1) // period
-    cross_round = delayed_round - completed_self_rounds
+    # Count only cross phases. Self phases must not advance the cross shift so
+    # that, for N>=3, cross shifts continue 1,2,...,N-1 across cycle boundaries.
+    completed_cycles = delayed_round // period
+    cross_round = completed_cycles * n_cross + jnp.minimum(cycle_pos, n_cross)
     cross_shift = jnp.asarray(1, dtype=jnp.int32) + (cross_round % cross_mod)
     cross_indices = (indices + cross_shift) % ensemble_mod
     return jnp.where(is_self_round, indices, cross_indices)
@@ -427,12 +455,14 @@ def initial_filter_indices(
     ensemble_size: int,
     mode: str,
     self_period: int,
+    self_count: int = 1,
 ) -> jnp.ndarray:
     return scheduled_filter_indices(
         ensemble_size=ensemble_size,
         delayed_round=jnp.asarray(0, dtype=jnp.int32),
         mode=mode,
         self_period=self_period,
+        self_count=self_count,
     )
 
 
@@ -832,7 +862,7 @@ class DDIQLJAX:
 
     where j = filter_indices[i]. The index schedule can be "cross", "self",
     or "periodic_self". Cross preserves the original one-to-one non-self cycle;
-    self fixes j(i)=i; periodic_self periodically inserts a self-filter phase.
+    self fixes j(i)=i; periodic_self repeats a configurable cross/self phase mix.
 
     Actor AWBC uses ensemble means:
 
@@ -856,6 +886,7 @@ class DDIQLJAX:
         delayed_update_period: int = 250,
         delayed_expectile_index_mode: str = "legacy",
         delayed_expectile_self_period: int = 5,
+        delayed_expectile_self_count: int = 1,
         delayed_expectile_self_index: bool = False,
         iql_deterministic: bool = False,
         actor_dropout: Optional[float] = None,
@@ -875,6 +906,7 @@ class DDIQLJAX:
         self.ensemble_size = int(ensemble_size)
         self.delayed_update_period = int(delayed_update_period)
         self.delayed_expectile_self_period = int(delayed_expectile_self_period)
+        self.delayed_expectile_self_count = int(delayed_expectile_self_count)
         self.delayed_expectile_self_index = bool(delayed_expectile_self_index)
         self.delayed_expectile_index_mode = resolve_delayed_expectile_index_mode(
             delayed_expectile_index_mode,
@@ -892,6 +924,12 @@ class DDIQLJAX:
             raise ValueError("delayed_update_period must be > 0")
         if self.delayed_expectile_self_period <= 0:
             raise ValueError("delayed_expectile_self_period must be > 0")
+        if self.delayed_expectile_self_count <= 0:
+            raise ValueError("delayed_expectile_self_count must be > 0")
+        if self.delayed_expectile_self_count > self.delayed_expectile_self_period:
+            raise ValueError(
+                "delayed_expectile_self_count must be <= delayed_expectile_self_period"
+            )
         if self.hidden_dim <= 0:
             raise ValueError("hidden_dim must be > 0")
         if self.n_hidden <= 0:
@@ -959,6 +997,7 @@ class DDIQLJAX:
                 ensemble_size=self.ensemble_size,
                 mode=self.delayed_expectile_index_mode,
                 self_period=self.delayed_expectile_self_period,
+                self_count=self.delayed_expectile_self_count,
             ),
             actor_params=actor_params,
             actor_opt_state=copy.deepcopy(self.initial_actor_opt_state),
@@ -996,6 +1035,7 @@ class DDIQLJAX:
         delayed_update_period = self.delayed_update_period
         delayed_expectile_index_mode = self.delayed_expectile_index_mode
         delayed_expectile_self_period = self.delayed_expectile_self_period
+        delayed_expectile_self_count = self.delayed_expectile_self_count
         iql_deterministic = self.iql_deterministic
         use_dropout = self.actor_dropout is not None
         actor_apply_fn = self.actor_def.apply
@@ -1024,6 +1064,7 @@ class DDIQLJAX:
                 delayed_round=delayed_round,
                 mode=delayed_expectile_index_mode,
                 self_period=delayed_expectile_self_period,
+                self_count=delayed_expectile_self_count,
             )
 
         @jax.jit
@@ -1597,6 +1638,7 @@ class DDIQLJAX:
             "delayed_update_period": self.delayed_update_period,
             "delayed_expectile_index_mode": self.delayed_expectile_index_mode,
             "delayed_expectile_self_period": self.delayed_expectile_self_period,
+            "delayed_expectile_self_count": self.delayed_expectile_self_count,
             "delayed_expectile_self_index": self.delayed_expectile_self_index,
         }
 
@@ -1632,6 +1674,7 @@ class DDIQLJAX:
                 delayed_round=delayed_round,
                 mode=self.delayed_expectile_index_mode,
                 self_period=self.delayed_expectile_self_period,
+                self_count=self.delayed_expectile_self_count,
             )
         )
         self.state = tree_to_device(self.state, self.device)
@@ -1902,6 +1945,7 @@ def _train_impl(config: TrainConfig):
         f"delayed_expectile_index_mode={config.delayed_expectile_index_mode} "
         f"(effective={effective_index_mode}), "
         f"delayed_expectile_self_period={config.delayed_expectile_self_period}, "
+        f"delayed_expectile_self_count={config.delayed_expectile_self_count}, "
         f"legacy_delayed_expectile_self_index={config.delayed_expectile_self_index}"
     )
     print("---------------------------------------")
@@ -1922,6 +1966,7 @@ def _train_impl(config: TrainConfig):
         delayed_update_period=config.delayed_update_period,
         delayed_expectile_index_mode=config.delayed_expectile_index_mode,
         delayed_expectile_self_period=config.delayed_expectile_self_period,
+        delayed_expectile_self_count=config.delayed_expectile_self_count,
         delayed_expectile_self_index=config.delayed_expectile_self_index,
         iql_deterministic=config.iql_deterministic,
         actor_dropout=config.actor_dropout,
