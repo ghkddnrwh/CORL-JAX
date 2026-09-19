@@ -388,17 +388,17 @@ def generate_result_row(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--algo_name", type=str, default="ReBRAC-JAX")
+    parser.add_argument("--algo_name", type=str, default="DDIQL-JAX")
     parser.add_argument(
         "--root_path",
         type=str,
         # default="logs/basic/iql_jax/ogbench/original/",
         # default="logs/basic/iql_jax/ogbench/0.999/",
-        default="logs/iclr2027/basic/rebrac_jax/ogbench/unnormalize/original/",
+        default="logs/iclr2027/iql_based/ogbench/decoupled_delayed_iql_jax/self_index/original",
     )
     parser.add_argument("--metric_name", type=str, default="eval/success_rate.npy")
     parser.add_argument("--eval_log_filename", type=str, default="eval_logs.npz")
-    parser.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2, 3])
+    parser.add_argument("--seeds", type=int, nargs="+", default=[0])
     parser.add_argument(
         "--last_n_evals",
         type=int,
@@ -467,8 +467,9 @@ def main():
     #   arg_grid = []
     # 로 두면 된다.
     arg_grid: ArgGrid = [
-        # ("first", [1.0]),
-        # ("third", [1000]),
+        ("first", [2, ]),
+        ("second", [10000]),
+        ("third", [0.9, 0.99]),
     ]
 
     print(f"[Info] metric_name={metric_name}")
