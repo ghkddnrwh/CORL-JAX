@@ -228,6 +228,9 @@ class TrainConfig:
     diagnostic_compute_mc_returns: bool = True
     diagnostic_save_npz: bool = True
     diagnostic_eval_return_gap: bool = True
+    # Keep high-resolution diagnostics in memory, but flush NPZ files / upload
+    # diagnostic artifacts only at this coarse cadence to minimize CPU/disk/network I/O.
+    diagnostic_flush_freq: int = int(25e3)
 
     checkpoint_freq: int = int(25e3)
     wandb_entity: Optional[str] = None
@@ -263,6 +266,7 @@ def validate_config(config: TrainConfig) -> None:
     assert config.max_timesteps >= 0
     assert config.log_every > 0
     assert config.diagnostic_freq > 0
+    assert config.diagnostic_flush_freq > 0
     assert config.diagnostic_batch_size > 1
     assert config.diagnostic_seed_offset >= 0
     assert config.checkpoint_freq > 0
@@ -1698,16 +1702,20 @@ class DDIQLJAX:
         return delayed_diagnostic_step
 
     def compute_bias_diagnostics(self, batch: TensorBatch) -> Dict[str, float]:
-        metrics = self._diagnostic_step(self.state, batch)
-        return {key: float(jax.device_get(value)) for key, value in metrics.items()}
+        # One bulk device transfer/synchronization is much cheaper than one per key.
+        metrics = jax.device_get(self._diagnostic_step(self.state, batch))
+        return {key: float(np.asarray(value)) for key, value in metrics.items()}
 
     def compute_delayed_diagnostics(self, batch: TensorBatch) -> Dict[str, float]:
-        metrics = self._delayed_diagnostic_step(self.state, batch)
-        return {key: float(jax.device_get(value)) for key, value in metrics.items()}
+        # One bulk device transfer/synchronization is much cheaper than one per key.
+        metrics = jax.device_get(self._delayed_diagnostic_step(self.state, batch))
+        return {key: float(np.asarray(value)) for key, value in metrics.items()}
 
-    def train(self, batch: TensorBatch) -> Dict[str, float]:
+    def train(self, batch: TensorBatch) -> Dict[str, Any]:
+        # Keep training metrics on device. The caller transfers them to host only
+        # on actual logging steps, avoiding a GPU->CPU synchronization every step.
         self.state, log_dict = self._train_step(self.state, batch)
-        return {key: float(jax.device_get(value)) for key, value in log_dict.items()}
+        return log_dict
 
     def actor_act(self, actor_params: Any, state: np.ndarray) -> np.ndarray:
         state_jnp = tree_to_device(jnp.asarray(state.reshape(1, -1), dtype=jnp.float32), self.device)
@@ -2497,7 +2505,8 @@ def _train_impl(config: TrainConfig):
         print(
             "Bias diagnostics enabled: fixed batch size="
             f"{config.diagnostic_batch_size}, common_freq={config.diagnostic_freq}, "
-            f"delayed_freq={config.delayed_diagnostic_freq}."
+            f"delayed_freq={config.delayed_diagnostic_freq}, "
+            f"flush_freq={config.diagnostic_flush_freq}."
         )
 
     max_action = float(env.action_space.high[0])
@@ -2630,6 +2639,51 @@ def _train_impl(config: TrainConfig):
         else:
             wandb.log(metrics, step=int(step))
 
+    def _host_scalar_metrics(metrics: Dict[str, Any]) -> Dict[str, Any]:
+        """Transfer a metric pytree to CPU once and convert scalar leaves."""
+        host_metrics = jax.device_get(metrics)
+        return {key: to_python_scalar(value) for key, value in host_metrics.items()}
+
+    def _append_or_upsert_log(logs: List[Dict[str, Any]], item: Dict[str, Any]) -> None:
+        """O(1) append on the normal monotonic path; retain resume safety."""
+        step = int(item["timestep"])
+        if not logs:
+            logs.append(item)
+            return
+        last_step = int(logs[-1].get("timestep", -1))
+        if step > last_step:
+            logs.append(item)
+        elif step == last_step:
+            logs[-1] = item
+        else:
+            # Rare resume/recovery path where a local log may extend beyond the
+            # restored checkpoint. Preserve the existing robust upsert behavior.
+            upsert_eval_log(logs, item)
+
+    def _flush_diagnostic_logs(step: int, upload_wandb: bool = True) -> None:
+        """Persist buffered diagnostics at a coarse cadence.
+
+        Diagnostic computation remains high-resolution; only disk writes and W&B
+        artifact uploads are throttled.
+        """
+        wrote_any = False
+        if diagnostic_logs_path is not None and diagnostic_logs:
+            save_logs_npz(diagnostic_logs, str(diagnostic_logs_path))
+            wrote_any = True
+            if upload_wandb and config.log_wandb and wandb.run is not None:
+                wandb.save(str(diagnostic_logs_path), policy="now")
+        if delayed_diagnostic_logs_path is not None and delayed_diagnostic_logs:
+            save_logs_npz(delayed_diagnostic_logs, str(delayed_diagnostic_logs_path))
+            wrote_any = True
+            if upload_wandb and config.log_wandb and wandb.run is not None:
+                wandb.save(str(delayed_diagnostic_logs_path), policy="now")
+        if wrote_any:
+            print(
+                "Flushed diagnostic logs: "
+                f"step={int(step)}, common={len(diagnostic_logs)}, "
+                f"delayed={len(delayed_diagnostic_logs)}"
+            )
+
 
     if refit_only:
         if loaded_run_dir is None:
@@ -2694,85 +2748,82 @@ def _train_impl(config: TrainConfig):
     def _evaluation_required(step):
         return evaluation_is_due(int(step), int(config.eval_freq))
 
+    # W&B delayed-diagnostic scalar logging is intentionally throttled. Full
+    # delayed diagnostic resolution is retained in the in-memory/local NPZ log.
+    last_delayed_wandb_step: Optional[int] = None
+
     try:
         for t in range(start_timestep, int(config.max_timesteps)):
+            step = int(t + 1)
             batch = replay_buffer.sample(config.batch_size)
-            log_dict = trainer.train(batch)
-    
-            if config.log_wandb and (t + 1) % config.log_every == 0:
-                _wandb_log(log_dict, int(jax.device_get(trainer.state.total_it)))
+            device_log_dict = trainer.train(batch)
+
+            # Only synchronize training metrics when they are actually sent to W&B.
+            if config.log_wandb and step % config.log_every == 0:
+                _wandb_log(_host_scalar_metrics(device_log_dict), step)
 
             common_diagnostic_due = (
                 config.enable_bias_diagnostics
                 and diagnostic_batch is not None
-                and (t + 1) % config.diagnostic_freq == 0
+                and step % config.diagnostic_freq == 0
             )
             delayed_diagnostic_due = (
                 config.enable_bias_diagnostics
                 and diagnostic_batch is not None
                 and config.delayed_update_period > 1
-                and (t + 1) % config.delayed_diagnostic_freq == 0
+                and step % config.delayed_diagnostic_freq == 0
             )
 
             # Run the full diagnostic suite only at the coarse common frequency.
-            # If both schedules coincide, reuse the full result for the delayed log
-            # instead of running the lightweight delayed pass a second time.
+            # If both schedules coincide, reuse the full result for the delayed log.
             if common_diagnostic_due:
                 diag_metrics = trainer.compute_bias_diagnostics(diagnostic_batch)
-                diag_log: Dict[str, Any] = {"timestep": int(t + 1), **diag_metrics}
-                upsert_eval_log(diagnostic_logs, diag_log)
+                diag_log: Dict[str, Any] = {"timestep": step, **diag_metrics}
+                _append_or_upsert_log(diagnostic_logs, diag_log)
                 print(
                     "Bias diagnostics: "
-                    f"step={t + 1}, "
+                    f"step={step}, "
                     f"receiver_mc_corr={diag_metrics['diag/filter_receiver_mc_corr']:.4f}, "
                     f"receiver_loo_corr={diag_metrics['diag/filter_receiver_loo_corr']:.4f}, "
                     f"source_receiver_error_corr={diag_metrics['diag/source_receiver_error_corr']:.4f}"
                 )
                 if config.log_wandb:
-                    _wandb_log(diag_metrics, int(jax.device_get(trainer.state.total_it)))
-                if diagnostic_logs_path is not None:
-                    save_logs_npz(diagnostic_logs, str(diagnostic_logs_path))
-                    if config.log_wandb and wandb.run is not None:
-                        wandb.save(str(diagnostic_logs_path), policy="now")
+                    _wandb_log(diag_metrics, step)
 
                 if delayed_diagnostic_due:
                     delayed_metrics = {
                         key: diag_metrics[key] for key in DELAYED_DIAGNOSTIC_KEYS
                     }
                     delayed_log: Dict[str, Any] = {
-                        "timestep": int(t + 1), **delayed_metrics
+                        "timestep": step, **delayed_metrics
                     }
-                    upsert_eval_log(delayed_diagnostic_logs, delayed_log)
-                    if delayed_diagnostic_logs_path is not None:
-                        save_logs_npz(
-                            delayed_diagnostic_logs, str(delayed_diagnostic_logs_path)
-                        )
-                        if config.log_wandb and wandb.run is not None:
-                            wandb.save(str(delayed_diagnostic_logs_path), policy="now")
+                    _append_or_upsert_log(delayed_diagnostic_logs, delayed_log)
+                    # The full diagnostic call above already logged the same delayed
+                    # keys to W&B, so do not send a duplicate delayed record.
+                    last_delayed_wandb_step = step
 
             elif delayed_diagnostic_due:
                 delayed_metrics = trainer.compute_delayed_diagnostics(diagnostic_batch)
-                delayed_log = {"timestep": int(t + 1), **delayed_metrics}
-                upsert_eval_log(delayed_diagnostic_logs, delayed_log)
-                print(
-                    "Delayed diagnostics: "
-                    f"step={t + 1}, "
-                    f"delay_age={delayed_metrics['diag/delay_age']:.0f}, "
-                    f"temporal_corr="
-                    f"{delayed_metrics['diag/filter_receiver_temporal_corr']:.4f}, "
-                    f"self_filter={delayed_metrics['diag/is_self_filter']:.0f}"
-                )
-                if config.log_wandb:
-                    _wandb_log(
-                        delayed_metrics, int(jax.device_get(trainer.state.total_it))
-                    )
-                if delayed_diagnostic_logs_path is not None:
-                    save_logs_npz(
-                        delayed_diagnostic_logs, str(delayed_diagnostic_logs_path)
-                    )
-                    if config.log_wandb and wandb.run is not None:
-                        wandb.save(str(delayed_diagnostic_logs_path), policy="now")
-    
+                delayed_log = {"timestep": step, **delayed_metrics}
+                _append_or_upsert_log(delayed_diagnostic_logs, delayed_log)
+
+                # Preserve every delayed diagnostic locally, but throttle W&B scalar
+                # traffic to at most one delayed record per log_every steps.
+                if config.log_wandb and (
+                    last_delayed_wandb_step is None
+                    or step - last_delayed_wandb_step >= int(config.log_every)
+                ):
+                    _wandb_log(delayed_metrics, step)
+                    last_delayed_wandb_step = step
+
+            # Expensive NPZ rewrites and W&B file uploads happen only every 25k
+            # steps by default. This does not change diagnostic computation cadence.
+            if (
+                config.diagnostic_save_npz
+                and step % int(config.diagnostic_flush_freq) == 0
+            ):
+                _flush_diagnostic_logs(step, upload_wandb=True)
+
             if (t + 1) % config.eval_freq == 0:
                 print(f"Time steps: {t + 1}")
                 eval_return_diag: Dict[str, float] = {}
@@ -2826,7 +2877,7 @@ def _train_impl(config: TrainConfig):
                         for key, value in eval_log.items()
                         if is_scalar_value(value)
                     }
-                    _wandb_log(wandb_eval_log, int(jax.device_get(trainer.state.total_it)))
+                    _wandb_log(wandb_eval_log, step)
     
                 save_and_upload_eval_logs(
                     eval_logs=eval_logs,
@@ -2834,7 +2885,7 @@ def _train_impl(config: TrainConfig):
                     log_wandb=config.log_wandb,
                 )
     
-            current_timestep = _training_timestep()
+            current_timestep = step
             if (
                 checkpoint_manager is not None
                 and current_timestep % int(config.checkpoint_freq) == 0
@@ -2846,6 +2897,13 @@ def _train_impl(config: TrainConfig):
                     status="running",
                 )
     except BaseException:
+        # Preserve all diagnostics accumulated since the last 25k flush. This is
+        # intentionally an exceptional-path disk write, not a steady-state cost.
+        try:
+            _flush_diagnostic_logs(_training_timestep(), upload_wandb=True)
+        except Exception as flush_exc:
+            print(f"Warning: failed to flush diagnostic logs after interruption: {flush_exc}")
+
         if checkpoint_manager is not None:
             interrupted_timestep = _training_timestep()
             evaluation_complete = (
@@ -2867,14 +2925,7 @@ def _train_impl(config: TrainConfig):
                 )
         raise
     final_timestep = _training_timestep()
-    if diagnostic_logs_path is not None and diagnostic_logs:
-        save_logs_npz(diagnostic_logs, str(diagnostic_logs_path))
-        if config.log_wandb and wandb.run is not None:
-            wandb.save(str(diagnostic_logs_path), policy="now")
-    if delayed_diagnostic_logs_path is not None and delayed_diagnostic_logs:
-        save_logs_npz(delayed_diagnostic_logs, str(delayed_diagnostic_logs_path))
-        if config.log_wandb and wandb.run is not None:
-            wandb.save(str(delayed_diagnostic_logs_path), policy="now")
+    _flush_diagnostic_logs(final_timestep, upload_wandb=True)
 
     if checkpoint_manager is not None:
         final_path = checkpoint_manager.complete(
