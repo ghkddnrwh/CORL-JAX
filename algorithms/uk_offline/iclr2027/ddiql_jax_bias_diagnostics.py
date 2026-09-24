@@ -1,21 +1,26 @@
-# JAX/Flax Delayed IQL implementation with CDAF_JAX-style experiment plumbing.
+# JAX/Flax Decoupled Delayed IQL implementation with CDAF_JAX-style experiment plumbing.
 #
-# Delayed IQL = original IQL + delayed Q/V snapshots used ONLY to determine
-# the asymmetric expectile weight in the value loss. There is no decoupling,
-# no Q/V ensemble, and no cross-member filtering. The original Twin-Q min,
-# Q backup, actor advantage, and actor update are preserved.
+# Decoupled Delayed IQL idea:
+#   - Use an ensemble of N paired Q_i and V_i networks.
+#   - Remove the original twin-Q min operator entirely.
+#   - Q_i is always bootstrapped from its own V_i.
+#   - V_i is regressed to its own Q_i, but its asymmetric expectile weight is
+#     computed from a delayed, decoupled pair j(i): Q_j_delayed - V_j_delayed.
+#   - By default, if N=1, j(i)=i; if N=2, the two members filter each other;
+#     if N>=3, the one-to-one filtering assignment cycles on delayed refreshes.
+#   - Expectile filtering supports three index schedules:
+#       cross         -> always use another ensemble member (for N>=2).
+#       self          -> always use the same ensemble member.
+#       periodic_self -> repeat a configurable mix of cross/self delayed phases.
+#   - Actor updates always use ensemble-mean Q and ensemble-mean V.
 #
-# delayed_update_period <= 1: exact IQL-style weighting (no delayed snapshots used).
-# delayed_update_period > 1: snapshot q_target/v every N steps and compute the
-# expectile sign from min(Q1_delayed, Q2_delayed) - V_delayed.
-#
-# Current plumbing:
+# Experiment plumbing:
 #   - Explicit mode switch: mode="train" or mode="refit".
 #   - Refit mode uses shared schedule fields:
 #       max_timesteps -> actor-only refit steps
 #       batch_size    -> actor-only refit batch size
 #       eval_freq     -> actor-only refit evaluation interval
-#   - No backward-compatibility aliases for old refit_* keys.
+#   - Hyperparameter YAML keys must exactly match TrainConfig field names.
 
 import copy
 import os
@@ -97,8 +102,8 @@ from algorithms.uk_offline.common.checkpointing import (
 
 TensorBatch = Dict[str, jnp.ndarray]
 
-ALGORITHM_NAME = "DelayedIQL"
-ALGORITHM_FULL_NAME = "Delayed Implicit Q-Learning"
+ALGORITHM_NAME = "DDIQL"
+ALGORITHM_FULL_NAME = "Decoupled Delayed Implicit Q-Learning"
 
 EXP_ADV_MAX = 100.0
 LOG_STD_MIN = -20.0
@@ -113,15 +118,12 @@ DELAYED_DIAGNOSTIC_KEYS = (
     "diag/filter_receiver_temporal_weighted_error",
     "diag/temporal_error_mean",
     "diag/temporal_error_std",
-    "diag/temporal_reference_available",
     "diag/delay_age",
     "diag/delay_fraction",
-    "diag/filter_delayed_loo_cov",
-    "diag/filter_delayed_loo_corr",
-    "diag/current_delayed_loo_corr",
     "diag/delayed_q_mean",
     "diag/delayed_v_mean",
-    "diag/delayed_enabled",
+    "diag/filter_weight_mean",
+    "diag/is_self_filter",
 )
 
 
@@ -146,8 +148,7 @@ class TrainConfig:
     checkpoints_path: Optional[str] = None
     load_model: str = ""
     mode: str = "train"  # one of: train, refit. refit loads Q/V and trains only pi.
-    # Reuse the original IQL hyperparameter file; delayed_update_period can be overridden by CLI/YAML.
-    hyperparams_path: Optional[str] = "hyperparams/iql_jax.yml"
+    hyperparams_path: Optional[str] = "hyperparams/decoupled_delayed_iql_jax.yml"
     use_hyperparams: bool = True
 
     # Dataset
@@ -174,10 +175,32 @@ class TrainConfig:
     hidden_dim: int = 256
     n_hidden: int = 2
 
-    # Delayed expectile weighting.
-    # <= 1: disabled and behaves like original IQL.
-    # > 1: delayed Q/V parameter snapshots are refreshed every N training steps.
-    delayed_update_period: int = 1
+    # Decoupled delayed ensemble learning
+    ensemble_size: int = 2
+    delayed_update_period: int = 250
+
+    # Expectile-filter index schedule:
+    #   "legacy"        : preserve delayed_expectile_self_index behavior below.
+    #   "cross"         : always use another ensemble member (original False behavior).
+    #   "self"          : always use the same ensemble member (original True behavior).
+    #   "periodic_self" : repeat a cycle containing configurable cross/self phases.
+    #
+    # For periodic_self:
+    #   delayed_expectile_self_period = total delayed phases per cycle
+    #   delayed_expectile_self_count  = number of self-filter phases in that cycle
+    #
+    # Examples (S=self, C=cross):
+    #   period=5, count=1 -> C C C C S   (self:cross = 1:4; legacy behavior)
+    #   period=2, count=1 -> C S         (self:cross = 1:1)
+    #   period=3, count=2 -> C S S       (self:cross = 2:1)
+    #   period=4, count=3 -> C S S S     (self:cross = 3:1)
+    delayed_expectile_index_mode: str = "legacy"
+    delayed_expectile_self_period: int = 5
+    delayed_expectile_self_count: int = 1
+
+    # Backward compatibility for existing YAML/checkpoints. Used only when
+    # delayed_expectile_index_mode == "legacy".
+    delayed_expectile_self_index: bool = False
 
     # Standalone actor refit output directory.
     # Refit reuses the shared training schedule fields above:
@@ -187,9 +210,9 @@ class TrainConfig:
     actor_refit_dir_name: str = "actor_refit"
 
     # Logging
-    project: str = "ORL-SMOOTH"
-    group: str = "IQL-JAX"
-    name: str = "IQL-JAX"
+    project: str = "ORL-BIAS"
+    group: str = "DDIQL-JAX"
+    name: str = "DDIQL-JAX"
     log_wandb: bool = True
     log_every: int = 500
     save_final_model: bool = False
@@ -225,9 +248,10 @@ class TrainConfig:
 
 
 def refresh_algorithm_names(config: TrainConfig) -> None:
-    config.project = "ORL-SMOOTH"
-    config.group = f"{ALGORITHM_NAME}-JAX"
+    # config.project = "ORL-BIAS"
+    # config.group = f"{ALGORITHM_NAME}-JAX"
     config.name = f"{ALGORITHM_NAME}-JAX-{config.env}"
+    # config.name = f"{config.name}-{config.env}"
 
 
 def validate_config(config: TrainConfig) -> None:
@@ -246,7 +270,15 @@ def validate_config(config: TrainConfig) -> None:
     assert config.tau >= 0.0 and config.tau <= 1.0
     assert config.beta >= 0.0
     assert config.iql_tau >= 0.0 and config.iql_tau <= 1.0
+    assert config.ensemble_size >= 1
     assert config.delayed_update_period > 0
+    assert str(config.delayed_expectile_index_mode).lower() in (
+        "legacy", "cross", "self", "periodic_self"
+    )
+    assert config.delayed_expectile_self_period > 0
+    assert config.delayed_expectile_self_count > 0
+    assert config.delayed_expectile_self_count <= config.delayed_expectile_self_period
+    assert isinstance(config.delayed_expectile_self_index, bool)
     if config.actor_dropout is not None:
         assert config.actor_dropout >= 0.0 and config.actor_dropout < 1.0
     assert config.hidden_dim > 0
@@ -361,6 +393,121 @@ def soft_update(params, target_params, tau: float):
     return optax.incremental_update(params, target_params, tau)
 
 
+def stack_ensemble_params(params_list: List[Any]) -> Any:
+    """Stack a list of Flax parameter PyTrees along a leading ensemble axis."""
+    return jax.tree_util.tree_map(lambda *xs: jnp.stack(xs, axis=0), *params_list)
+
+
+def cycle_filter_indices(ensemble_size: int, shift: Union[int, jnp.ndarray]) -> jnp.ndarray:
+    """Return deterministic cycle-shift mapping i -> j for decoupled filtering.
+
+    n=1: [0]
+    n=2: shift 1 gives [1, 0]
+    n>=3: shift cycles through 1, 2, ..., n-1.
+
+    For n>=2 and shift in {1, ..., n-1}, this is one-to-one and never maps
+    an ensemble member to itself.
+    """
+    if ensemble_size == 1:
+        return jnp.zeros((1,), dtype=jnp.int32)
+    indices = jnp.arange(ensemble_size, dtype=jnp.int32)
+    return (indices + jnp.asarray(shift, dtype=jnp.int32)) % jnp.asarray(ensemble_size, dtype=jnp.int32)
+
+
+DELAYED_EXPECTILE_INDEX_MODES = ("legacy", "cross", "self", "periodic_self")
+
+
+def resolve_delayed_expectile_index_mode(
+    mode: str,
+    delayed_expectile_self_index: bool = False,
+) -> str:
+    """Resolve the new schedule mode while preserving the old boolean interface."""
+    mode = str(mode).lower()
+    if mode not in DELAYED_EXPECTILE_INDEX_MODES:
+        raise ValueError(
+            f"Unknown delayed_expectile_index_mode={mode!r}. "
+            f"Expected one of {DELAYED_EXPECTILE_INDEX_MODES}."
+        )
+    if mode == "legacy":
+        return "self" if delayed_expectile_self_index else "cross"
+    return mode
+
+
+def scheduled_filter_indices(
+    ensemble_size: int,
+    delayed_round: Union[int, jnp.ndarray],
+    mode: str,
+    self_period: int,
+    self_count: int = 1,
+) -> jnp.ndarray:
+    """Return j(i) for a delayed-refresh phase.
+
+    For periodic_self, ``self_period`` is the total number of delayed phases
+    in one cycle and ``self_count`` is the number of self-filter phases. Cross
+    phases come first and self phases follow. For example:
+
+        self_period=5, self_count=1 -> cross, cross, cross, cross, self
+        self_period=3, self_count=2 -> cross, self, self
+        self_period=4, self_count=3 -> cross, self, self, self
+
+    Keeping self_count=1 exactly preserves the previous periodic_self schedule.
+    Cross phases continue the original non-self cycle while self phases do not
+    advance the cross-cycle counter.
+    """
+    if ensemble_size < 1:
+        raise ValueError("ensemble_size must be >= 1")
+    if self_period <= 0:
+        raise ValueError("self_period must be > 0")
+    if self_count <= 0:
+        raise ValueError("self_count must be > 0")
+    if self_count > self_period:
+        raise ValueError("self_count must be <= self_period")
+    if mode not in ("cross", "self", "periodic_self"):
+        raise ValueError(f"scheduled_filter_indices requires a resolved mode, got {mode!r}")
+
+    indices = jnp.arange(ensemble_size, dtype=jnp.int32)
+    if ensemble_size == 1 or mode == "self":
+        return indices
+
+    delayed_round = jnp.asarray(delayed_round, dtype=jnp.int32)
+    ensemble_mod = jnp.asarray(ensemble_size, dtype=jnp.int32)
+    cross_mod = jnp.asarray(ensemble_size - 1, dtype=jnp.int32)
+
+    if mode == "cross":
+        shift = jnp.asarray(1, dtype=jnp.int32) + (delayed_round % cross_mod)
+        return (indices + shift) % ensemble_mod
+
+    # periodic_self: one cycle = cross phases followed by self phases.
+    period = jnp.asarray(self_period, dtype=jnp.int32)
+    n_self = jnp.asarray(self_count, dtype=jnp.int32)
+    n_cross = period - n_self
+    cycle_pos = delayed_round % period
+    is_self_round = cycle_pos >= n_cross
+
+    # Count only cross phases. Self phases must not advance the cross shift so
+    # that, for N>=3, cross shifts continue 1,2,...,N-1 across cycle boundaries.
+    completed_cycles = delayed_round // period
+    cross_round = completed_cycles * n_cross + jnp.minimum(cycle_pos, n_cross)
+    cross_shift = jnp.asarray(1, dtype=jnp.int32) + (cross_round % cross_mod)
+    cross_indices = (indices + cross_shift) % ensemble_mod
+    return jnp.where(is_self_round, indices, cross_indices)
+
+
+def initial_filter_indices(
+    ensemble_size: int,
+    mode: str,
+    self_period: int,
+    self_count: int = 1,
+) -> jnp.ndarray:
+    return scheduled_filter_indices(
+        ensemble_size=ensemble_size,
+        delayed_round=jnp.asarray(0, dtype=jnp.int32),
+        mode=mode,
+        self_period=self_period,
+        self_count=self_count,
+    )
+
+
 def compute_mean_std(states: np.ndarray, eps: float) -> Tuple[np.ndarray, np.ndarray]:
     mean = states.mean(0)
     std = states.std(0) + eps
@@ -374,10 +521,10 @@ def normalize_states(states: np.ndarray, mean: Union[np.ndarray, float], std: Un
 def infer_episode_ends(dataset: Dict[str, np.ndarray]) -> np.ndarray:
     """Infer trajectory boundaries for Monte-Carlo return diagnostics.
 
-    Explicit terminal/timeout information is used when present. We additionally
+    Explicit terminal/timeout information is used when present.  We additionally
     detect discontinuities between next_observations[t] and observations[t+1],
-    which is useful for fixed-horizon datasets whose truncations are not stored
-    as terminals. The final transition is always treated as an episode end.
+    which is useful for fixed-horizon offline datasets whose truncations are not
+    stored as terminals.  The final transition is always treated as an episode end.
     """
     n = int(np.asarray(dataset["rewards"]).shape[0])
     ends = np.zeros(n, dtype=bool)
@@ -388,15 +535,19 @@ def infer_episode_ends(dataset: Dict[str, np.ndarray]) -> np.ndarray:
             if values.shape[0] == n:
                 ends |= values.astype(bool)
 
+    # In many offline-RL datasets mask=0 means that bootstrapping should stop.
     if "masks" in dataset:
         masks = np.asarray(dataset["masks"]).reshape(-1)
         if masks.shape[0] == n:
             ends |= masks <= 0.0
 
+    # Detect boundaries caused by truncation / concatenated trajectories.
     if n > 1 and "observations" in dataset and "next_observations" in dataset:
         obs = np.asarray(dataset["observations"])
         next_obs = np.asarray(dataset["next_observations"])
         if obs.shape[0] == n and next_obs.shape[0] == n and obs.shape[1:] == next_obs.shape[1:]:
+            # Chunked comparison avoids allocating a huge [N, state_dim] boolean
+            # array for large OGBench datasets.
             chunk_size = 100_000
             for start in range(0, n - 1, chunk_size):
                 stop = min(start + chunk_size, n - 1)
@@ -419,8 +570,8 @@ def compute_discounted_returns_to_go(
 ) -> np.ndarray:
     """Compute realized discounted return-to-go on the offline trajectories.
 
-    This is a diagnostic reference, not an oracle Q*. It follows the actual
-    continuation contained in the offline dataset.
+    This is a diagnostic reference, not an oracle Q*.  For offline RL it follows
+    the continuation contained in the dataset after each transition.
     """
     rewards = np.asarray(rewards, dtype=np.float64).reshape(-1)
     episode_ends = np.asarray(episode_ends, dtype=bool).reshape(-1)
@@ -467,12 +618,8 @@ def batch_correlation(x: jnp.ndarray, y: jnp.ndarray, eps: float = 1e-8) -> jnp.
     return cov / (x_std * y_std + eps)
 
 
-def weighted_error_contribution(
-    weight: jnp.ndarray,
-    error: jnp.ndarray,
-    eps: float = 1e-8,
-) -> jnp.ndarray:
-    """Per-row E[w * error] / E[w], matching the direct weighted-error term."""
+def weighted_error_contribution(weight: jnp.ndarray, error: jnp.ndarray, eps: float = 1e-8) -> jnp.ndarray:
+    """Per-estimator E[w * error] / E[w], matching the direct error term."""
     return jnp.mean(weight * error, axis=-1) / (jnp.mean(weight, axis=-1) + eps)
 
 
@@ -855,17 +1002,6 @@ class QFunction(nn.Module):
         return jnp.squeeze(x, axis=-1)
 
 
-class TwinQ(nn.Module):
-    hidden_dim: int = 256
-    n_hidden: int = 2
-
-    @nn.compact
-    def __call__(self, state: jnp.ndarray, action: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        q1 = QFunction(hidden_dim=self.hidden_dim, n_hidden=self.n_hidden, name="q1")(state, action)
-        q2 = QFunction(hidden_dim=self.hidden_dim, n_hidden=self.n_hidden, name="q2")(state, action)
-        return q1, q2
-
-
 class ValueFunction(nn.Module):
     hidden_dim: int = 256
     n_hidden: int = 2
@@ -881,7 +1017,7 @@ class ValueFunction(nn.Module):
 
 
 @struct.dataclass
-class DelayedIQLState:
+class DDIQLState:
     total_it: jnp.ndarray
     q_params: Any
     q_target_params: Any
@@ -890,6 +1026,7 @@ class DelayedIQLState:
     v_params: Any
     v_delayed_params: Any
     v_opt_state: Any
+    filter_indices: jnp.ndarray
     actor_params: Any
     actor_opt_state: Any
     actor_key: jnp.ndarray
@@ -902,22 +1039,22 @@ class ActorState:
     key: jnp.ndarray
 
 
-class DelayedIQLJAX:
-    """Delayed IQL in JAX/Flax without decoupling.
+class DDIQLJAX:
+    """Decoupled Delayed IQL in JAX/Flax.
 
-    The base algorithm remains standard IQL with Twin-Q:
+    For each ensemble member i:
 
-        Q backup: r + gamma * V(s')
-        V target: min(Q1_target(s, a), Q2_target(s, a))
-        actor advantage: min(Q1_target, Q2_target) - V(s)
+        Q_i target: r + gamma * V_i(s')
+        V_i target: Q_i_target(s, a)
+        V_i weight: |tau - 1[Q_j_delayed(s, a) - V_j_delayed(s) < 0]|
 
-    Only the expectile weight can be delayed. If delayed_update_period > 1:
+    where j = filter_indices[i]. The index schedule can be "cross", "self",
+    or "periodic_self". Cross preserves the original one-to-one non-self cycle;
+    self fixes j(i)=i; periodic_self repeats a configurable cross/self phase mix.
 
-        delayed_adv = min(Q1_delayed(s,a), Q2_delayed(s,a)) - V_delayed(s)
-        weight = |iql_tau - 1[delayed_adv < 0]|
+    Actor AWBC uses ensemble means:
 
-    The V residual itself still uses the current IQL target/current V.
-    No ensemble or cross-network decoupling is introduced.
+        adv_actor = mean_i Q_i_target(s, a) - mean_i V_i(s)
     """
 
     def __init__(
@@ -933,7 +1070,12 @@ class DelayedIQLJAX:
         tau: float = 0.005,
         beta: float = 3.0,
         iql_tau: float = 0.7,
-        delayed_update_period: int = 1,
+        ensemble_size: int = 2,
+        delayed_update_period: int = 250,
+        delayed_expectile_index_mode: str = "legacy",
+        delayed_expectile_self_period: int = 5,
+        delayed_expectile_self_count: int = 1,
+        delayed_expectile_self_index: bool = False,
         iql_deterministic: bool = False,
         actor_dropout: Optional[float] = None,
         hidden_dim: int = 256,
@@ -949,16 +1091,33 @@ class DelayedIQLJAX:
         self.tau = tau
         self.beta = beta
         self.iql_tau = iql_tau
+        self.ensemble_size = int(ensemble_size)
         self.delayed_update_period = int(delayed_update_period)
-        self.use_delayed = self.delayed_update_period > 1
+        self.delayed_expectile_self_period = int(delayed_expectile_self_period)
+        self.delayed_expectile_self_count = int(delayed_expectile_self_count)
+        self.delayed_expectile_self_index = bool(delayed_expectile_self_index)
+        self.delayed_expectile_index_mode = resolve_delayed_expectile_index_mode(
+            delayed_expectile_index_mode,
+            delayed_expectile_self_index=self.delayed_expectile_self_index,
+        )
         self.iql_deterministic = iql_deterministic
         self.actor_dropout = actor_dropout
         self.hidden_dim = int(hidden_dim)
         self.n_hidden = int(n_hidden)
         self.device = device if device is not None else jax.devices()[0]
 
+        if self.ensemble_size < 1:
+            raise ValueError("ensemble_size must be >= 1")
         if self.delayed_update_period <= 0:
             raise ValueError("delayed_update_period must be > 0")
+        if self.delayed_expectile_self_period <= 0:
+            raise ValueError("delayed_expectile_self_period must be > 0")
+        if self.delayed_expectile_self_count <= 0:
+            raise ValueError("delayed_expectile_self_count must be > 0")
+        if self.delayed_expectile_self_count > self.delayed_expectile_self_period:
+            raise ValueError(
+                "delayed_expectile_self_count must be <= delayed_expectile_self_period"
+            )
         if self.hidden_dim <= 0:
             raise ValueError("hidden_dim must be > 0")
         if self.n_hidden <= 0:
@@ -978,7 +1137,7 @@ class DelayedIQLJAX:
                 n_hidden=self.n_hidden,
                 dropout=actor_dropout,
             )
-        self.q_def = TwinQ(hidden_dim=self.hidden_dim, n_hidden=self.n_hidden)
+        self.q_def = QFunction(hidden_dim=self.hidden_dim, n_hidden=self.n_hidden)
         self.v_def = ValueFunction(hidden_dim=self.hidden_dim, n_hidden=self.n_hidden)
 
         self.q_tx = optax.adam(qf_lr)
@@ -991,31 +1150,43 @@ class DelayedIQLJAX:
         self.actor_tx = optax.adam(actor_lr_schedule)
 
         key = jax.random.PRNGKey(seed)
-        key_actor, key_q, key_v, actor_key = jax.random.split(key, 4)
+        init_keys = jax.random.split(key, 2 + 2 * self.ensemble_size)
+        key_actor = init_keys[0]
+        actor_key = init_keys[1]
+        q_keys = init_keys[2 : 2 + self.ensemble_size]
+        v_keys = init_keys[2 + self.ensemble_size :]
         dummy_state = jnp.zeros((1, state_dim), dtype=jnp.float32)
         dummy_action = jnp.zeros((1, action_dim), dtype=jnp.float32)
 
         actor_params = self.actor_def.init(key_actor, dummy_state, training=False)["params"]
-        q_params = self.q_def.init(key_q, dummy_state, dummy_action)["params"]
-        v_params = self.v_def.init(key_v, dummy_state)["params"]
+        q_params = stack_ensemble_params([
+            self.q_def.init(q_key, dummy_state, dummy_action)["params"]
+            for q_key in q_keys
+        ])
+        v_params = stack_ensemble_params([
+            self.v_def.init(v_key, dummy_state)["params"]
+            for v_key in v_keys
+        ])
 
         self.initial_actor_params = copy.deepcopy(actor_params)
         self.initial_actor_opt_state = self.actor_tx.init(actor_params)
         self.initial_actor_key = actor_key
 
-        q_target_params = copy.deepcopy(q_params)
-        q_delayed_params = copy.deepcopy(q_target_params) if self.use_delayed else None
-        v_delayed_params = copy.deepcopy(v_params) if self.use_delayed else None
-
-        self.state = DelayedIQLState(
+        self.state = DDIQLState(
             total_it=jnp.asarray(0, dtype=jnp.int32),
             q_params=q_params,
-            q_target_params=q_target_params,
-            q_delayed_params=q_delayed_params,
+            q_target_params=copy.deepcopy(q_params),
+            q_delayed_params=copy.deepcopy(q_params),
             q_opt_state=self.q_tx.init(q_params),
             v_params=v_params,
-            v_delayed_params=v_delayed_params,
+            v_delayed_params=copy.deepcopy(v_params),
             v_opt_state=self.v_tx.init(v_params),
+            filter_indices=initial_filter_indices(
+                ensemble_size=self.ensemble_size,
+                mode=self.delayed_expectile_index_mode,
+                self_period=self.delayed_expectile_self_period,
+                self_count=self.delayed_expectile_self_count,
+            ),
             actor_params=actor_params,
             actor_opt_state=copy.deepcopy(self.initial_actor_opt_state),
             actor_key=actor_key,
@@ -1050,11 +1221,21 @@ class DelayedIQLJAX:
         tau = self.tau
         beta = self.beta
         iql_tau = self.iql_tau
+        ensemble_size = self.ensemble_size
         delayed_update_period = self.delayed_update_period
-        use_delayed = self.use_delayed
+        delayed_expectile_index_mode = self.delayed_expectile_index_mode
+        delayed_expectile_self_period = self.delayed_expectile_self_period
+        delayed_expectile_self_count = self.delayed_expectile_self_count
         iql_deterministic = self.iql_deterministic
         use_dropout = self.actor_dropout is not None
         actor_apply_fn = self.actor_def.apply
+        ensemble_indices = jnp.arange(ensemble_size, dtype=jnp.int32)
+
+        def apply_q_ensemble(params: Any, states: jnp.ndarray, actions: jnp.ndarray) -> jnp.ndarray:
+            return jax.vmap(lambda p: q_apply({"params": p}, states, actions))(params)
+
+        def apply_v_ensemble(params: Any, states: jnp.ndarray) -> jnp.ndarray:
+            return jax.vmap(lambda p: v_apply({"params": p}, states))(params)
 
         def apply_actor(actor_params: Any, observations: jnp.ndarray, training: bool, rng: Optional[jnp.ndarray] = None):
             if use_dropout and training:
@@ -1066,8 +1247,18 @@ class DelayedIQLJAX:
                 )
             return actor_apply_fn({"params": actor_params}, observations, training=training)
 
+        def filter_indices_for_update(total_it_: jnp.ndarray) -> jnp.ndarray:
+            delayed_round = total_it_ // jnp.asarray(delayed_update_period, dtype=jnp.int32)
+            return scheduled_filter_indices(
+                ensemble_size=ensemble_size,
+                delayed_round=delayed_round,
+                mode=delayed_expectile_index_mode,
+                self_period=delayed_expectile_self_period,
+                self_count=delayed_expectile_self_count,
+            )
+
         @jax.jit
-        def train_step(state: DelayedIQLState, batch: TensorBatch):
+        def train_step(state: DDIQLState, batch: TensorBatch):
             total_it = state.total_it + jnp.asarray(1, dtype=jnp.int32)
             observations = batch["observations"]
             actions = batch["actions"]
@@ -1075,52 +1266,48 @@ class DelayedIQLJAX:
             next_observations = batch["next_observations"]
             dones = jnp.squeeze(batch["dones"], axis=-1)
 
-            # Values used by multiple losses are computed from the old state, matching
-            # the sequencing of the provided PyTorch implementation.
-            next_v = v_apply({"params": state.v_params}, next_observations)
-            target_q_for_backup = rewards + (1.0 - dones) * discount * next_v
-            target_q1, target_q2 = q_apply({"params": state.q_target_params}, observations, actions)
-            target_q_for_v = jnp.minimum(target_q1, target_q2)
-            old_v = v_apply({"params": state.v_params}, observations)
-            adv = target_q_for_v - old_v
-            exp_adv = jnp.minimum(jnp.exp(beta * jax.lax.stop_gradient(adv)), EXP_ADV_MAX)
+            # Old-state quantities used by multiple losses, mirroring IQL-style sequencing.
+            next_v_all = apply_v_ensemble(state.v_params, next_observations)  # [N, B]
+            target_q_for_backup = rewards[None, :] + (1.0 - dones[None, :]) * discount * next_v_all
+            target_v_q_all = apply_q_ensemble(state.q_target_params, observations, actions)  # [N, B]
+            old_v_all = apply_v_ensemble(state.v_params, observations)  # [N, B]
 
-            # Delayed is used ONLY for the expectile weight sign.
-            # The V regression target/residual below remains standard IQL.
-            if use_delayed:
-                delayed_q1, delayed_q2 = q_apply(
-                    {"params": state.q_delayed_params}, observations, actions
-                )
-                delayed_q_for_weight = jnp.minimum(delayed_q1, delayed_q2)
-                delayed_v_for_weight = v_apply({"params": state.v_delayed_params}, observations)
-                weight_adv = delayed_q_for_weight - delayed_v_for_weight
-            else:
-                # With period=1 we intentionally reduce to the original IQL weighting.
-                weight_adv = adv
+            # Decoupled delayed filtering weights: target member i uses delayed member j(i).
+            delayed_q_all = apply_q_ensemble(state.q_delayed_params, observations, actions)  # [N, B]
+            delayed_v_all = apply_v_ensemble(state.v_delayed_params, observations)  # [N, B]
+            delayed_adv_all = delayed_q_all - delayed_v_all
 
-            expectile_weight = jnp.abs(
-                iql_tau - (weight_adv < 0.0).astype(jnp.float32)
+            # filter_indices is the single source of truth for cross/self scheduling.
+            effective_filter_indices = state.filter_indices
+            delayed_adv_for_filter = delayed_adv_all[effective_filter_indices, :]  # [N, B]
+            is_self_filter = jnp.all(effective_filter_indices == ensemble_indices)
+            delayed_value_weight = jnp.abs(
+                iql_tau - (delayed_adv_for_filter < 0.0).astype(jnp.float32)
             )
 
-            def v_loss_fn(v_params):
-                v = v_apply({"params": v_params}, observations)
-                value_adv = jax.lax.stop_gradient(target_q_for_v) - v
-                value_loss = jnp.mean(
-                    jax.lax.stop_gradient(expectile_weight) * value_adv ** 2
-                )
-                return value_loss, v
+            # Actor advantage uses ensemble-mean Q and V, not min.
+            data_q_mean = jnp.mean(target_v_q_all, axis=0)
+            data_v_mean = jnp.mean(old_v_all, axis=0)
+            actor_adv = data_q_mean - data_v_mean
+            exp_adv = jnp.minimum(jnp.exp(beta * jax.lax.stop_gradient(actor_adv)), EXP_ADV_MAX)
 
-            (value_loss, v), v_grads = jax.value_and_grad(v_loss_fn, has_aux=True)(state.v_params)
+            def v_loss_fn(v_params):
+                v_all = apply_v_ensemble(v_params, observations)  # [N, B]
+                value_residual = jax.lax.stop_gradient(target_v_q_all) - v_all
+                value_loss = jnp.mean(jax.lax.stop_gradient(delayed_value_weight) * value_residual ** 2)
+                return value_loss, v_all
+
+            (value_loss, v_all), v_grads = jax.value_and_grad(v_loss_fn, has_aux=True)(state.v_params)
             v_updates, v_opt_state = v_tx.update(v_grads, state.v_opt_state, state.v_params)
             v_params = optax.apply_updates(state.v_params, v_updates)
 
             def q_loss_fn(q_params):
-                q1, q2 = q_apply({"params": q_params}, observations, actions)
+                q_all = apply_q_ensemble(q_params, observations, actions)  # [N, B]
                 target = jax.lax.stop_gradient(target_q_for_backup)
-                q_loss = 0.5 * (jnp.mean((q1 - target) ** 2) + jnp.mean((q2 - target) ** 2))
-                return q_loss, (q1, q2)
+                q_loss = jnp.mean((q_all - target) ** 2)
+                return q_loss, q_all
 
-            (q_loss, (q1, q2)), q_grads = jax.value_and_grad(q_loss_fn, has_aux=True)(state.q_params)
+            (q_loss, q_all), q_grads = jax.value_and_grad(q_loss_fn, has_aux=True)(state.q_params)
             q_updates, q_opt_state = q_tx.update(q_grads, state.q_opt_state, state.q_params)
             q_params = optax.apply_updates(state.q_params, q_updates)
             q_target_params = soft_update(q_params, state.q_target_params, tau)
@@ -1153,31 +1340,25 @@ class DelayedIQLJAX:
             )
             actor_params = optax.apply_updates(state.actor_params, actor_updates)
 
-            if use_delayed:
-                should_update_delayed = (
-                    total_it % jnp.asarray(delayed_update_period, dtype=jnp.int32)
-                ) == 0
+            should_update_delayed = (total_it % jnp.asarray(delayed_update_period, dtype=jnp.int32)) == 0
 
-                def update_delayed(carry):
-                    q_target_params_, v_params_ = carry
-                    return q_target_params_, v_params_
+            def update_delayed(carry):
+                q_target_params_, v_params_ = carry
+                filter_indices_ = filter_indices_for_update(total_it)
+                return q_target_params_, v_params_, filter_indices_
 
-                def keep_delayed(carry):
-                    del carry
-                    return state.q_delayed_params, state.v_delayed_params
+            def keep_delayed(carry):
+                _q_target_params_, _v_params_ = carry
+                return state.q_delayed_params, state.v_delayed_params, state.filter_indices
 
-                q_delayed_params, v_delayed_params = jax.lax.cond(
-                    should_update_delayed,
-                    update_delayed,
-                    keep_delayed,
-                    operand=(q_target_params, v_params),
-                )
-            else:
-                should_update_delayed = jnp.asarray(False)
-                q_delayed_params = state.q_delayed_params
-                v_delayed_params = state.v_delayed_params
+            q_delayed_params, v_delayed_params, filter_indices = jax.lax.cond(
+                should_update_delayed,
+                update_delayed,
+                keep_delayed,
+                operand=(q_target_params, v_params),
+            )
 
-            new_state = DelayedIQLState(
+            new_state = DDIQLState(
                 total_it=total_it,
                 q_params=q_params,
                 q_target_params=q_target_params,
@@ -1186,6 +1367,7 @@ class DelayedIQLJAX:
                 v_params=v_params,
                 v_delayed_params=v_delayed_params,
                 v_opt_state=v_opt_state,
+                filter_indices=filter_indices,
                 actor_params=actor_params,
                 actor_opt_state=actor_opt_state,
                 actor_key=actor_key,
@@ -1193,364 +1375,324 @@ class DelayedIQLJAX:
 
             log_dict = {
                 "q_loss": q_loss,
-                "q1_mean": jnp.mean(q1),
-                "q2_mean": jnp.mean(q2),
+                "q_mean": jnp.mean(q_all),
+                "q_std": jnp.std(q_all),
                 "target_q_mean": jnp.mean(target_q_for_backup),
                 "value_loss": value_loss,
-                "v_mean": jnp.mean(v),
-                "adv_mean": jnp.mean(adv),
-                "adv_min": jnp.min(adv),
-                "adv_max": jnp.max(adv),
-                "exp_adv_mean": jnp.mean(exp_adv),
-                "expectile_weight_adv_mean": jnp.mean(weight_adv),
-                "expectile_weight_adv_min": jnp.min(weight_adv),
-                "expectile_weight_adv_max": jnp.max(weight_adv),
-                "expectile_weight_mean": jnp.mean(expectile_weight),
-                "expectile_negative_adv_frac": jnp.mean(
-                    (weight_adv < 0.0).astype(jnp.float32)
-                ),
-                "delayed_enabled": jnp.asarray(use_delayed, dtype=jnp.float32),
-                "delayed_update": should_update_delayed.astype(jnp.float32),
+                "v_mean": jnp.mean(v_all),
+                "v_std": jnp.std(v_all),
+                "target_v_q_mean": jnp.mean(target_v_q_all),
                 "actor_loss": actor_loss,
                 "bc_loss_mean": jnp.mean(bc_losses),
                 "policy_mean": jnp.mean(policy_mean),
                 "policy_log_std_mean": log_std_mean,
+                "actor_adv_mean": jnp.mean(actor_adv),
+                "actor_adv_min": jnp.min(actor_adv),
+                "actor_adv_max": jnp.max(actor_adv),
+                "exp_adv_mean": jnp.mean(exp_adv),
+                "exp_adv_max": jnp.max(exp_adv),
+                "delayed_adv_mean": jnp.mean(delayed_adv_for_filter),
+                "delayed_adv_min": jnp.min(delayed_adv_for_filter),
+                "delayed_adv_max": jnp.max(delayed_adv_for_filter),
+                "delayed_weight_mean": jnp.mean(delayed_value_weight),
+                "delayed_weight_min": jnp.min(delayed_value_weight),
+                "delayed_weight_max": jnp.max(delayed_value_weight),
+                "delayed_negative_adv_frac": jnp.mean((delayed_adv_for_filter < 0.0).astype(jnp.float32)),
+                "delayed_update": should_update_delayed.astype(jnp.float32),
+                "ensemble_size": jnp.asarray(ensemble_size, dtype=jnp.float32),
+                # Backward-compatible dashboard key: 1 only for fixed-self mode.
+                "delayed_expectile_self_index": jnp.asarray(
+                    delayed_expectile_index_mode == "self", dtype=jnp.float32
+                ),
+                # Actual phase used by the current V update. In periodic_self this
+                # toggles between 0 (cross) and 1 (self).
+                "delayed_expectile_is_self_filter": is_self_filter.astype(jnp.float32),
+                "filter_index_mean": jnp.mean(effective_filter_indices.astype(jnp.float32)),
+                "filter_shift": jnp.where(
+                    jnp.asarray(ensemble_size, dtype=jnp.int32) > 1,
+                    effective_filter_indices[0],
+                    jnp.asarray(0, dtype=jnp.int32),
+                ).astype(jnp.float32),
+                # This is the filter that will be active on the next step after a
+                # delayed refresh (or the same filter if no refresh occurred).
+                "next_delayed_expectile_is_self_filter": jnp.all(
+                    filter_indices == ensemble_indices
+                ).astype(jnp.float32),
+                "next_filter_shift": jnp.where(
+                    jnp.asarray(ensemble_size, dtype=jnp.int32) > 1,
+                    filter_indices[0],
+                    jnp.asarray(0, dtype=jnp.int32),
+                ).astype(jnp.float32),
             }
             return new_state, log_dict
 
         return train_step
 
     def _build_diagnostic_step(self):
-        """Build no-gradient diagnostics for delayed-filter temporal coupling.
+        """Build a no-gradient diagnostic pass for filter--error coupling.
 
-        Delayed-IQL keeps standard IQL's Twin-Q architecture and uses a stale
-        Q/V snapshot only to choose the expectile-weight sign. Therefore it is
-        still estimator-self-coupled, but unlike IQL it has an explicit temporal
-        reference. The diagnostics below keep the common IQL/DD-IQL keys while
-        adding delay-age and current-vs-delayed controls.
+        The returned metrics deliberately distinguish:
+          * intended selection signal (source advantage),
+          * estimator-disagreement proxies (ensemble-centered / leave-one-out),
+          * temporal drift since the delayed snapshot,
+          * held-out Bellman residuals, and
+          * optional realized Monte-Carlo return residuals.
 
-        Monte-Carlo and Bellman residuals are empirical proxies, not oracle Q*
-        errors. None of these metrics enter optimization.
+        None of these quantities are used by the optimizer.
         """
         q_apply = self.q_def.apply
         v_apply = self.v_def.apply
+        ensemble_size = self.ensemble_size
         discount = self.discount
         iql_tau = self.iql_tau
         delayed_update_period = self.delayed_update_period
-        use_delayed = self.use_delayed
+        ensemble_indices = jnp.arange(ensemble_size, dtype=jnp.int32)
+
+        def apply_q_ensemble(params: Any, states: jnp.ndarray, actions: jnp.ndarray) -> jnp.ndarray:
+            return jax.vmap(lambda p: q_apply({"params": p}, states, actions))(params)
+
+        def apply_v_ensemble(params: Any, states: jnp.ndarray) -> jnp.ndarray:
+            return jax.vmap(lambda p: v_apply({"params": p}, states))(params)
 
         @jax.jit
-        def diagnostic_step(state: DelayedIQLState, batch: TensorBatch):
+        def diagnostic_step(state: DDIQLState, batch: TensorBatch):
             observations = batch["observations"]
             actions = batch["actions"]
             rewards = jnp.squeeze(batch["rewards"], axis=-1)
             next_observations = batch["next_observations"]
             dones = jnp.squeeze(batch["dones"], axis=-1)
 
-            q1, q2 = q_apply({"params": state.q_target_params}, observations, actions)
-            q_min = jnp.minimum(q1, q2)
-            q_max = jnp.maximum(q1, q2)
-            q_mean = 0.5 * (q1 + q2)
-            v = v_apply({"params": state.v_params}, observations)
-            next_v = v_apply({"params": state.v_params}, next_observations)
-            receiver_adv_1d = q_min - v
+            q_current = apply_q_ensemble(state.q_target_params, observations, actions)  # [N, B]
+            q_delayed = apply_q_ensemble(state.q_delayed_params, observations, actions)  # [N, B]
+            v_current = apply_v_ensemble(state.v_params, observations)  # [N, B]
+            v_delayed = apply_v_ensemble(state.v_delayed_params, observations)  # [N, B]
+            next_v = apply_v_ensemble(state.v_params, next_observations)  # [N, B]
 
-            if use_delayed:
-                delayed_q1, delayed_q2 = q_apply(
-                    {"params": state.q_delayed_params}, observations, actions
-                )
-                delayed_q_min = jnp.minimum(delayed_q1, delayed_q2)
-                delayed_q_max = jnp.maximum(delayed_q1, delayed_q2)
-                delayed_v = v_apply({"params": state.v_delayed_params}, observations)
-                source_adv_1d = delayed_q_min - delayed_v
-            else:
-                delayed_q1, delayed_q2 = q1, q2
-                delayed_q_min, delayed_q_max = q_min, q_max
-                delayed_v = v
-                source_adv_1d = receiver_adv_1d
+            filter_indices = state.filter_indices
+            delayed_adv_all = q_delayed - v_delayed
+            source_adv = delayed_adv_all[filter_indices, :]
+            weight = jnp.abs(iql_tau - (source_adv < 0.0).astype(jnp.float32))
 
-            weight_1d = jnp.abs(
-                iql_tau - (source_adv_1d < 0.0).astype(jnp.float32)
-            )
-            weight = weight_1d[None, :]
-            source_adv = source_adv_1d[None, :]
-            receiver_adv = receiver_adv_1d[None, :]
-
-            # Intended filtering signal: delayed source advantage should still
-            # determine the expectile weight, while receiver correlation shows
-            # how closely that stale decision tracks the current advantage.
+            # --------------------------------------------------------------
+            # 1) Selection-signal control: the filter should remain coupled to
+            #    the source advantage because that is the intended IQL signal.
+            # --------------------------------------------------------------
+            receiver_adv = q_current - v_current
             source_signal_cov = batch_covariance(weight, source_adv)
             source_signal_corr = batch_correlation(weight, source_adv)
             receiver_signal_corr = batch_correlation(weight, receiver_adv)
 
-            # Twin-Q disagreement proxy. Delayed-IQL uses the same estimator
-            # identity for source and receiver, so the common source/receiver
-            # estimator-coupling indicator remains one. A separate delayed LOO
-            # correlation below measures temporal persistence of disagreement.
-            loo_error = (q_min - q_max)[None, :]
-            delayed_loo_error = (delayed_q_min - delayed_q_max)[None, :]
-            loo_cov = batch_covariance(weight, loo_error)
-            loo_corr = batch_correlation(weight, loo_error)
-            loo_weighted = weighted_error_contribution(weight, loo_error)
-            delayed_loo_cov = batch_covariance(weight, delayed_loo_error)
-            delayed_loo_corr = batch_correlation(weight, delayed_loo_error)
-            current_delayed_loo_corr = batch_correlation(loo_error, delayed_loo_error)[0]
+            # --------------------------------------------------------------
+            # 2) Ensemble disagreement proxy for estimator-specific error.
+            #    These are diagnostics only; they are not oracle errors.
+            # --------------------------------------------------------------
+            q_mean = jnp.mean(q_current, axis=0, keepdims=True)
+            centered_error = q_current - q_mean
+            source_centered_error = centered_error[filter_indices, :]
 
-            q_stack = jnp.stack([q1, q2], axis=0)
-            twin_disagreement_std = jnp.mean(jnp.std(q_stack, axis=0))
-            twin_abs_gap = jnp.mean(jnp.abs(q1 - q2))
-            q1_q2_corr = batch_correlation(q1[None, :], q2[None, :])[0]
-            structural_self_coupling = jnp.asarray(1.0, dtype=jnp.float32)
-
-            # Temporal drift from the stale snapshot. At a delayed refresh this
-            # difference is near zero; within the interval it measures how far
-            # the current target critic has moved away from the filter source.
-            if use_delayed:
-                temporal_error = (q_min - delayed_q_min)[None, :]
-                temporal_cov = batch_covariance(weight, temporal_error)
-                temporal_corr = batch_correlation(weight, temporal_error)
-                temporal_weighted = weighted_error_contribution(weight, temporal_error)
-                temporal_mean = jnp.mean(temporal_error)
-                temporal_std = jnp.std(temporal_error)
-                temporal_available = jnp.asarray(1.0, dtype=jnp.float32)
-                delay_age = jnp.mod(
-                    state.total_it,
-                    jnp.asarray(delayed_update_period, dtype=jnp.int32),
-                ).astype(jnp.float32)
-                delay_fraction = delay_age / float(delayed_update_period)
+            if ensemble_size > 1:
+                q_sum = jnp.sum(q_current, axis=0, keepdims=True)
+                loo_reference = (q_sum - q_current) / float(ensemble_size - 1)
+                loo_error = q_current - loo_reference
             else:
-                nan_vec = jnp.full((1,), jnp.nan, dtype=jnp.float32)
-                temporal_cov = nan_vec
-                temporal_corr = nan_vec
-                temporal_weighted = nan_vec
-                temporal_mean = jnp.asarray(jnp.nan, dtype=jnp.float32)
-                temporal_std = jnp.asarray(jnp.nan, dtype=jnp.float32)
-                temporal_available = jnp.asarray(0.0, dtype=jnp.float32)
-                delay_age = jnp.asarray(0.0, dtype=jnp.float32)
-                delay_fraction = jnp.asarray(0.0, dtype=jnp.float32)
+                loo_error = jnp.zeros_like(q_current)
+            source_loo_error = loo_error[filter_indices, :]
 
-            # Held-out Bellman residual on the fixed diagnostic batch.
-            bellman_target = rewards + (1.0 - dones) * discount * next_v
-            q_min_td = (q_min - bellman_target)[None, :]
-            q1_td = (q1 - bellman_target)[None, :]
-            q2_td = (q2 - bellman_target)[None, :]
-            td_cov = batch_covariance(weight, q_min_td)
-            td_corr = batch_correlation(weight, q_min_td)
-            td_weighted = weighted_error_contribution(weight, q_min_td)
-            twin_td_error_corr = batch_correlation(q1_td, q2_td)[0]
+            receiver_loo_cov = batch_covariance(weight, loo_error)
+            receiver_loo_corr = batch_correlation(weight, loo_error)
+            source_loo_cov = batch_covariance(weight, source_loo_error)
+            source_loo_corr = batch_correlation(weight, source_loo_error)
+            receiver_loo_weighted = weighted_error_contribution(weight, loo_error)
+            source_loo_weighted = weighted_error_contribution(weight, source_loo_error)
 
-            # Realized dataset-return residual. G_MC is not Q*.
+            # Directly diagnose whether source and receiver estimator errors are
+            # actually independent/correlated in the neural ensemble.
+            source_receiver_error_corr = batch_correlation(
+                centered_error, source_centered_error
+            )
+
+            # --------------------------------------------------------------
+            # 3) Temporal coupling proxy: current target critic minus its own
+            #    delayed snapshot.  This is particularly useful for testing D.
+            # --------------------------------------------------------------
+            temporal_error = q_current - q_delayed
+            source_temporal_error = temporal_error[filter_indices, :]
+            receiver_temporal_cov = batch_covariance(weight, temporal_error)
+            receiver_temporal_corr = batch_correlation(weight, temporal_error)
+            source_temporal_cov = batch_covariance(weight, source_temporal_error)
+            source_temporal_corr = batch_correlation(weight, source_temporal_error)
+            receiver_temporal_weighted = weighted_error_contribution(weight, temporal_error)
+
+            # --------------------------------------------------------------
+            # 4) Held-out Bellman residual on the fixed diagnostic batch.
+            # --------------------------------------------------------------
+            bellman_target = rewards[None, :] + (1.0 - dones[None, :]) * discount * next_v
+            td_residual = q_current - bellman_target
+            receiver_td_cov = batch_covariance(weight, td_residual)
+            receiver_td_corr = batch_correlation(weight, td_residual)
+            receiver_td_weighted = weighted_error_contribution(weight, td_residual)
+
+            # --------------------------------------------------------------
+            # 5) Optional realized trajectory-return residual.  This uses the
+            #    continuation in the offline dataset and is not an oracle Q*.
+            # --------------------------------------------------------------
             if "mc_returns" in batch:
                 mc_return = jnp.squeeze(batch["mc_returns"], axis=-1)
-                q_min_mc = (q_min - mc_return)[None, :]
-                delayed_q_min_mc = (delayed_q_min - mc_return)[None, :]
-                q1_mc = (q1 - mc_return)[None, :]
-                q2_mc = (q2 - mc_return)[None, :]
-
-                mc_cov = batch_covariance(weight, q_min_mc)
-                mc_corr = batch_correlation(weight, q_min_mc)
-                mc_weighted = weighted_error_contribution(weight, q_min_mc)
-                delayed_mc_cov = batch_covariance(weight, delayed_q_min_mc)
-                delayed_mc_corr = batch_correlation(weight, delayed_q_min_mc)
-                filter_q1_mc_corr = batch_correlation(weight, q1_mc)[0]
-                filter_q2_mc_corr = batch_correlation(weight, q2_mc)[0]
-                twin_mc_error_corr = batch_correlation(q1_mc, q2_mc)[0]
-
-                q_mc_mean = jnp.mean(q_min_mc)
-                q_mc_rmse = jnp.sqrt(jnp.mean(q_min_mc ** 2))
-                v_mc = v - mc_return
-                v_mc_mean = jnp.mean(v_mc)
-                v_mc_rmse = jnp.sqrt(jnp.mean(v_mc ** 2))
+                mc_error = q_current - mc_return[None, :]
+                source_mc_error = mc_error[filter_indices, :]
+                receiver_mc_cov = batch_covariance(weight, mc_error)
+                receiver_mc_corr = batch_correlation(weight, mc_error)
+                source_mc_cov = batch_covariance(weight, source_mc_error)
+                source_mc_corr = batch_correlation(weight, source_mc_error)
+                receiver_mc_weighted = weighted_error_contribution(weight, mc_error)
+                mc_error_mean = jnp.mean(mc_error)
+                mc_error_rmse = jnp.sqrt(jnp.mean(mc_error ** 2))
+                v_mc_gap = v_current - mc_return[None, :]
+                v_mc_gap_mean = jnp.mean(v_mc_gap)
+                v_mc_gap_rmse = jnp.sqrt(jnp.mean(v_mc_gap ** 2))
             else:
-                nan_vec = jnp.full((1,), jnp.nan, dtype=jnp.float32)
-                mc_cov = nan_vec
-                mc_corr = nan_vec
-                mc_weighted = nan_vec
-                delayed_mc_cov = nan_vec
-                delayed_mc_corr = nan_vec
-                filter_q1_mc_corr = jnp.asarray(jnp.nan, dtype=jnp.float32)
-                filter_q2_mc_corr = jnp.asarray(jnp.nan, dtype=jnp.float32)
-                twin_mc_error_corr = jnp.asarray(jnp.nan, dtype=jnp.float32)
-                q_mc_mean = jnp.asarray(jnp.nan, dtype=jnp.float32)
-                q_mc_rmse = jnp.asarray(jnp.nan, dtype=jnp.float32)
-                v_mc_mean = jnp.asarray(jnp.nan, dtype=jnp.float32)
-                v_mc_rmse = jnp.asarray(jnp.nan, dtype=jnp.float32)
+                nan_vec = jnp.full((ensemble_size,), jnp.nan, dtype=jnp.float32)
+                receiver_mc_cov = nan_vec
+                receiver_mc_corr = nan_vec
+                source_mc_cov = nan_vec
+                source_mc_corr = nan_vec
+                receiver_mc_weighted = nan_vec
+                mc_error_mean = jnp.asarray(jnp.nan, dtype=jnp.float32)
+                mc_error_rmse = jnp.asarray(jnp.nan, dtype=jnp.float32)
+                v_mc_gap_mean = jnp.asarray(jnp.nan, dtype=jnp.float32)
+                v_mc_gap_rmse = jnp.asarray(jnp.nan, dtype=jnp.float32)
+
+            delay_age = jnp.mod(
+                state.total_it,
+                jnp.asarray(delayed_update_period, dtype=jnp.int32),
+            ).astype(jnp.float32)
+            delay_fraction = delay_age / float(delayed_update_period)
 
             metrics = {
                 # Intended signal preservation.
-                "diag/filter_source_adv_cov": source_signal_cov[0],
-                "diag/filter_source_adv_corr": source_signal_corr[0],
-                "diag/filter_receiver_adv_corr": receiver_signal_corr[0],
+                "diag/filter_source_adv_cov": jnp.mean(source_signal_cov),
+                "diag/filter_source_adv_corr": jnp.mean(source_signal_corr),
+                "diag/filter_receiver_adv_corr": jnp.mean(receiver_signal_corr),
 
-                # Estimator-level diagnostics. D-IQL is not decoupled.
-                "diag/filter_receiver_loo_cov": loo_cov[0],
-                "diag/filter_receiver_loo_cov_abs": jnp.abs(loo_cov[0]),
-                "diag/filter_receiver_loo_corr": loo_corr[0],
-                "diag/filter_receiver_loo_corr_abs": jnp.abs(loo_corr[0]),
-                "diag/filter_source_loo_cov": delayed_loo_cov[0],
-                "diag/filter_source_loo_corr": delayed_loo_corr[0],
-                "diag/filter_receiver_loo_weighted_error": loo_weighted[0],
-                "diag/filter_source_loo_weighted_error": weighted_error_contribution(
-                    weight, delayed_loo_error
-                )[0],
-                "diag/source_receiver_error_corr": (
-                    current_delayed_loo_corr if use_delayed else structural_self_coupling
-                ),
-                "diag/source_receiver_error_corr_abs": jnp.abs(
-                    current_delayed_loo_corr if use_delayed else structural_self_coupling
-                ),
-                "diag/source_receiver_same_estimator": structural_self_coupling,
-                "diag/ensemble_q_disagreement_std": twin_disagreement_std,
+                # Decoupling / ensemble disagreement diagnostics.
+                "diag/filter_receiver_loo_cov": jnp.mean(receiver_loo_cov),
+                "diag/filter_receiver_loo_cov_abs": jnp.mean(jnp.abs(receiver_loo_cov)),
+                "diag/filter_receiver_loo_corr": jnp.mean(receiver_loo_corr),
+                "diag/filter_receiver_loo_corr_abs": jnp.mean(jnp.abs(receiver_loo_corr)),
+                "diag/filter_source_loo_cov": jnp.mean(source_loo_cov),
+                "diag/filter_source_loo_corr": jnp.mean(source_loo_corr),
+                "diag/filter_receiver_loo_weighted_error": jnp.mean(receiver_loo_weighted),
+                "diag/filter_source_loo_weighted_error": jnp.mean(source_loo_weighted),
+                "diag/source_receiver_error_corr": jnp.mean(source_receiver_error_corr),
+                "diag/source_receiver_error_corr_abs": jnp.mean(jnp.abs(source_receiver_error_corr)),
+                "diag/ensemble_q_disagreement_std": jnp.std(q_current, axis=0).mean(),
 
                 # Delayed-filtering / temporal diagnostics.
-                "diag/filter_receiver_temporal_cov": temporal_cov[0],
-                "diag/filter_receiver_temporal_cov_abs": jnp.abs(temporal_cov[0]),
-                "diag/filter_receiver_temporal_corr": temporal_corr[0],
-                "diag/filter_source_temporal_cov": temporal_cov[0],
-                "diag/filter_source_temporal_corr": temporal_corr[0],
-                "diag/filter_receiver_temporal_weighted_error": temporal_weighted[0],
-                "diag/temporal_error_mean": temporal_mean,
-                "diag/temporal_error_std": temporal_std,
-                "diag/temporal_reference_available": temporal_available,
+                "diag/filter_receiver_temporal_cov": jnp.mean(receiver_temporal_cov),
+                "diag/filter_receiver_temporal_cov_abs": jnp.mean(jnp.abs(receiver_temporal_cov)),
+                "diag/filter_receiver_temporal_corr": jnp.mean(receiver_temporal_corr),
+                "diag/filter_source_temporal_cov": jnp.mean(source_temporal_cov),
+                "diag/filter_source_temporal_corr": jnp.mean(source_temporal_corr),
+                "diag/filter_receiver_temporal_weighted_error": jnp.mean(receiver_temporal_weighted),
+                "diag/temporal_error_mean": jnp.mean(temporal_error),
+                "diag/temporal_error_std": jnp.std(temporal_error),
                 "diag/delay_age": delay_age,
                 "diag/delay_fraction": delay_fraction,
-                "diag/filter_delayed_loo_cov": delayed_loo_cov[0],
-                "diag/filter_delayed_loo_corr": delayed_loo_corr[0],
-                "diag/current_delayed_loo_corr": current_delayed_loo_corr,
 
-                # Bellman residual diagnostics.
-                "diag/filter_receiver_td_cov": td_cov[0],
-                "diag/filter_receiver_td_corr": td_corr[0],
-                "diag/filter_receiver_td_weighted_error": td_weighted[0],
-                "diag/td_residual_mean": jnp.mean(q_min_td),
-                "diag/td_residual_rmse": jnp.sqrt(jnp.mean(q_min_td ** 2)),
+                # Bellman-residual diagnostics.
+                "diag/filter_receiver_td_cov": jnp.mean(receiver_td_cov),
+                "diag/filter_receiver_td_corr": jnp.mean(receiver_td_corr),
+                "diag/filter_receiver_td_weighted_error": jnp.mean(receiver_td_weighted),
+                "diag/td_residual_mean": jnp.mean(td_residual),
+                "diag/td_residual_rmse": jnp.sqrt(jnp.mean(td_residual ** 2)),
 
                 # Monte-Carlo return diagnostics.
-                "diag/filter_receiver_mc_cov": mc_cov[0],
-                "diag/filter_receiver_mc_cov_abs": jnp.abs(mc_cov[0]),
-                "diag/filter_receiver_mc_corr": mc_corr[0],
-                "diag/filter_receiver_mc_corr_abs": jnp.abs(mc_corr[0]),
-                "diag/filter_source_mc_cov": delayed_mc_cov[0],
-                "diag/filter_source_mc_corr": delayed_mc_corr[0],
-                "diag/filter_receiver_mc_weighted_error": mc_weighted[0],
-                "diag/filter_delayed_mc_cov": delayed_mc_cov[0],
-                "diag/filter_delayed_mc_corr": delayed_mc_corr[0],
-                "diag/q_minus_mc_mean": q_mc_mean,
-                "diag/q_minus_mc_rmse": q_mc_rmse,
-                "diag/v_minus_mc_mean": v_mc_mean,
-                "diag/v_minus_mc_rmse": v_mc_rmse,
-
-                # Twin-Q controls.
-                "diag/twin_q_abs_gap": twin_abs_gap,
-                "diag/twin_q_corr": q1_q2_corr,
-                "diag/twin_td_error_corr": twin_td_error_corr,
-                "diag/twin_mc_error_corr": twin_mc_error_corr,
-                "diag/filter_q1_mc_corr": filter_q1_mc_corr,
-                "diag/filter_q2_mc_corr": filter_q2_mc_corr,
-                "diag/q_min_minus_q_mean": jnp.mean(q_min - q_mean),
+                "diag/filter_receiver_mc_cov": jnp.mean(receiver_mc_cov),
+                "diag/filter_receiver_mc_cov_abs": jnp.mean(jnp.abs(receiver_mc_cov)),
+                "diag/filter_receiver_mc_corr": jnp.mean(receiver_mc_corr),
+                "diag/filter_receiver_mc_corr_abs": jnp.mean(jnp.abs(receiver_mc_corr)),
+                "diag/filter_source_mc_cov": jnp.mean(source_mc_cov),
+                "diag/filter_source_mc_corr": jnp.mean(source_mc_corr),
+                "diag/filter_receiver_mc_weighted_error": jnp.mean(receiver_mc_weighted),
+                "diag/q_minus_mc_mean": mc_error_mean,
+                "diag/q_minus_mc_rmse": mc_error_rmse,
+                "diag/v_minus_mc_mean": v_mc_gap_mean,
+                "diag/v_minus_mc_rmse": v_mc_gap_rmse,
 
                 # Context / scales.
-                "diag/q_mean": jnp.mean(q_min),
-                "diag/q1_mean": jnp.mean(q1),
-                "diag/q2_mean": jnp.mean(q2),
-                "diag/v_mean": jnp.mean(v),
-                "diag/delayed_q_mean": jnp.mean(delayed_q_min),
-                "diag/delayed_v_mean": jnp.mean(delayed_v),
+                "diag/q_mean": jnp.mean(q_current),
+                "diag/v_mean": jnp.mean(v_current),
+                "diag/delayed_q_mean": jnp.mean(q_delayed),
+                "diag/delayed_v_mean": jnp.mean(v_delayed),
                 "diag/filter_weight_mean": jnp.mean(weight),
-                "diag/is_self_filter": jnp.asarray(1.0, dtype=jnp.float32),
-                "diag/delayed_enabled": jnp.asarray(use_delayed, dtype=jnp.float32),
+                "diag/is_self_filter": jnp.all(filter_indices == ensemble_indices).astype(jnp.float32),
             }
             return metrics
 
         return diagnostic_step
 
     def _build_delayed_diagnostic_step(self):
-        """Build lightweight diagnostics that specifically track delayed-snapshot drift.
+        """Build lightweight diagnostics for within-delay temporal drift.
 
-        These metrics are sampled more frequently than the common bias diagnostics so
-        temporal evolution within one delayed-update interval remains visible without
-        paying the cost of the full diagnostic suite at every sub-delay sample.
+        These are evaluated more frequently than the common bias diagnostics so
+        DD-IQL's current-vs-delayed critic drift and filter schedule remain visible
+        inside each delayed-update interval without paying for TD/MC/LOO metrics.
         """
         q_apply = self.q_def.apply
         v_apply = self.v_def.apply
+        ensemble_size = self.ensemble_size
         iql_tau = self.iql_tau
         delayed_update_period = self.delayed_update_period
-        use_delayed = self.use_delayed
+        ensemble_indices = jnp.arange(ensemble_size, dtype=jnp.int32)
+
+        def apply_q_ensemble(params: Any, states: jnp.ndarray, actions: jnp.ndarray) -> jnp.ndarray:
+            return jax.vmap(lambda p: q_apply({"params": p}, states, actions))(params)
+
+        def apply_v_ensemble(params: Any, states: jnp.ndarray) -> jnp.ndarray:
+            return jax.vmap(lambda p: v_apply({"params": p}, states))(params)
 
         @jax.jit
-        def delayed_diagnostic_step(state: DelayedIQLState, batch: TensorBatch):
+        def delayed_diagnostic_step(state: DDIQLState, batch: TensorBatch):
             observations = batch["observations"]
             actions = batch["actions"]
 
-            q1, q2 = q_apply({"params": state.q_target_params}, observations, actions)
-            q_min = jnp.minimum(q1, q2)
-            q_max = jnp.maximum(q1, q2)
+            q_current = apply_q_ensemble(state.q_target_params, observations, actions)
+            q_delayed = apply_q_ensemble(state.q_delayed_params, observations, actions)
+            v_delayed = apply_v_ensemble(state.v_delayed_params, observations)
 
-            if use_delayed:
-                delayed_q1, delayed_q2 = q_apply(
-                    {"params": state.q_delayed_params}, observations, actions
-                )
-                delayed_q_min = jnp.minimum(delayed_q1, delayed_q2)
-                delayed_q_max = jnp.maximum(delayed_q1, delayed_q2)
-                delayed_v = v_apply({"params": state.v_delayed_params}, observations)
+            filter_indices = state.filter_indices
+            source_adv = (q_delayed - v_delayed)[filter_indices, :]
+            weight = jnp.abs(iql_tau - (source_adv < 0.0).astype(jnp.float32))
 
-                source_adv = (delayed_q_min - delayed_v)[None, :]
-                weight = jnp.abs(
-                    iql_tau - (source_adv < 0.0).astype(jnp.float32)
-                )
+            temporal_error = q_current - q_delayed
+            source_temporal_error = temporal_error[filter_indices, :]
+            receiver_temporal_cov = batch_covariance(weight, temporal_error)
+            receiver_temporal_corr = batch_correlation(weight, temporal_error)
+            source_temporal_cov = batch_covariance(weight, source_temporal_error)
+            source_temporal_corr = batch_correlation(weight, source_temporal_error)
+            receiver_temporal_weighted = weighted_error_contribution(weight, temporal_error)
 
-                temporal_error = (q_min - delayed_q_min)[None, :]
-                temporal_cov = batch_covariance(weight, temporal_error)
-                temporal_corr = batch_correlation(weight, temporal_error)
-                temporal_weighted = weighted_error_contribution(weight, temporal_error)
-
-                delayed_loo_error = (delayed_q_min - delayed_q_max)[None, :]
-                delayed_loo_cov = batch_covariance(weight, delayed_loo_error)
-                delayed_loo_corr = batch_correlation(weight, delayed_loo_error)
-                current_loo_error = (q_min - q_max)[None, :]
-                current_delayed_loo_corr = batch_correlation(
-                    current_loo_error, delayed_loo_error
-                )[0]
-
-                delay_age = jnp.mod(
-                    state.total_it,
-                    jnp.asarray(delayed_update_period, dtype=jnp.int32),
-                ).astype(jnp.float32)
-                delay_fraction = delay_age / float(delayed_update_period)
-                temporal_available = jnp.asarray(1.0, dtype=jnp.float32)
-            else:
-                nan_vec = jnp.full((1,), jnp.nan, dtype=jnp.float32)
-                delayed_q_min = q_min
-                delayed_v = v_apply({"params": state.v_params}, observations)
-                temporal_error = nan_vec
-                temporal_cov = nan_vec
-                temporal_corr = nan_vec
-                temporal_weighted = nan_vec
-                delayed_loo_cov = nan_vec
-                delayed_loo_corr = nan_vec
-                current_delayed_loo_corr = jnp.asarray(jnp.nan, dtype=jnp.float32)
-                delay_age = jnp.asarray(0.0, dtype=jnp.float32)
-                delay_fraction = jnp.asarray(0.0, dtype=jnp.float32)
-                temporal_available = jnp.asarray(0.0, dtype=jnp.float32)
+            delay_age = jnp.mod(
+                state.total_it,
+                jnp.asarray(delayed_update_period, dtype=jnp.int32),
+            ).astype(jnp.float32)
+            delay_fraction = delay_age / float(delayed_update_period)
 
             return {
-                "diag/filter_receiver_temporal_cov": temporal_cov[0],
-                "diag/filter_receiver_temporal_cov_abs": jnp.abs(temporal_cov[0]),
-                "diag/filter_receiver_temporal_corr": temporal_corr[0],
-                "diag/filter_source_temporal_cov": temporal_cov[0],
-                "diag/filter_source_temporal_corr": temporal_corr[0],
-                "diag/filter_receiver_temporal_weighted_error": temporal_weighted[0],
+                "diag/filter_receiver_temporal_cov": jnp.mean(receiver_temporal_cov),
+                "diag/filter_receiver_temporal_cov_abs": jnp.mean(jnp.abs(receiver_temporal_cov)),
+                "diag/filter_receiver_temporal_corr": jnp.mean(receiver_temporal_corr),
+                "diag/filter_source_temporal_cov": jnp.mean(source_temporal_cov),
+                "diag/filter_source_temporal_corr": jnp.mean(source_temporal_corr),
+                "diag/filter_receiver_temporal_weighted_error": jnp.mean(receiver_temporal_weighted),
                 "diag/temporal_error_mean": jnp.mean(temporal_error),
                 "diag/temporal_error_std": jnp.std(temporal_error),
-                "diag/temporal_reference_available": temporal_available,
                 "diag/delay_age": delay_age,
                 "diag/delay_fraction": delay_fraction,
-                "diag/filter_delayed_loo_cov": delayed_loo_cov[0],
-                "diag/filter_delayed_loo_corr": delayed_loo_corr[0],
-                "diag/current_delayed_loo_corr": current_delayed_loo_corr,
-                "diag/delayed_q_mean": jnp.mean(delayed_q_min),
-                "diag/delayed_v_mean": jnp.mean(delayed_v),
-                "diag/delayed_enabled": jnp.asarray(use_delayed, dtype=jnp.float32),
+                "diag/delayed_q_mean": jnp.mean(q_delayed),
+                "diag/delayed_v_mean": jnp.mean(v_delayed),
+                "diag/filter_weight_mean": jnp.mean(weight),
+                "diag/is_self_filter": jnp.all(filter_indices == ensemble_indices).astype(jnp.float32),
             }
 
         return delayed_diagnostic_step
@@ -1608,17 +1750,16 @@ class DelayedIQLJAX:
         n_episodes: int,
         seed: int,
     ) -> Tuple[np.ndarray, np.ndarray, Dict[str, float]]:
-        """Compare clipped Q_min/V predictions with realized rollout returns.
+        """Evaluate the actor and compare Q/V predictions with realized returns.
 
-        These are empirical return-residual diagnostics, not oracle bias. They are
-        most interpretable when training and evaluation rewards have the same scale.
+        This diagnostic is most interpretable when the reward scale used by the
+        training dataset matches the evaluation environment reward scale.  The
+        resulting gaps are empirical return-residual diagnostics, not oracle bias.
         """
         episode_rewards = []
         episode_successes = []
         q_gaps: List[float] = []
         v_gaps: List[float] = []
-        q1_gaps: List[float] = []
-        q2_gaps: List[float] = []
         q_sq_errors: List[float] = []
         v_sq_errors: List[float] = []
 
@@ -1635,6 +1776,7 @@ class DelayedIQLJAX:
                 action = self.actor_act(actor_params, state)
                 traj_states.append(np.asarray(state, dtype=np.float32).copy())
                 traj_actions.append(np.asarray(action, dtype=np.float32).copy())
+
                 next_state, reward, done, info = step_env(env, action)
                 traj_rewards.append(float(reward))
                 episode_reward += reward
@@ -1656,25 +1798,19 @@ class DelayedIQLJAX:
                 actions_jnp = tree_to_device(
                     jnp.asarray(np.asarray(traj_actions), dtype=jnp.float32), self.device
                 )
-                q1, q2 = self.q_def.apply(
-                    {"params": self.state.q_target_params}, states_jnp, actions_jnp
-                )
-                q_min = jnp.minimum(q1, q2)
-                v = self.v_def.apply({"params": self.state.v_params}, states_jnp)
+                q_all = jax.vmap(
+                    lambda p: self.q_def.apply({"params": p}, states_jnp, actions_jnp)
+                )(self.state.q_target_params)
+                v_all = jax.vmap(
+                    lambda p: self.v_def.apply({"params": p}, states_jnp)
+                )(self.state.v_params)
+                q_arr = np.asarray(jax.device_get(jnp.mean(q_all, axis=0)), dtype=np.float64)
+                v_arr = np.asarray(jax.device_get(jnp.mean(v_all, axis=0)), dtype=np.float64)
 
-                q_min_arr = np.asarray(jax.device_get(q_min), dtype=np.float64)
-                q1_arr = np.asarray(jax.device_get(q1), dtype=np.float64)
-                q2_arr = np.asarray(jax.device_get(q2), dtype=np.float64)
-                v_arr = np.asarray(jax.device_get(v), dtype=np.float64)
-
-                q_diff = q_min_arr - realized_returns
+                q_diff = q_arr - realized_returns
                 v_diff = v_arr - realized_returns
-                q1_diff = q1_arr - realized_returns
-                q2_diff = q2_arr - realized_returns
                 q_gaps.extend(q_diff.tolist())
                 v_gaps.extend(v_diff.tolist())
-                q1_gaps.extend(q1_diff.tolist())
-                q2_gaps.extend(q2_diff.tolist())
                 q_sq_errors.extend((q_diff ** 2).tolist())
                 v_sq_errors.extend((v_diff ** 2).tolist())
 
@@ -1690,10 +1826,6 @@ class DelayedIQLJAX:
             "eval/v_return_gap_median": float(np.median(v_gaps)) if v_gaps else np.nan,
             "eval/v_return_gap_rmse": float(np.sqrt(np.mean(v_sq_errors))) if v_sq_errors else np.nan,
             "eval/v_over_return_fraction": float(np.mean(np.asarray(v_gaps) > 0.0)) if v_gaps else np.nan,
-            "eval/q1_return_gap_mean": float(np.mean(q1_gaps)) if q1_gaps else np.nan,
-            "eval/q2_return_gap_mean": float(np.mean(q2_gaps)) if q2_gaps else np.nan,
-            "eval/q1_over_return_fraction": float(np.mean(np.asarray(q1_gaps) > 0.0)) if q1_gaps else np.nan,
-            "eval/q2_over_return_fraction": float(np.mean(np.asarray(q2_gaps) > 0.0)) if q2_gaps else np.nan,
         }
         return (
             np.asarray(episode_rewards, dtype=np.float32),
@@ -1710,6 +1842,12 @@ class DelayedIQLJAX:
         use_dropout = self.actor_dropout is not None
         actor_apply_fn = self.actor_def.apply
 
+        def apply_q_ensemble(params: Any, states: jnp.ndarray, actions: jnp.ndarray) -> jnp.ndarray:
+            return jax.vmap(lambda p: q_apply({"params": p}, states, actions))(params)
+
+        def apply_v_ensemble(params: Any, states: jnp.ndarray) -> jnp.ndarray:
+            return jax.vmap(lambda p: v_apply({"params": p}, states))(params)
+
         def apply_actor(actor_params: Any, observations: jnp.ndarray, training: bool, rng: Optional[jnp.ndarray] = None):
             if use_dropout and training:
                 return actor_apply_fn(
@@ -1721,13 +1859,15 @@ class DelayedIQLJAX:
             return actor_apply_fn({"params": actor_params}, observations, training=training)
 
         @jax.jit
-        def actor_refit_step(actor_state: ActorState, iql_state: DelayedIQLState, batch: TensorBatch):
+        def actor_refit_step(actor_state: ActorState, iql_state: DDIQLState, batch: TensorBatch):
             observations = batch["observations"]
             actions = batch["actions"]
 
-            q1, q2 = q_apply({"params": iql_state.q_target_params}, observations, actions)
-            target_q = jnp.minimum(q1, q2)
-            v = v_apply({"params": iql_state.v_params}, observations)
+            # Actor refit uses frozen trained ensemble-mean Q_target and V.
+            q_all = apply_q_ensemble(iql_state.q_target_params, observations, actions)
+            v_all = apply_v_ensemble(iql_state.v_params, observations)
+            target_q = jnp.mean(q_all, axis=0)
+            v = jnp.mean(v_all, axis=0)
             adv = target_q - v
             exp_adv = jnp.minimum(jnp.exp(beta * jax.lax.stop_gradient(adv)), EXP_ADV_MAX)
 
@@ -1804,6 +1944,7 @@ class DelayedIQLJAX:
         save_dir: Optional[Union[str, Path]] = None,
         log_wandb: bool = False,
         log_extra: Optional[Dict[str, Any]] = None,
+        log_interval: int = 500,
     ) -> Tuple[ActorState, Dict[str, Any]]:
         refit_log: Dict[str, Any] = {
             f"{prefix}/final_loss": np.nan,
@@ -1830,6 +1971,7 @@ class DelayedIQLJAX:
             f"{prefix}/inner_success_rate": [],
             f"{prefix}/inner_success_std": [],
         }
+
         if steps <= 0:
             return actor_state, refit_log
 
@@ -1837,7 +1979,23 @@ class DelayedIQLJAX:
         save_dir_path = Path(save_dir) if save_dir is not None else None
         if save_dir_path is not None:
             save_dir_path.mkdir(parents=True, exist_ok=True)
+
         log_extra = {} if log_extra is None else dict(log_extra)
+        log_interval = int(log_interval)
+        if log_interval <= 0:
+            log_interval = 1
+
+        def _wandb_log_scalar_dict(payload: Dict[str, Any], step: int) -> None:
+            if not (log_wandb and wandb.run is not None):
+                return
+
+            scalar_payload = {}
+            for key, value in payload.items():
+                if is_scalar_value(value):
+                    scalar_payload[key] = to_python_scalar(value)
+
+            if scalar_payload:
+                wandb.log(scalar_payload, step=int(step))
 
         def save_refit_snapshot(
             current_actor_state: ActorState,
@@ -1853,9 +2011,12 @@ class DelayedIQLJAX:
                 "refit_step": int(fit_step),
                 **current_refit_log,
             }
+
             logs_path = save_dir_path / "fit_eval_logs.npz"
             latest_actor_path = save_dir_path / "latest_actor.pkl"
+
             actor_payload = serialization.to_state_dict(current_actor_state.params)
+
             save_pickle(latest_actor_path, actor_payload)
             save_logs_npz([logs_payload], str(logs_path))
 
@@ -1871,12 +2032,39 @@ class DelayedIQLJAX:
         for fit_step in range(1, steps + 1):
             batch = replay_buffer.sample(batch_size)
             actor_state, step_log = self._actor_refit_step(actor_state, self.state, batch)
-            step_log = {key: float(jax.device_get(value)) for key, value in step_log.items()}
+            step_log = {
+                key: float(jax.device_get(value))
+                for key, value in step_log.items()
+            }
 
             refit_log[f"{prefix}/final_loss"] = step_log["loss"]
             refit_log[f"{prefix}/final_bc_loss"] = step_log["bc_loss"]
             refit_log[f"{prefix}/final_adv_mean"] = step_log["adv_mean"]
             refit_log[f"{prefix}/final_exp_adv_mean"] = step_log["exp_adv_mean"]
+
+            should_log_step = (
+                log_wandb
+                and wandb.run is not None
+                and (fit_step % log_interval == 0 or fit_step == 1 or fit_step == steps)
+            )
+            if should_log_step:
+                _wandb_log_scalar_dict(
+                    {
+                        f"{prefix}/step": fit_step,
+                        f"{prefix}/loss": step_log["loss"],
+                        f"{prefix}/bc_loss": step_log["bc_loss"],
+                        f"{prefix}/adv_mean": step_log["adv_mean"],
+                        f"{prefix}/adv_min": step_log["adv_min"],
+                        f"{prefix}/adv_max": step_log["adv_max"],
+                        f"{prefix}/exp_adv_mean": step_log["exp_adv_mean"],
+                        f"{prefix}/exp_adv_max": step_log["exp_adv_max"],
+                        f"{prefix}/target_q_mean": step_log["target_q_mean"],
+                        f"{prefix}/v_mean": step_log["v_mean"],
+                        f"{prefix}/policy_mean": step_log["policy_mean"],
+                        f"{prefix}/policy_log_std_mean": step_log["policy_log_std_mean"],
+                    },
+                    step=fit_step,
+                )
 
             should_eval = (
                 eval_env is not None
@@ -1884,6 +2072,7 @@ class DelayedIQLJAX:
                 and eval_interval > 0
                 and (fit_step % eval_interval == 0 or fit_step == steps)
             )
+
             if should_eval:
                 eval_scores, eval_successes = self.eval_actor(
                     eval_env,
@@ -1895,33 +2084,82 @@ class DelayedIQLJAX:
 
                 eval_score_mean = float(np.mean(eval_scores))
                 eval_score_std = float(np.std(eval_scores))
-                normalized_eval_score_mean, normalized_eval_score_std = mean_std_or_nan(normalized_eval_scores)
+                normalized_eval_score_mean, normalized_eval_score_std = mean_std_or_nan(
+                    normalized_eval_scores
+                )
                 success_rate, success_std = mean_std_or_nan(eval_successes)
 
                 refit_log[f"{prefix}/inner_eval_steps"].append(int(fit_step))
                 refit_log[f"{prefix}/inner_score_mean"].append(eval_score_mean)
                 refit_log[f"{prefix}/inner_score_std"].append(eval_score_std)
-                refit_log[f"{prefix}/inner_d4rl_normalized_score_mean"].append(normalized_eval_score_mean)
-                refit_log[f"{prefix}/inner_d4rl_normalized_score_std"].append(normalized_eval_score_std)
+                refit_log[f"{prefix}/inner_d4rl_normalized_score_mean"].append(
+                    normalized_eval_score_mean
+                )
+                refit_log[f"{prefix}/inner_d4rl_normalized_score_std"].append(
+                    normalized_eval_score_std
+                )
                 refit_log[f"{prefix}/inner_success_rate"].append(success_rate)
                 refit_log[f"{prefix}/inner_success_std"].append(success_std)
+
                 refit_log[f"{prefix}/final_score_mean"] = eval_score_mean
                 refit_log[f"{prefix}/final_score_std"] = eval_score_std
-                refit_log[f"{prefix}/final_d4rl_normalized_score_mean"] = normalized_eval_score_mean
-                refit_log[f"{prefix}/final_d4rl_normalized_score_std"] = normalized_eval_score_std
+                refit_log[f"{prefix}/final_d4rl_normalized_score_mean"] = (
+                    normalized_eval_score_mean
+                )
+                refit_log[f"{prefix}/final_d4rl_normalized_score_std"] = (
+                    normalized_eval_score_std
+                )
                 refit_log[f"{prefix}/final_success_rate"] = success_rate
                 refit_log[f"{prefix}/final_success_std"] = success_std
 
-                eval_metric_mean = success_rate if np.isfinite(success_rate) else normalized_eval_score_mean
-                is_best = np.isfinite(eval_metric_mean) and eval_metric_mean > best_eval_metric_mean
+                eval_metric_mean = (
+                    success_rate
+                    if np.isfinite(success_rate)
+                    else normalized_eval_score_mean
+                )
+                is_best = (
+                    np.isfinite(eval_metric_mean)
+                    and eval_metric_mean > best_eval_metric_mean
+                )
+
                 if is_best:
                     best_eval_metric_mean = eval_metric_mean
                     refit_log[f"{prefix}/best_score_mean"] = eval_score_mean
                     refit_log[f"{prefix}/best_score_std"] = eval_score_std
-                    refit_log[f"{prefix}/best_d4rl_normalized_score_mean"] = normalized_eval_score_mean
-                    refit_log[f"{prefix}/best_d4rl_normalized_score_std"] = normalized_eval_score_std
+                    refit_log[f"{prefix}/best_d4rl_normalized_score_mean"] = (
+                        normalized_eval_score_mean
+                    )
+                    refit_log[f"{prefix}/best_d4rl_normalized_score_std"] = (
+                        normalized_eval_score_std
+                    )
                     refit_log[f"{prefix}/best_success_rate"] = success_rate
                     refit_log[f"{prefix}/best_success_std"] = success_std
+
+                _wandb_log_scalar_dict(
+                    {
+                        f"{prefix}/eval_score_mean": eval_score_mean,
+                        f"{prefix}/eval_score_std": eval_score_std,
+                        f"{prefix}/eval_d4rl_normalized_score_mean": normalized_eval_score_mean,
+                        f"{prefix}/eval_d4rl_normalized_score_std": normalized_eval_score_std,
+                        f"{prefix}/eval_success_rate": success_rate,
+                        f"{prefix}/eval_success_std": success_std,
+                        f"{prefix}/best_score_mean": refit_log[f"{prefix}/best_score_mean"],
+                        f"{prefix}/best_score_std": refit_log[f"{prefix}/best_score_std"],
+                        f"{prefix}/best_d4rl_normalized_score_mean": refit_log[
+                            f"{prefix}/best_d4rl_normalized_score_mean"
+                        ],
+                        f"{prefix}/best_d4rl_normalized_score_std": refit_log[
+                            f"{prefix}/best_d4rl_normalized_score_std"
+                        ],
+                        f"{prefix}/best_success_rate": refit_log[
+                            f"{prefix}/best_success_rate"
+                        ],
+                        f"{prefix}/best_success_std": refit_log[
+                            f"{prefix}/best_success_std"
+                        ],
+                    },
+                    step=fit_step,
+                )
 
                 save_refit_snapshot(
                     current_actor_state=actor_state,
@@ -1931,45 +2169,41 @@ class DelayedIQLJAX:
                 )
 
                 print(
-                    f"[{prefix}:iql_awbc] step {fit_step}/{steps}: "
-                    f"loss={step_log['loss']:.4f}, bc={step_log['bc_loss']:.4f}, "
-                    f"adv={step_log['adv_mean']:.4f}, exp_adv={step_log['exp_adv_mean']:.4f}, "
-                    f"eval_mean={eval_score_mean:.3f}, eval_std={eval_score_std:.3f}, "
+                    f"[{prefix}:decoupled_delayed_iql_awbc] step {fit_step}/{steps}: "
+                    f"loss={step_log['loss']:.4f}, "
+                    f"bc={step_log['bc_loss']:.4f}, "
+                    f"adv={step_log['adv_mean']:.4f}, "
+                    f"exp_adv={step_log['exp_adv_mean']:.4f}, "
+                    f"eval_mean={eval_score_mean:.3f}, "
+                    f"eval_std={eval_score_std:.3f}, "
                     f"d4rl_normalized_mean={normalized_eval_score_mean:.3f}, "
                     f"d4rl_normalized_std={normalized_eval_score_std:.3f}, "
-                    f"success_rate={success_rate:.3f}"
+                    f"success_rate={success_rate:.3f}, "
+                    f"is_best={is_best}"
                 )
 
         return actor_state, refit_log
 
     def state_dict(self) -> Dict[str, Any]:
         return {
-            "iql_state": serialization.to_state_dict(self.state),
+            "decoupled_delayed_iql_state": serialization.to_state_dict(self.state),
             "initial_actor_params": serialization.to_state_dict(self.initial_actor_params),
             "initial_actor_opt_state": serialization.to_state_dict(self.initial_actor_opt_state),
             "initial_actor_key": serialization.to_state_dict(self.initial_actor_key),
             "iql_deterministic": self.iql_deterministic,
+            "ensemble_size": self.ensemble_size,
             "delayed_update_period": self.delayed_update_period,
+            "delayed_expectile_index_mode": self.delayed_expectile_index_mode,
+            "delayed_expectile_self_period": self.delayed_expectile_self_period,
+            "delayed_expectile_self_count": self.delayed_expectile_self_count,
+            "delayed_expectile_self_index": self.delayed_expectile_self_index,
         }
 
     def load_state_dict(self, state_dict: Dict[str, Any]):
-        iql_state = dict(copy.deepcopy(state_dict["iql_state"]))
-
-        # Backward/transfer compatibility:
-        # - Original IQL checkpoints have no delayed fields.
-        # - A period=1 checkpoint may contain None delayed fields.
-        # - A delayed checkpoint can also be loaded with period=1; delayed fields
-        #   are then discarded because they are not used.
-        if self.use_delayed:
-            if iql_state.get("q_delayed_params") is None:
-                iql_state["q_delayed_params"] = copy.deepcopy(iql_state["q_target_params"])
-            if iql_state.get("v_delayed_params") is None:
-                iql_state["v_delayed_params"] = copy.deepcopy(iql_state["v_params"])
-        else:
-            iql_state["q_delayed_params"] = None
-            iql_state["v_delayed_params"] = None
-
-        self.state = serialization.from_state_dict(self.state, iql_state)
+        self.state = serialization.from_state_dict(
+            self.state,
+            state_dict["decoupled_delayed_iql_state"],
+        )
         if "initial_actor_params" in state_dict:
             self.initial_actor_params = serialization.from_state_dict(
                 self.initial_actor_params,
@@ -1985,6 +2219,21 @@ class DelayedIQLJAX:
                 self.initial_actor_key,
                 state_dict["initial_actor_key"],
             )
+        # Reconstruct filter_indices deterministically from total_it and the
+        # current schedule. This supports old checkpoints and periodic resumes
+        # without adding an extra phase counter to DDIQLState.
+        delayed_round = self.state.total_it // jnp.asarray(
+            self.delayed_update_period, dtype=jnp.int32
+        )
+        self.state = self.state.replace(
+            filter_indices=scheduled_filter_indices(
+                ensemble_size=self.ensemble_size,
+                delayed_round=delayed_round,
+                mode=self.delayed_expectile_index_mode,
+                self_period=self.delayed_expectile_self_period,
+                self_count=self.delayed_expectile_self_count,
+            )
+        )
         self.state = tree_to_device(self.state, self.device)
         self.initial_actor_params = tree_to_device(self.initial_actor_params, self.device)
         self.initial_actor_opt_state = tree_to_device(self.initial_actor_opt_state, self.device)
@@ -2006,7 +2255,7 @@ def resolve_checkpoint_path(
     run_name: Optional[str] = None,
     seed: Optional[int] = None,
 ) -> Tuple[Path, Path]:
-    """Return (run_dir, checkpoint_path) for a saved DelayedIQL-JAX checkpoint.
+    """Return (run_dir, checkpoint_path) for a saved DDIQL-JAX checkpoint.
 
     Supported load_model formats:
 
@@ -2105,6 +2354,7 @@ def load_run_config_for_refit(
         saved_raw = yaml.safe_load(f) or {}
 
     config_fields = set(TrainConfig.__dataclass_fields__.keys())
+
     saved_kwargs = {
         key: _coerce_hparam_value(value)
         for key, value in saved_raw.items()
@@ -2137,6 +2387,7 @@ def load_run_config_for_refit(
     validate_config(loaded_config)
 
     print(f"Loaded saved run config for refit from: {saved_config_path}")
+
     if applied_cli_overrides:
         print(
             "Applied explicit CLI overrides on top of saved config: "
@@ -2184,7 +2435,7 @@ def _train_impl(config: TrainConfig):
             current_config=current_config_dict,
             default_config=asdict(TrainConfig()),
             max_timesteps=int(config.max_timesteps),
-            checkpoint_type="delayed_iql_jax_training_progress",
+            checkpoint_type="decoupled_delayed_iql_jax_training_progress",
             identity_ignored_fields=DEFAULT_IDENTITY_IGNORED_FIELDS,
             checkpoint_version=2,
             accepted_checkpoint_versions=(1, 2),
@@ -2216,7 +2467,7 @@ def _train_impl(config: TrainConfig):
         print("Skipping D4RL reward normalization for non-D4RL dataset.")
 
     # Compute trajectory-return diagnostics before observation normalization so
-    # boundary inference can compare raw next/current observations.
+    # episode-boundary inference can compare raw next/current observations.
     if config.enable_bias_diagnostics and config.diagnostic_compute_mc_returns:
         add_mc_return_diagnostics(dataset, discount=config.discount)
 
@@ -2246,8 +2497,7 @@ def _train_impl(config: TrainConfig):
         print(
             "Bias diagnostics enabled: fixed batch size="
             f"{config.diagnostic_batch_size}, common_freq={config.diagnostic_freq}, "
-            f"delayed_freq={config.delayed_diagnostic_freq}, "
-            f"delay_period={config.delayed_update_period}."
+            f"delayed_freq={config.delayed_diagnostic_freq}."
         )
 
     max_action = float(env.action_space.high[0])
@@ -2259,13 +2509,22 @@ def _train_impl(config: TrainConfig):
     print("---------------------------------------")
     run_mode_name = "Actor refit" if refit_only else "Training"
     print(f"{run_mode_name} {ALGORITHM_NAME}-JAX, Env: {config.env}, Seed: {seed}")
+    effective_index_mode = resolve_delayed_expectile_index_mode(
+        config.delayed_expectile_index_mode,
+        delayed_expectile_self_index=config.delayed_expectile_self_index,
+    )
     print(
-        f"delayed_update_period={config.delayed_update_period} "
-        f"(enabled={config.delayed_update_period > 1})"
+        f"ensemble_size={config.ensemble_size}, "
+        f"delayed_update_period={config.delayed_update_period}, "
+        f"delayed_expectile_index_mode={config.delayed_expectile_index_mode} "
+        f"(effective={effective_index_mode}), "
+        f"delayed_expectile_self_period={config.delayed_expectile_self_period}, "
+        f"delayed_expectile_self_count={config.delayed_expectile_self_count}, "
+        f"legacy_delayed_expectile_self_index={config.delayed_expectile_self_index}"
     )
     print("---------------------------------------")
 
-    trainer = DelayedIQLJAX(
+    trainer = DDIQLJAX(
         max_action=max_action,
         state_dim=state_dim,
         action_dim=action_dim,
@@ -2277,7 +2536,12 @@ def _train_impl(config: TrainConfig):
         tau=config.tau,
         beta=config.beta,
         iql_tau=config.iql_tau,
+        ensemble_size=config.ensemble_size,
         delayed_update_period=config.delayed_update_period,
+        delayed_expectile_index_mode=config.delayed_expectile_index_mode,
+        delayed_expectile_self_period=config.delayed_expectile_self_period,
+        delayed_expectile_self_count=config.delayed_expectile_self_count,
+        delayed_expectile_self_index=config.delayed_expectile_self_index,
         iql_deterministic=config.iql_deterministic,
         actor_dropout=config.actor_dropout,
         hidden_dim=config.hidden_dim,
@@ -2293,6 +2557,7 @@ def _train_impl(config: TrainConfig):
                 run_name=config.name,
                 seed=config.seed,
             )
+
         print(f"Loading checkpoint from: {checkpoint_path}")
         checkpoint = load_pickle(checkpoint_path)
         trainer.load_state_dict(checkpoint)
@@ -2400,6 +2665,7 @@ def _train_impl(config: TrainConfig):
             save_dir=actor_refit_dir,
             log_wandb=config.log_wandb,
             log_extra={"loaded_checkpoint": loaded_checkpoint_for_log},
+            log_interval=config.log_every,
         )
 
         save_pickle(
@@ -2449,8 +2715,8 @@ def _train_impl(config: TrainConfig):
             )
 
             # Run the full diagnostic suite only at the coarse common frequency.
-            # On steps where both schedules coincide, reuse the full result for the
-            # delayed log instead of running the lightweight delayed pass again.
+            # If both schedules coincide, reuse the full result for the delayed log
+            # instead of running the lightweight delayed pass a second time.
             if common_diagnostic_due:
                 diag_metrics = trainer.compute_bias_diagnostics(diagnostic_batch)
                 diag_log: Dict[str, Any] = {"timestep": int(t + 1), **diag_metrics}
@@ -2458,9 +2724,9 @@ def _train_impl(config: TrainConfig):
                 print(
                     "Bias diagnostics: "
                     f"step={t + 1}, "
-                    f"receiver_td_corr={diag_metrics['diag/filter_receiver_td_corr']:.4f}, "
+                    f"receiver_mc_corr={diag_metrics['diag/filter_receiver_mc_corr']:.4f}, "
                     f"receiver_loo_corr={diag_metrics['diag/filter_receiver_loo_corr']:.4f}, "
-                    f"receiver_mc_corr={diag_metrics['diag/filter_receiver_mc_corr']:.4f}"
+                    f"source_receiver_error_corr={diag_metrics['diag/source_receiver_error_corr']:.4f}"
                 )
                 if config.log_wandb:
                     _wandb_log(diag_metrics, int(jax.device_get(trainer.state.total_it)))
@@ -2493,7 +2759,8 @@ def _train_impl(config: TrainConfig):
                     f"step={t + 1}, "
                     f"delay_age={delayed_metrics['diag/delay_age']:.0f}, "
                     f"temporal_corr="
-                    f"{delayed_metrics['diag/filter_receiver_temporal_corr']:.4f}"
+                    f"{delayed_metrics['diag/filter_receiver_temporal_corr']:.4f}, "
+                    f"self_filter={delayed_metrics['diag/is_self_filter']:.0f}"
                 )
                 if config.log_wandb:
                     _wandb_log(
@@ -2505,15 +2772,11 @@ def _train_impl(config: TrainConfig):
                     )
                     if config.log_wandb and wandb.run is not None:
                         wandb.save(str(delayed_diagnostic_logs_path), policy="now")
-
+    
             if (t + 1) % config.eval_freq == 0:
                 print(f"Time steps: {t + 1}")
                 eval_return_diag: Dict[str, float] = {}
-                if (
-                    config.enable_bias_diagnostics
-                    and config.diagnostic_eval_return_gap
-                    and not config.normalize_reward
-                ):
+                if config.enable_bias_diagnostics and config.diagnostic_eval_return_gap and not config.normalize_reward:
                     eval_scores, eval_successes, eval_return_diag = trainer.eval_actor_with_return_diagnostics(
                         env,
                         trainer.state.actor_params,
@@ -2521,11 +2784,7 @@ def _train_impl(config: TrainConfig):
                         seed=config.seed,
                     )
                 else:
-                    if (
-                        config.enable_bias_diagnostics
-                        and config.diagnostic_eval_return_gap
-                        and config.normalize_reward
-                    ):
+                    if config.enable_bias_diagnostics and config.diagnostic_eval_return_gap and config.normalize_reward:
                         print(
                             "Skipping eval return-gap diagnostics because normalize_reward=True; "
                             "critic/value predictions and raw environment returns are on different scales."
@@ -2644,6 +2903,13 @@ def train(config: TrainConfig):
         if getattr(wandb, "run", None) is not None:
             wandb.finish(exit_code=exit_code)
 
-            
+
 if __name__ == "__main__":
     train()
+
+
+
+
+
+
+
