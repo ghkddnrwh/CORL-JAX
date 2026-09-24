@@ -104,6 +104,26 @@ EXP_ADV_MAX = 100.0
 LOG_STD_MIN = -20.0
 LOG_STD_MAX = 2.0
 
+DELAYED_DIAGNOSTIC_KEYS = (
+    "diag/filter_receiver_temporal_cov",
+    "diag/filter_receiver_temporal_cov_abs",
+    "diag/filter_receiver_temporal_corr",
+    "diag/filter_source_temporal_cov",
+    "diag/filter_source_temporal_corr",
+    "diag/filter_receiver_temporal_weighted_error",
+    "diag/temporal_error_mean",
+    "diag/temporal_error_std",
+    "diag/temporal_reference_available",
+    "diag/delay_age",
+    "diag/delay_fraction",
+    "diag/filter_delayed_loo_cov",
+    "diag/filter_delayed_loo_corr",
+    "diag/current_delayed_loo_corr",
+    "diag/delayed_q_mean",
+    "diag/delayed_v_mean",
+    "diag/delayed_enabled",
+)
+
 
 @dataclass
 class TrainConfig:
@@ -174,12 +194,12 @@ class TrainConfig:
     log_every: int = 500
     save_final_model: bool = False
 
-    # Bias diagnostics. These diagnostics never enter the optimization losses;
-    # they are evaluated on a fixed dataset batch so Delayed-IQL can be
-    # compared directly with IQL and DD-IQL. A sub-delay diagnostic frequency
-    # (e.g. 250 for D=1000) exposes within-interval temporal drift.
+    # Bias diagnostics. Common diagnostics are relatively expensive and run at
+    # a coarse frequency. Delayed-only temporal diagnostics use a frequency
+    # derived from delayed_update_period so we sample roughly four points per
+    # delay interval (e.g. D=1000 -> 250, D=100 -> 25).
     enable_bias_diagnostics: bool = True
-    diagnostic_freq: int = 250
+    diagnostic_freq: int = 2_500
     diagnostic_batch_size: int = 8_192
     diagnostic_seed_offset: int = 10_000
     diagnostic_compute_mc_returns: bool = True
@@ -192,6 +212,16 @@ class TrainConfig:
     def __post_init__(self):
         refresh_algorithm_names(self)
         validate_config(self)
+
+    @property
+    def delayed_diagnostic_freq(self) -> int:
+        """Diagnostic cadence for within-delay temporal drift.
+
+        Keep approximately four delayed-only diagnostic samples per snapshot
+        interval. This is derived on access so YAML/CLI changes to
+        delayed_update_period are reflected automatically.
+        """
+        return max(1, int(self.delayed_update_period) // 4)
 
 
 def refresh_algorithm_names(config: TrainConfig) -> None:
@@ -997,6 +1027,7 @@ class DelayedIQLJAX:
         self.initial_actor_key = tree_to_device(self.initial_actor_key, self.device)
         self._train_step = self._build_train_step()
         self._diagnostic_step = self._build_diagnostic_step()
+        self._delayed_diagnostic_step = self._build_delayed_diagnostic_step()
         self._actor_refit_step = self._build_actor_refit_step()
 
     def _apply_actor(self, actor_params: Any, observations: jnp.ndarray, training: bool, rng: Optional[jnp.ndarray] = None):
@@ -1433,8 +1464,103 @@ class DelayedIQLJAX:
 
         return diagnostic_step
 
+    def _build_delayed_diagnostic_step(self):
+        """Build lightweight diagnostics that specifically track delayed-snapshot drift.
+
+        These metrics are sampled more frequently than the common bias diagnostics so
+        temporal evolution within one delayed-update interval remains visible without
+        paying the cost of the full diagnostic suite at every sub-delay sample.
+        """
+        q_apply = self.q_def.apply
+        v_apply = self.v_def.apply
+        iql_tau = self.iql_tau
+        delayed_update_period = self.delayed_update_period
+        use_delayed = self.use_delayed
+
+        @jax.jit
+        def delayed_diagnostic_step(state: DelayedIQLState, batch: TensorBatch):
+            observations = batch["observations"]
+            actions = batch["actions"]
+
+            q1, q2 = q_apply({"params": state.q_target_params}, observations, actions)
+            q_min = jnp.minimum(q1, q2)
+            q_max = jnp.maximum(q1, q2)
+
+            if use_delayed:
+                delayed_q1, delayed_q2 = q_apply(
+                    {"params": state.q_delayed_params}, observations, actions
+                )
+                delayed_q_min = jnp.minimum(delayed_q1, delayed_q2)
+                delayed_q_max = jnp.maximum(delayed_q1, delayed_q2)
+                delayed_v = v_apply({"params": state.v_delayed_params}, observations)
+
+                source_adv = (delayed_q_min - delayed_v)[None, :]
+                weight = jnp.abs(
+                    iql_tau - (source_adv < 0.0).astype(jnp.float32)
+                )
+
+                temporal_error = (q_min - delayed_q_min)[None, :]
+                temporal_cov = batch_covariance(weight, temporal_error)
+                temporal_corr = batch_correlation(weight, temporal_error)
+                temporal_weighted = weighted_error_contribution(weight, temporal_error)
+
+                delayed_loo_error = (delayed_q_min - delayed_q_max)[None, :]
+                delayed_loo_cov = batch_covariance(weight, delayed_loo_error)
+                delayed_loo_corr = batch_correlation(weight, delayed_loo_error)
+                current_loo_error = (q_min - q_max)[None, :]
+                current_delayed_loo_corr = batch_correlation(
+                    current_loo_error, delayed_loo_error
+                )[0]
+
+                delay_age = jnp.mod(
+                    state.total_it,
+                    jnp.asarray(delayed_update_period, dtype=jnp.int32),
+                ).astype(jnp.float32)
+                delay_fraction = delay_age / float(delayed_update_period)
+                temporal_available = jnp.asarray(1.0, dtype=jnp.float32)
+            else:
+                nan_vec = jnp.full((1,), jnp.nan, dtype=jnp.float32)
+                delayed_q_min = q_min
+                delayed_v = v_apply({"params": state.v_params}, observations)
+                temporal_error = nan_vec
+                temporal_cov = nan_vec
+                temporal_corr = nan_vec
+                temporal_weighted = nan_vec
+                delayed_loo_cov = nan_vec
+                delayed_loo_corr = nan_vec
+                current_delayed_loo_corr = jnp.asarray(jnp.nan, dtype=jnp.float32)
+                delay_age = jnp.asarray(0.0, dtype=jnp.float32)
+                delay_fraction = jnp.asarray(0.0, dtype=jnp.float32)
+                temporal_available = jnp.asarray(0.0, dtype=jnp.float32)
+
+            return {
+                "diag/filter_receiver_temporal_cov": temporal_cov[0],
+                "diag/filter_receiver_temporal_cov_abs": jnp.abs(temporal_cov[0]),
+                "diag/filter_receiver_temporal_corr": temporal_corr[0],
+                "diag/filter_source_temporal_cov": temporal_cov[0],
+                "diag/filter_source_temporal_corr": temporal_corr[0],
+                "diag/filter_receiver_temporal_weighted_error": temporal_weighted[0],
+                "diag/temporal_error_mean": jnp.mean(temporal_error),
+                "diag/temporal_error_std": jnp.std(temporal_error),
+                "diag/temporal_reference_available": temporal_available,
+                "diag/delay_age": delay_age,
+                "diag/delay_fraction": delay_fraction,
+                "diag/filter_delayed_loo_cov": delayed_loo_cov[0],
+                "diag/filter_delayed_loo_corr": delayed_loo_corr[0],
+                "diag/current_delayed_loo_corr": current_delayed_loo_corr,
+                "diag/delayed_q_mean": jnp.mean(delayed_q_min),
+                "diag/delayed_v_mean": jnp.mean(delayed_v),
+                "diag/delayed_enabled": jnp.asarray(use_delayed, dtype=jnp.float32),
+            }
+
+        return delayed_diagnostic_step
+
     def compute_bias_diagnostics(self, batch: TensorBatch) -> Dict[str, float]:
         metrics = self._diagnostic_step(self.state, batch)
+        return {key: float(jax.device_get(value)) for key, value in metrics.items()}
+
+    def compute_delayed_diagnostics(self, batch: TensorBatch) -> Dict[str, float]:
+        metrics = self._delayed_diagnostic_step(self.state, batch)
         return {key: float(jax.device_get(value)) for key, value in metrics.items()}
 
     def train(self, batch: TensorBatch) -> Dict[str, float]:
@@ -2119,7 +2245,8 @@ def _train_impl(config: TrainConfig):
         )
         print(
             "Bias diagnostics enabled: fixed batch size="
-            f"{config.diagnostic_batch_size}, freq={config.diagnostic_freq}, "
+            f"{config.diagnostic_batch_size}, common_freq={config.diagnostic_freq}, "
+            f"delayed_freq={config.delayed_diagnostic_freq}, "
             f"delay_period={config.delayed_update_period}."
         )
 
@@ -2186,9 +2313,16 @@ def _train_impl(config: TrainConfig):
     eval_logs: List[Dict[str, Any]] = []
     diagnostic_logs: List[Dict[str, Any]] = []
     diagnostic_logs_path: Optional[Path] = None
+    delayed_diagnostic_logs: List[Dict[str, Any]] = []
+    delayed_diagnostic_logs_path: Optional[Path] = None
     if config.checkpoints_path is not None and config.diagnostic_save_npz:
         diagnostic_logs_path = Path(config.checkpoints_path) / "bias_diagnostics.npz"
         diagnostic_logs = load_logs_npz(diagnostic_logs_path)
+        if config.delayed_update_period > 1:
+            delayed_diagnostic_logs_path = (
+                Path(config.checkpoints_path) / "delayed_diagnostics.npz"
+            )
+            delayed_diagnostic_logs = load_logs_npz(delayed_diagnostic_logs_path)
 
     if checkpoint_manager is not None:
         if checkpoint_preparation.is_resuming:
@@ -2302,19 +2436,28 @@ def _train_impl(config: TrainConfig):
             if config.log_wandb and (t + 1) % config.log_every == 0:
                 _wandb_log(log_dict, int(jax.device_get(trainer.state.total_it)))
 
-            if (
+            common_diagnostic_due = (
                 config.enable_bias_diagnostics
                 and diagnostic_batch is not None
                 and (t + 1) % config.diagnostic_freq == 0
-            ):
+            )
+            delayed_diagnostic_due = (
+                config.enable_bias_diagnostics
+                and diagnostic_batch is not None
+                and config.delayed_update_period > 1
+                and (t + 1) % config.delayed_diagnostic_freq == 0
+            )
+
+            # Run the full diagnostic suite only at the coarse common frequency.
+            # On steps where both schedules coincide, reuse the full result for the
+            # delayed log instead of running the lightweight delayed pass again.
+            if common_diagnostic_due:
                 diag_metrics = trainer.compute_bias_diagnostics(diagnostic_batch)
                 diag_log: Dict[str, Any] = {"timestep": int(t + 1), **diag_metrics}
                 upsert_eval_log(diagnostic_logs, diag_log)
                 print(
                     "Bias diagnostics: "
                     f"step={t + 1}, "
-                    f"delay_age={diag_metrics['diag/delay_age']:.0f}, "
-                    f"temporal_corr={diag_metrics['diag/filter_receiver_temporal_corr']:.4f}, "
                     f"receiver_td_corr={diag_metrics['diag/filter_receiver_td_corr']:.4f}, "
                     f"receiver_loo_corr={diag_metrics['diag/filter_receiver_loo_corr']:.4f}, "
                     f"receiver_mc_corr={diag_metrics['diag/filter_receiver_mc_corr']:.4f}"
@@ -2325,6 +2468,43 @@ def _train_impl(config: TrainConfig):
                     save_logs_npz(diagnostic_logs, str(diagnostic_logs_path))
                     if config.log_wandb and wandb.run is not None:
                         wandb.save(str(diagnostic_logs_path), policy="now")
+
+                if delayed_diagnostic_due:
+                    delayed_metrics = {
+                        key: diag_metrics[key] for key in DELAYED_DIAGNOSTIC_KEYS
+                    }
+                    delayed_log: Dict[str, Any] = {
+                        "timestep": int(t + 1), **delayed_metrics
+                    }
+                    upsert_eval_log(delayed_diagnostic_logs, delayed_log)
+                    if delayed_diagnostic_logs_path is not None:
+                        save_logs_npz(
+                            delayed_diagnostic_logs, str(delayed_diagnostic_logs_path)
+                        )
+                        if config.log_wandb and wandb.run is not None:
+                            wandb.save(str(delayed_diagnostic_logs_path), policy="now")
+
+            elif delayed_diagnostic_due:
+                delayed_metrics = trainer.compute_delayed_diagnostics(diagnostic_batch)
+                delayed_log = {"timestep": int(t + 1), **delayed_metrics}
+                upsert_eval_log(delayed_diagnostic_logs, delayed_log)
+                print(
+                    "Delayed diagnostics: "
+                    f"step={t + 1}, "
+                    f"delay_age={delayed_metrics['diag/delay_age']:.0f}, "
+                    f"temporal_corr="
+                    f"{delayed_metrics['diag/filter_receiver_temporal_corr']:.4f}"
+                )
+                if config.log_wandb:
+                    _wandb_log(
+                        delayed_metrics, int(jax.device_get(trainer.state.total_it))
+                    )
+                if delayed_diagnostic_logs_path is not None:
+                    save_logs_npz(
+                        delayed_diagnostic_logs, str(delayed_diagnostic_logs_path)
+                    )
+                    if config.log_wandb and wandb.run is not None:
+                        wandb.save(str(delayed_diagnostic_logs_path), policy="now")
 
             if (t + 1) % config.eval_freq == 0:
                 print(f"Time steps: {t + 1}")
@@ -2432,6 +2612,10 @@ def _train_impl(config: TrainConfig):
         save_logs_npz(diagnostic_logs, str(diagnostic_logs_path))
         if config.log_wandb and wandb.run is not None:
             wandb.save(str(diagnostic_logs_path), policy="now")
+    if delayed_diagnostic_logs_path is not None and delayed_diagnostic_logs:
+        save_logs_npz(delayed_diagnostic_logs, str(delayed_diagnostic_logs_path))
+        if config.log_wandb and wandb.run is not None:
+            wandb.save(str(delayed_diagnostic_logs_path), policy="now")
 
     if checkpoint_manager is not None:
         final_path = checkpoint_manager.complete(
