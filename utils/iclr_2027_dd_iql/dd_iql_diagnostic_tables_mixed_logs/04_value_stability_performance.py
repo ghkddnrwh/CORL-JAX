@@ -1,0 +1,344 @@
+from __future__ import annotations
+
+from orl_diag_common import (
+    common_parser,
+    condition_sort_key,
+    condition_setting_label,
+    discover_runs_from_args,
+    display_env,
+    final_eval_seed_value,
+    float_label,
+    format_pm,
+    group_by_condition,
+    make_latex_row,
+    summarize_seed_values,
+    write_csv,
+    write_latex_rows,
+)
+
+
+def summarize_eval_metric(
+    group,
+    metric,
+    last_evals,
+    eval_step,
+    allow_earlier_eval,
+):
+    values = [
+        final_eval_seed_value(
+            run,
+            metric,
+            last_evals=last_evals,
+            eval_step=eval_step,
+            allow_earlier_eval=allow_earlier_eval,
+        )
+        for run in group
+    ]
+
+    return summarize_seed_values(
+        values
+    )
+
+
+def main():
+    parser = common_parser(
+        "Evaluation rollout value stability "
+        "and policy performance."
+    )
+
+    args = parser.parse_args()
+
+    runs = discover_runs_from_args(args)
+
+    iql_groups = group_by_condition(
+        [
+            r for r in runs
+            if r.algo == "IQL"
+        ]
+    )
+
+    dd_groups = group_by_condition(
+        [
+            r for r in runs
+            if r.algo == "DD-IQL"
+        ]
+    )
+
+    conditions = sorted(
+        set(iql_groups)
+        | set(dd_groups),
+        key=condition_sort_key,
+    )
+
+    out_dir = (
+        args.out_root
+        / "04_value_stability_performance"
+    )
+
+    main_all = []
+    calibration_all = []
+
+    csv_records = []
+
+    for condition in conditions:
+        env, gamma, tau = condition
+
+        iql = iql_groups.get(condition, [])
+        dd = dd_groups.get(condition, [])
+
+        metrics = {}
+
+        for algo, group in (
+            ("iql", iql),
+            ("ddiql", dd),
+        ):
+            for metric_name, metric_key in (
+                (
+                    "success",
+                    "eval/success_rate",
+                ),
+                (
+                    "q_gap",
+                    "eval/q_return_gap_mean",
+                ),
+                (
+                    "q_rmse",
+                    "eval/q_return_gap_rmse",
+                ),
+                (
+                    "q_over_fraction",
+                    "eval/q_over_return_fraction",
+                ),
+                (
+                    "v_gap",
+                    "eval/v_return_gap_mean",
+                ),
+                (
+                    "v_rmse",
+                    "eval/v_return_gap_rmse",
+                ),
+            ):
+                metrics[
+                    f"{algo}_{metric_name}"
+                ] = summarize_eval_metric(
+                    group,
+                    metric_key,
+                    args.last_evals,
+                    args.eval_step,
+                    args.allow_earlier_eval,
+                )
+
+        main_row = make_latex_row(
+            [
+                display_env(env),
+                condition_setting_label(condition),
+                float_label(gamma),
+                float_label(tau),
+                format_pm(
+                    metrics["iql_success"][0],
+                    metrics["iql_success"][1],
+                    digits=3,
+                ),
+                format_pm(
+                    metrics["ddiql_success"][0],
+                    metrics["ddiql_success"][1],
+                    digits=3,
+                ),
+                format_pm(
+                    metrics["iql_q_gap"][0],
+                    metrics["iql_q_gap"][1],
+                    digits=2,
+                ),
+                format_pm(
+                    metrics["ddiql_q_gap"][0],
+                    metrics["ddiql_q_gap"][1],
+                    digits=2,
+                ),
+            ]
+        )
+
+        calibration_row = make_latex_row(
+            [
+                display_env(env),
+                condition_setting_label(condition),
+                float_label(gamma),
+                float_label(tau),
+                format_pm(
+                    metrics["iql_q_rmse"][0],
+                    metrics["iql_q_rmse"][1],
+                    digits=2,
+                ),
+                format_pm(
+                    metrics["ddiql_q_rmse"][0],
+                    metrics["ddiql_q_rmse"][1],
+                    digits=2,
+                ),
+                format_pm(
+                    metrics[
+                        "iql_q_over_fraction"
+                    ][0],
+                    metrics[
+                        "iql_q_over_fraction"
+                    ][1],
+                    digits=3,
+                ),
+                format_pm(
+                    metrics[
+                        "ddiql_q_over_fraction"
+                    ][0],
+                    metrics[
+                        "ddiql_q_over_fraction"
+                    ][1],
+                    digits=3,
+                ),
+            ]
+        )
+
+        main_all.append(main_row)
+        calibration_all.append(
+            calibration_row
+        )
+
+        record = {
+            "environment": env,
+            "setting": condition_setting_label(condition),
+            "discount": gamma,
+            "expectile": tau,
+        }
+
+        for key, (
+            mean,
+            std,
+            n,
+        ) in metrics.items():
+            record[f"{key}_mean"] = mean
+            record[f"{key}_std"] = std
+            record[f"{key}_n"] = n
+
+        csv_records.append(record)
+
+    comments = [
+        (
+            "Row order within each environment: Original/tau=0.9, "
+            "Original/tau=0.99, High-gamma/tau=0.9, High-gamma/tau=0.99."
+        ),
+        (
+            f"Within each seed, the final {args.last_evals} evaluation(s) ending "
+            f"at training step {args.eval_step} are averaged."
+        ),
+        (
+            "Seeds without the requested evaluation step are excluded by default; "
+            "use --allow-earlier-eval only for an explicitly non-final comparison."
+        ),
+        (
+            "Reported uncertainty is std across training seeds."
+        ),
+        (
+            "Q-return gap = predicted Q minus realized "
+            "discounted return along the evaluation rollout."
+        ),
+        (
+            "These are empirical rollout calibration/stability "
+            "diagnostics, not oracle Q* bias."
+        ),
+    ]
+
+    write_latex_rows(
+        out_dir
+        / "latex_success_qgap_all_rows.txt",
+        "Policy success and rollout Q-return gap -- all settings",
+        [
+            "Environment",
+            "Setting",
+            r"$\gamma$",
+            r"$\tau$",
+            "IQL success",
+            "DD-IQL success",
+            "IQL Q-return gap",
+            "DD-IQL Q-return gap",
+        ],
+        main_all,
+        comments,
+    )
+
+    main_columns = [
+        "Environment",
+        "Setting",
+        r"$\gamma$",
+        r"$\tau$",
+        "IQL success",
+        "DD-IQL success",
+        "IQL Q-return gap",
+        "DD-IQL Q-return gap",
+    ]
+
+    write_latex_rows(
+        out_dir / "latex_success_qgap_table_rows.txt",
+        "Policy success and rollout Q-return gap -- four settings per environment",
+        main_columns,
+        main_all,
+        comments,
+    )
+
+    write_latex_rows(
+        out_dir / "latex_success_qgap_primary_rows.txt",
+        "Policy success and rollout Q-return gap -- four settings per environment (legacy filename)",
+        main_columns,
+        main_all,
+        comments,
+    )
+
+    write_latex_rows(
+        out_dir
+        / "latex_qcalibration_all_rows.txt",
+        "Rollout Q calibration -- all settings",
+        [
+            "Environment",
+            "Setting",
+            r"$\gamma$",
+            r"$\tau$",
+            "IQL Q-RMSE",
+            "DD-IQL Q-RMSE",
+            "IQL over-return fraction",
+            "DD-IQL over-return fraction",
+        ],
+        calibration_all,
+        comments,
+    )
+
+    calibration_columns = [
+        "Environment",
+        "Setting",
+        r"$\gamma$",
+        r"$\tau$",
+        "IQL Q-RMSE",
+        "DD-IQL Q-RMSE",
+        "IQL over-return fraction",
+        "DD-IQL over-return fraction",
+    ]
+
+    write_latex_rows(
+        out_dir / "latex_qcalibration_table_rows.txt",
+        "Rollout Q calibration -- four settings per environment",
+        calibration_columns,
+        calibration_all,
+        comments,
+    )
+
+    write_latex_rows(
+        out_dir / "latex_qcalibration_primary_rows.txt",
+        "Rollout Q calibration -- four settings per environment (legacy filename)",
+        calibration_columns,
+        calibration_all,
+        comments,
+    )
+
+    write_csv(
+        out_dir
+        / "value_stability_performance_summary.csv",
+        csv_records,
+    )
+
+
+if __name__ == "__main__":
+    main()

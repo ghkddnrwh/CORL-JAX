@@ -14,17 +14,17 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 # ====== 환경 설정(필요하면 여기만 바꿔도 됨) ======
-SRC_USER = "ukjo703"
-SRC_HOST = "166.104.44.19"
+SRC_USER = "ext_jsy"
+SRC_HOST = "166.104.28.73"
 # SRC_ROOT = "/home/ukjo1/work/fed_rl/moderate-rl/logs/action_robust/sam/exclude_critic/ver2/single"
 
 # DST_ROOT = "/home/ukjo2/work/fed_rl/expectile-rl/logs/action_robust/sam/exclude_critic/ver2/single"
-SRC_ROOT = "/home/ukjo703/work/offline_rl/CORL-JAX/logs/density"
+SRC_ROOT = "/home/ext_jsy/work/offline_rl/CORL-JAX/logs/iclr2027/iql_based/ogbench/diagnostics2"
 
 
-DST_ROOT = "/home/ukjo616/work/offline_rl/CORL-JAX/logs/density2"
+DST_ROOT = "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/iclr2027/iql_based/ogbench/diagnostics_dd_iql"
 
-LEAF_DEPTH = 1
+LEAF_DEPTH = 7
 
 # SSH 옵션
 # - accept-new 같은 옵션 호환성 문제를 피하고,
@@ -41,7 +41,7 @@ SSH_OPTS = [
     "-o", "PasswordAuthentication=no",
     "-o", "StrictHostKeyChecking=no",
     "-o", "UserKnownHostsFile=/dev/null",
-    "-p", "7031",
+    # "-p", "7031",
 ]
 
 # ==============================================
