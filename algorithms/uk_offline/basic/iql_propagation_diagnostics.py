@@ -93,8 +93,8 @@ from algorithms.uk_offline.common.checkpointing import (
 
 TensorBatch = Dict[str, jnp.ndarray]
 
-ALGORITHM_NAME = "IQL-PD"
-ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics"
+ALGORITHM_NAME = "IQL-PD-V3"
+ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics v3"
 
 EXP_ADV_MAX = 100.0
 LOG_STD_MIN = -20.0
@@ -157,8 +157,40 @@ class TrainConfig:
     diag_hidden_dim: int = 128
     diag_head_lr: float = 3e-4
     diag_kappa_floor: float = 1e-3
+
+    # Finite-difference B diagnostics. diag_fd_epsilon is interpreted as a relative
+    # perturbation scale when diag_fd_relative_scale=True:
+    #   delta = diag_fd_epsilon * max(1, RMS(Bellman target)).
+    # Central differences and two additional scales are logged to detect float32
+    # cancellation/nonlinearity rather than silently treating a zero response as small B.
     diag_fd_epsilon: float = 1e-3
+    diag_fd_relative_scale: bool = True
+    diag_fd_small_multiplier: float = 0.25
+    diag_fd_large_multiplier: float = 4.0
     diag_num_basis_directions: int = 4
+
+    # Conditional-head calibration and frozen-Q V-solver correctability diagnostics.
+    # The multi-step V updates are virtual: they are evaluated but never committed.
+    diag_num_calibration_bins: int = 8
+    diag_enable_multistep_v_correctability: bool = True
+    diag_v_correctability_short_steps: int = 5
+    diag_v_correctability_long_steps: int = 20
+
+    # Independent non-parametric conditional references.  These use nearby probe states
+    # rather than the learned diagnostic head, so they are useful for detecting head failure.
+    # They remain approximate references (state-neighborhood smoothing), not exact expectiles.
+    diag_knn_k: int = 16
+
+    # Finite-amplitude source diagnostics: evaluate the real Adam response at 25%, 50%,
+    # and 100% of a safely clipped current source amplitude.
+    diag_actual_source_cap_fraction: float = 0.05
+
+    # Expensive finite-horizon critic-fitting response.  It repeats virtual Adam critic
+    # updates with the same frozen batch/target, never committing them to training.
+    diag_enable_horizon_b: bool = True
+    diag_horizon_every: int = 5000
+    diag_horizon_short_steps: int = 5
+    diag_horizon_long_steps: int = 20
 
     # Expensive local full-fit approximation
     # B ~= J_Z (J_X^T J_X / m + lambda I)^-1 J_X^T / m.
@@ -166,8 +198,8 @@ class TrainConfig:
     diag_enable_ridge_b: bool = True
     diag_ridge_every: int = 5000
     diag_ridge_lambda: float = 1e-2
-    diag_ridge_cg_iters: int = 10
-    diag_ridge_cg_tol: float = 1e-4
+    diag_ridge_cg_iters: int = 100
+    diag_ridge_cg_tol: float = 1e-5
 
     # Standalone actor refit output directory.
     # Refit reuses the shared training schedule fields above:
@@ -223,7 +255,19 @@ def validate_config(config: TrainConfig) -> None:
         assert config.diag_head_lr > 0.0
         assert config.diag_kappa_floor > 0.0
         assert config.diag_fd_epsilon > 0.0
+        assert config.diag_fd_small_multiplier > 0.0
+        assert config.diag_fd_large_multiplier > config.diag_fd_small_multiplier
         assert config.diag_num_basis_directions > 0
+        assert config.diag_num_calibration_bins > 1
+        assert config.diag_probe_batch_size >= config.diag_num_calibration_bins
+        assert config.diag_v_correctability_short_steps >= 1
+        assert config.diag_v_correctability_long_steps >= config.diag_v_correctability_short_steps
+        assert config.diag_knn_k >= 2
+        assert config.diag_knn_k < config.diag_probe_batch_size
+        assert config.diag_actual_source_cap_fraction > 0.0
+        assert config.diag_horizon_every > 0
+        assert config.diag_horizon_short_steps >= 1
+        assert config.diag_horizon_long_steps >= config.diag_horizon_short_steps
         assert config.diag_ridge_every > 0
         assert config.diag_ridge_lambda > 0.0
         assert config.diag_ridge_cg_iters > 0
@@ -557,6 +601,35 @@ def save_logs_npz(logs: List[Dict[str, Any]], path: str) -> None:
     np.savez(path, **data_to_save)
 
 
+def sanitize_diagnostic_jsonl(path: Union[str, Path], max_timestep: int) -> None:
+    """Deduplicate/prune diagnostic records when resuming from an older safe checkpoint.
+
+    Diagnostics are written more frequently than checkpoints.  Without pruning, a resumed
+    run can append the same timesteps again (or retain diagnostics beyond the restored
+    trainer state), which corrupts time-series analyses.  Keep the last valid record for
+    each timestep not exceeding the restored timestep.
+    """
+    path = Path(path)
+    if not path.exists():
+        return
+    records_by_step: Dict[int, Dict[str, Any]] = {}
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+                step = int(record.get("timestep", -1))
+            except Exception:
+                continue
+            if 0 <= step <= int(max_timestep):
+                records_by_step[step] = record
+    with open(path, "w", encoding="utf-8") as f:
+        for step in sorted(records_by_step):
+            f.write(json.dumps(records_by_step[step], allow_nan=True) + "\n")
+
+
 def save_and_upload_eval_logs(
     eval_logs: List[Dict[str, Any]],
     checkpoints_path: Optional[str],
@@ -803,10 +876,21 @@ class IQLJAX:
         diag_head_lr: float = 3e-4,
         diag_kappa_floor: float = 1e-3,
         diag_fd_epsilon: float = 1e-3,
+        diag_fd_relative_scale: bool = True,
+        diag_fd_small_multiplier: float = 0.25,
+        diag_fd_large_multiplier: float = 4.0,
         diag_num_basis_directions: int = 4,
+        diag_num_calibration_bins: int = 8,
+        diag_enable_multistep_v_correctability: bool = True,
+        diag_v_correctability_short_steps: int = 5,
+        diag_v_correctability_long_steps: int = 20,
+        diag_knn_k: int = 16,
+        diag_actual_source_cap_fraction: float = 0.05,
+        diag_horizon_short_steps: int = 5,
+        diag_horizon_long_steps: int = 20,
         diag_ridge_lambda: float = 1e-2,
-        diag_ridge_cg_iters: int = 10,
-        diag_ridge_cg_tol: float = 1e-4,
+        diag_ridge_cg_iters: int = 100,
+        diag_ridge_cg_tol: float = 1e-5,
         seed: int = 0,
         device: Any = None,
     ):
@@ -830,7 +914,18 @@ class IQLJAX:
         self.diag_head_lr = float(diag_head_lr)
         self.diag_kappa_floor = float(diag_kappa_floor)
         self.diag_fd_epsilon = float(diag_fd_epsilon)
+        self.diag_fd_relative_scale = bool(diag_fd_relative_scale)
+        self.diag_fd_small_multiplier = float(diag_fd_small_multiplier)
+        self.diag_fd_large_multiplier = float(diag_fd_large_multiplier)
         self.diag_num_basis_directions = int(diag_num_basis_directions)
+        self.diag_num_calibration_bins = int(diag_num_calibration_bins)
+        self.diag_enable_multistep_v_correctability = bool(diag_enable_multistep_v_correctability)
+        self.diag_v_correctability_short_steps = int(diag_v_correctability_short_steps)
+        self.diag_v_correctability_long_steps = int(diag_v_correctability_long_steps)
+        self.diag_knn_k = int(diag_knn_k)
+        self.diag_actual_source_cap_fraction = float(diag_actual_source_cap_fraction)
+        self.diag_horizon_short_steps = int(diag_horizon_short_steps)
+        self.diag_horizon_long_steps = int(diag_horizon_long_steps)
         self.diag_ridge_lambda = float(diag_ridge_lambda)
         self.diag_ridge_cg_iters = int(diag_ridge_cg_iters)
         self.diag_ridge_cg_tol = float(diag_ridge_cg_tol)
@@ -914,6 +1009,7 @@ class IQLJAX:
         self.initial_actor_key = tree_to_device(self.initial_actor_key, self.device)
         self._train_step = self._build_train_step()
         self._propagation_diagnostic_step = self._build_propagation_diagnostic_step()
+        self._horizon_diagnostic_step = self._build_horizon_diagnostic_step()
         self._ridge_diagnostic_step = self._build_ridge_diagnostic_step()
         self._actor_refit_step = self._build_actor_refit_step()
 
@@ -1142,28 +1238,40 @@ class IQLJAX:
     def _build_propagation_diagnostic_step(self):
         """Build the expensive Stage-1 diagnostic pass.
 
-        The fitted-critic response is always the same abstract object,
-            B_k = D_y F_k(y),
-        but we compare three practical approximations on identical directions:
-          1) paired finite difference through the *actual Adam* Q update,
-          2) exact JVP through the same one-step Adam update,
-          3) one-step SGD/NTK linearization eta * J_Z J_X^T (with exact loss scaling).
+        This pass intentionally does not modify the committed IQL update.  It diagnoses:
+          * source terms h_V and h_Q^lag,
+          * the local target-to-fitted-critic response B_k = D_y F_k(y),
+          * numerical validity of several B estimators,
+          * source-direction-specific gain/alignment rather than only a global/random gain,
+          * target-network lag growth,
+          * calibration and correctability of the expectile-residual estimator.
 
-        h_V is estimated from the state-conditional expectile FOC defect:
-            h_V ~= -gamma * G(s') / kappa(s').
-        h_Q uses an explicitly labelled proxy for epsilon_k based on online-target lag:
-            h_Q^lag ~= gamma * E[w * (Q_online-Q_target)|s'] / kappa(s').
+        The principal local channels are
+            h_V ~= -gamma * G(s') / kappa(s')
+            h_Q^lag ~= gamma * E[w(A) (Q_online-Q_target) | s'] / kappa(s')
+        followed by B_k h.  h_Q^lag remains an observable proxy, not the unobservable
+        theoretical critic perturbation channel.
         """
         q_apply = self.q_def.apply
         v_apply = self.v_def.apply
         diag_apply = self.diag_def.apply
         q_tx = self.q_tx
+        v_tx = self.v_tx
         discount = self.discount
         iql_tau = self.iql_tau
         num_critics = self.num_critics
         qf_lr = self.qf_lr
         fd_epsilon = self.diag_fd_epsilon
+        fd_relative_scale = self.diag_fd_relative_scale
+        fd_small_multiplier = self.diag_fd_small_multiplier
+        fd_large_multiplier = self.diag_fd_large_multiplier
         num_basis = self.diag_num_basis_directions
+        num_calibration_bins = self.diag_num_calibration_bins
+        enable_multistep_v = self.diag_enable_multistep_v_correctability
+        v_short_steps = self.diag_v_correctability_short_steps
+        v_long_steps = self.diag_v_correctability_long_steps
+        knn_k = self.diag_knn_k
+        actual_source_cap_fraction = self.diag_actual_source_cap_fraction
         diag_seed = self.diag_seed
         kappa_floor = self.diag_kappa_floor
 
@@ -1186,7 +1294,7 @@ class IQLJAX:
 
         def tree_l2(tree):
             leaves = jax.tree_util.tree_leaves(tree)
-            return jnp.sqrt(sum(jnp.sum(x ** 2) for x in leaves) + 1e-12)
+            return jnp.sqrt(sum(jnp.sum(jnp.asarray(x, dtype=jnp.float32) ** 2) for x in leaves) + 1e-12)
 
         def cosine(a, b):
             a = jnp.ravel(a)
@@ -1200,10 +1308,74 @@ class IQLJAX:
             bc = b - jnp.mean(b)
             return jnp.sum(ac * bc) / (jnp.linalg.norm(ac) * jnp.linalg.norm(bc) + 1e-12)
 
+        def finite_fraction(x):
+            return jnp.mean(jnp.isfinite(jnp.asarray(x)).astype(jnp.float32))
+
+        def abs_quantile(x, q):
+            return jnp.quantile(jnp.abs(jnp.asarray(x)), q)
+
         def normalized_direction(h):
             source_rms = rms(h)
             h_unit = h / jnp.maximum(source_rms, 1e-8)
             return h_unit, source_rms
+
+        def binned_calibration(pred, target):
+            """Low-variance calibration check for conditional-mean heads.
+
+            Raw sample correlation can be small even for a good E[target|s] estimator because
+            the action-conditioned label is noisy.  Sorting by the prediction and averaging
+            within bins tests whether predicted conditional means agree with empirical group
+            means, which is the more relevant diagnostic here.
+            """
+            order = jnp.argsort(pred)
+            pred_sorted = pred[order]
+            target_sorted = target[order]
+            pred_bins = jnp.stack([jnp.mean(chunk) for chunk in jnp.array_split(pred_sorted, num_calibration_bins)])
+            target_bins = jnp.stack([jnp.mean(chunk) for chunk in jnp.array_split(target_sorted, num_calibration_bins)])
+            mse = jnp.mean((pred_bins - target_bins) ** 2)
+            sign_agreement = jnp.mean((jnp.sign(pred_bins) == jnp.sign(target_bins)).astype(jnp.float32))
+            return corr(pred_bins, target_bins), mse, sign_agreement
+
+        def binned_residual_stats(score, weight, sort_key):
+            order = jnp.argsort(sort_key)
+            score_sorted = score[order]
+            weight_sorted = weight[order]
+            score_bins = jnp.stack([jnp.mean(chunk) for chunk in jnp.array_split(score_sorted, num_calibration_bins)])
+            weight_bins = jnp.stack([jnp.mean(chunk) for chunk in jnp.array_split(weight_sorted, num_calibration_bins)])
+            d_bins = -score_bins / jnp.maximum(weight_bins, kappa_floor)
+            return rms(d_bins), jnp.mean(jnp.abs(d_bins)), jnp.max(jnp.abs(d_bins))
+
+        def knn_conditional(query_states, ref_states, ref_values, exclude_diagonal=False):
+            """Local non-parametric conditional mean and uncertainty proxy.
+
+            This is deliberately independent of ExpectileDiagnosticHead.  State vectors are
+            already dataset-normalized by the training script, so mean squared Euclidean
+            distance is a usable first diagnostic metric.  The returned radius/SE are logged
+            because kNN is only trustworthy when nearby support exists.
+            """
+            diff = query_states[:, None, :] - ref_states[None, :, :]
+            dist2 = jnp.mean(diff ** 2, axis=-1)
+            if exclude_diagonal:
+                n = jnp.minimum(query_states.shape[0], ref_states.shape[0])
+                diag_mask = jnp.eye(query_states.shape[0], ref_states.shape[0], dtype=dist2.dtype)
+                dist2 = dist2 + diag_mask * 1e9
+            neg_dist, nn_idx = jax.lax.top_k(-dist2, knn_k)
+            vals = ref_values[nn_idx]
+            mean_val = jnp.mean(vals, axis=1)
+            se_val = jnp.std(vals, axis=1) / jnp.sqrt(float(knn_k))
+            radius = jnp.sqrt(jnp.maximum(-neg_dist[:, -1], 0.0))
+            return mean_val, se_val, radius
+
+        def reinforcement_stats(delta, error):
+            """Signed contribution of a propagated Q change to an existing error energy."""
+            delta = jnp.ravel(delta)
+            error = jnp.ravel(error)
+            denom = jnp.mean(error ** 2) + 1e-12
+            dot = jnp.mean(delta * error)
+            coeff = dot / denom
+            rel_energy_change = (2.0 * dot + jnp.mean(delta ** 2)) / denom
+            harm = rms(delta) * jnp.maximum(cosine(delta, error), 0.0)
+            return coeff, rel_energy_change, harm
 
         @jax.jit
         def diagnostic_step(old_state: IQLState, new_state: IQLState, batch: TensorBatch, probe_batch: TensorBatch):
@@ -1215,19 +1387,30 @@ class IQLJAX:
 
             probe_observations = probe_batch["observations"]
             probe_actions = probe_batch["actions"]
+            probe_rewards = jnp.squeeze(probe_batch["rewards"], axis=-1)
+            probe_next_observations = probe_batch["next_observations"]
+            probe_dones = jnp.squeeze(probe_batch["dones"], axis=-1)
 
-            # Exact Bellman target used by the Q update in the original training step.
+            # Exact Bellman target used by the Q update in the committed training step.
             next_v_old = v_apply({"params": old_state.v_params}, next_observations)
             target = rewards + (1.0 - dones) * discount * next_v_old
+            target_rms = rms(target)
+            fd_base_delta = fd_epsilon * (jnp.maximum(target_rms, 1.0) if fd_relative_scale else 1.0)
+            fd_small_delta = fd_base_delta * fd_small_multiplier
+            fd_large_delta = fd_base_delta * fd_large_multiplier
 
-            def actual_adam_output_for(target_arg, out_obs, out_actions):
-                def q_loss_only(q_params):
-                    qs_local = q_apply({"params": q_params}, observations, actions)
-                    return jnp.mean((qs_local - target_arg[None, :]) ** 2)
+            def q_loss_given_target(q_params, target_arg):
+                qs_local = q_apply({"params": q_params}, observations, actions)
+                return jnp.mean((qs_local - target_arg[None, :]) ** 2)
 
-                q_grads = jax.grad(q_loss_only)(old_state.q_params)
+            def actual_adam_step(target_arg):
+                q_grads = jax.grad(q_loss_given_target)(old_state.q_params, target_arg)
                 q_updates, _ = q_tx.update(q_grads, old_state.q_opt_state, old_state.q_params)
                 q_params_plus = optax.apply_updates(old_state.q_params, q_updates)
+                return q_params_plus, q_grads, q_updates
+
+            def actual_adam_output_for(target_arg, out_obs, out_actions):
+                q_params_plus, _, _ = actual_adam_step(target_arg)
                 return q_apply({"params": q_params_plus}, out_obs, out_actions)
 
             def actual_probe_output(target_arg):
@@ -1235,6 +1418,10 @@ class IQLJAX:
 
             def actual_train_output(target_arg):
                 return actual_adam_output_for(target_arg, observations, actions)
+
+            base_q_params_plus, base_q_grads, base_q_updates = actual_adam_step(target)
+            base_probe = q_apply({"params": base_q_params_plus}, probe_observations, probe_actions)
+            base_train = q_apply({"params": base_q_params_plus}, observations, actions)
 
             # Old-parameter NTK / one-step-SGD linearization with the exact q_loss scaling.
             def ntk_output(h_unit, out_obs, out_actions):
@@ -1252,15 +1439,12 @@ class IQLJAX:
                 _, out_tangent = jax.jvp(out_q_fn, (old_state.q_params,), (param_direction,))
                 return out_tangent
 
-            # Auxiliary head validation on an independent probe batch.
-            probe_q_target_all = q_apply(
-                {"params": old_state.q_target_params}, probe_observations, probe_actions
-            )
+            # ----- Residual-head validation on an independent probe batch. -----
+            probe_q_target_all = q_apply({"params": old_state.q_target_params}, probe_observations, probe_actions)
             probe_q_target = jnp.min(probe_q_target_all, axis=0)
-            probe_q_online_all = q_apply(
-                {"params": old_state.q_params}, probe_observations, probe_actions
-            )
+            probe_q_online_all = q_apply({"params": old_state.q_params}, probe_observations, probe_actions)
             probe_q_online = jnp.min(probe_q_online_all, axis=0)
+            probe_q_online_mean = jnp.mean(probe_q_online_all, axis=0)
             probe_v_pre = v_apply({"params": old_state.v_params}, probe_observations)
             probe_v_post = v_apply({"params": new_state.v_params}, probe_observations)
 
@@ -1286,6 +1470,33 @@ class IQLJAX:
             kappa_global_post = jnp.maximum(jnp.mean(weight_post), kappa_floor)
             d_global_post = -g_global_post / kappa_global_post
 
+            # Conditional-head quality: raw-label fit plus binned calibration and normalized baselines.
+            g_mse = jnp.mean((g_hat_probe - score_pre) ** 2)
+            kappa_mse = jnp.mean((kappa_hat_probe - weight_pre) ** 2)
+            qnum_mse = jnp.mean((q_num_hat_probe - q_num_target_probe) ** 2)
+            g_zero_mse = jnp.mean(score_pre ** 2)
+            kappa_mean_baseline_mse = jnp.mean((weight_pre - jnp.mean(weight_pre)) ** 2)
+            qnum_zero_mse = jnp.mean(q_num_target_probe ** 2)
+            g_cal_corr, g_cal_mse, g_cal_sign = binned_calibration(g_hat_probe, score_pre)
+            kappa_cal_corr, kappa_cal_mse, _ = binned_calibration(kappa_hat_probe, weight_pre)
+            qnum_cal_corr, qnum_cal_mse, qnum_cal_sign = binned_calibration(q_num_hat_probe, q_num_target_probe)
+
+            d_bin_pre_rms, d_bin_pre_abs, d_bin_pre_max = binned_residual_stats(score_pre, weight_pre, g_hat_probe)
+            d_bin_post_rms, d_bin_post_abs, d_bin_post_max = binned_residual_stats(score_post, weight_post, g_hat_probe)
+
+            # Independent kNN reference on the probe batch.  Leave-one-out prevents a
+            # sample from trivially explaining its own noisy action-conditioned label.
+            g_knn_probe, g_knn_se_probe, knn_probe_radius = knn_conditional(
+                probe_observations, probe_observations, score_pre, exclude_diagonal=True
+            )
+            kappa_knn_probe, kappa_knn_se_probe, _ = knn_conditional(
+                probe_observations, probe_observations, weight_pre, exclude_diagonal=True
+            )
+            qnum_knn_probe, qnum_knn_se_probe, _ = knn_conditional(
+                probe_observations, probe_observations, q_num_target_probe, exclude_diagonal=True
+            )
+            d_knn_probe = -g_knn_probe / jnp.maximum(kappa_knn_probe, kappa_floor)
+
             def probe_v_loss_fn(v_params):
                 probe_v = v_apply({"params": v_params}, probe_observations)
                 u = jax.lax.stop_gradient(probe_q_target) - probe_v
@@ -1295,79 +1506,228 @@ class IQLJAX:
             v_grad_pre = jax.grad(probe_v_loss_fn)(old_state.v_params)
             v_grad_post = jax.grad(probe_v_loss_fn)(new_state.v_params)
 
-            # State-conditional h_V and h_Q^lag directions on the actual Q-fitting batch.
+            # Frozen-Q, virtual multi-step V refinement.  This tests whether a large residual
+            # is ordinary under-training (quickly correctable) or persists under additional V optimization.
+            if enable_multistep_v:
+                train_q_target_all = q_apply({"params": old_state.q_target_params}, observations, actions)
+                train_q_target = jax.lax.stop_gradient(jnp.min(train_q_target_all, axis=0))
+
+                def virtual_v_one(carry):
+                    v_params_local, v_opt_state_local = carry
+
+                    def local_v_loss(params):
+                        vv = v_apply({"params": params}, observations)
+                        uu = train_q_target - vv
+                        ww = jnp.abs(iql_tau - (uu < 0.0).astype(jnp.float32))
+                        return jnp.mean(ww * uu ** 2)
+
+                    grads = jax.grad(local_v_loss)(v_params_local)
+                    updates, opt_state_new = v_tx.update(grads, v_opt_state_local, v_params_local)
+                    params_new = optax.apply_updates(v_params_local, updates)
+                    return params_new, opt_state_new
+
+                def run_virtual_v_steps(n_steps):
+                    def body(_, carry):
+                        return virtual_v_one(carry)
+                    return jax.lax.fori_loop(
+                        0,
+                        n_steps,
+                        body,
+                        (old_state.v_params, old_state.v_opt_state),
+                    )[0]
+
+                v_params_short = run_virtual_v_steps(v_short_steps)
+                v_params_long = run_virtual_v_steps(v_long_steps)
+                probe_v_short = v_apply({"params": v_params_short}, probe_observations)
+                probe_v_long = v_apply({"params": v_params_long}, probe_observations)
+                score_short, weight_short, probe_v_loss_short = score_terms(probe_v_short)
+                score_long, weight_long, probe_v_loss_long = score_terms(probe_v_long)
+                g_short = jnp.mean(score_short)
+                kappa_short = jnp.maximum(jnp.mean(weight_short), kappa_floor)
+                d_short = -g_short / kappa_short
+                g_long = jnp.mean(score_long)
+                kappa_long = jnp.maximum(jnp.mean(weight_long), kappa_floor)
+                d_long = -g_long / kappa_long
+                d_bin_short_rms, _, _ = binned_residual_stats(score_short, weight_short, g_hat_probe)
+                d_bin_long_rms, _, _ = binned_residual_stats(score_long, weight_long, g_hat_probe)
+            else:
+                probe_v_loss_short = jnp.asarray(jnp.nan, dtype=jnp.float32)
+                probe_v_loss_long = jnp.asarray(jnp.nan, dtype=jnp.float32)
+                d_short = jnp.asarray(jnp.nan, dtype=jnp.float32)
+                d_long = jnp.asarray(jnp.nan, dtype=jnp.float32)
+                d_bin_short_rms = jnp.asarray(jnp.nan, dtype=jnp.float32)
+                d_bin_long_rms = jnp.asarray(jnp.nan, dtype=jnp.float32)
+
+            # ----- State-conditional h_V and h_Q^lag on the actual Q-fitting batch. -----
             raw_next = diag_apply({"params": new_state.diag_params}, next_observations)
             g_hat_next, kappa_hat_next, q_num_hat_next = unpack_diag(raw_next)
             residual_value_error_hat = -g_hat_next / kappa_hat_next  # V - V_exact, first order.
             h_v = (1.0 - dones) * discount * residual_value_error_hat
             critic_value_error_lag_hat = q_num_hat_next / kappa_hat_next
             h_q_lag = (1.0 - dones) * discount * critic_value_error_lag_hat
+            h_total_proxy = h_v + h_q_lag
+
+            # Independent state-neighborhood source proxy evaluated at the actual next states.
+            g_knn_next, g_knn_se_next, knn_next_radius = knn_conditional(
+                next_observations, probe_observations, score_pre, exclude_diagonal=False
+            )
+            kappa_knn_next, kappa_knn_se_next, _ = knn_conditional(
+                next_observations, probe_observations, weight_pre, exclude_diagonal=False
+            )
+            qnum_knn_next, qnum_knn_se_next, _ = knn_conditional(
+                next_observations, probe_observations, q_num_target_probe, exclude_diagonal=False
+            )
+            d_v_knn_next = -g_knn_next / jnp.maximum(kappa_knn_next, kappa_floor)
+            d_q_knn_next = qnum_knn_next / jnp.maximum(kappa_knn_next, kappa_floor)
+            h_v_knn = (1.0 - dones) * discount * d_v_knn_next
+            h_q_knn = (1.0 - dones) * discount * d_q_knn_next
 
             # Deterministic random direction so the optional ridge diagnostic can reproduce it.
             base_key = jax.random.fold_in(jax.random.PRNGKey(diag_seed), old_state.total_it + 1)
             rand_key, basis_key = jax.random.split(base_key)
             h_random = jax.random.rademacher(rand_key, shape=target.shape, dtype=jnp.float32)
 
-            base_probe = actual_probe_output(target)
-            base_train = actual_train_output(target)
+            def central_fd(h_unit, delta):
+                plus = actual_probe_output(target + delta * h_unit)
+                minus = actual_probe_output(target - delta * h_unit)
+                return (plus - minus) / (2.0 * delta), plus
 
             def direction_outputs(h):
                 h_unit, source_rms = normalized_direction(h)
-                fd_probe = (actual_probe_output(target + fd_epsilon * h_unit) - base_probe) / fd_epsilon
+                fd_probe, plus_probe = central_fd(h_unit, fd_base_delta)
+                fd_forward = (plus_probe - base_probe) / fd_base_delta
                 _, adam_jvp_probe = jax.jvp(actual_probe_output, (target,), (h_unit,))
                 ntk_probe = ntk_output(h_unit, probe_observations, probe_actions)
-                return h_unit, source_rms, fd_probe, adam_jvp_probe, ntk_probe
+                return h_unit, source_rms, fd_probe, fd_forward, adam_jvp_probe, ntk_probe
 
-            _, random_source_rms, random_fd, random_adam_jvp, random_ntk = direction_outputs(h_random)
-            _, h_v_source_rms, h_v_fd, h_v_adam_jvp, h_v_ntk = direction_outputs(h_v)
-            _, h_q_source_rms, h_q_fd, h_q_adam_jvp, h_q_ntk = direction_outputs(h_q_lag)
+            random_unit, random_source_rms, random_fd, random_fd_forward, random_adam_jvp, random_ntk = direction_outputs(h_random)
+            h_v_unit, h_v_source_rms, h_v_fd, h_v_fd_forward, h_v_adam_jvp, h_v_ntk = direction_outputs(h_v)
+            h_q_unit, h_q_source_rms, h_q_fd, h_q_fd_forward, h_q_adam_jvp, h_q_ntk = direction_outputs(h_q_lag)
+            h_total_unit, h_total_source_rms, h_total_fd, _, _, h_total_ntk = direction_outputs(h_total_proxy)
 
-            # Cross-sample spillover: perturb a few individual targets e_i and measure
-            # how much the actual Adam update changes other training-batch Q outputs.
+            # kNN alternatives intentionally use only the robust finite-difference reference.
+            h_v_knn_unit, h_v_knn_source_rms = normalized_direction(h_v_knn)
+            h_q_knn_unit, h_q_knn_source_rms = normalized_direction(h_q_knn)
+            h_v_knn_fd, _ = central_fd(h_v_knn_unit, fd_base_delta)
+            h_q_knn_fd, _ = central_fd(h_q_knn_unit, fd_base_delta)
+
+            random_fd_small, _ = central_fd(random_unit, fd_small_delta)
+            random_fd_large, _ = central_fd(random_unit, fd_large_delta)
+
+            # Finite-amplitude response at 25/50/100% of a safely clipped source scale.
+            # This complements the infinitesimal/local B diagnostic when Adam is nonlinear.
+            def finite_amplitude_curve(h, source_rms, local_fd):
+                max_rms = actual_source_cap_fraction * jnp.maximum(target_rms, 1.0)
+                base_alpha = jnp.minimum(1.0, max_rms / (source_rms + 1e-12))
+
+                def one(frac):
+                    alpha = base_alpha * frac
+                    response = actual_probe_output(target + alpha * h) - base_probe
+                    linear_pred = local_fd * (alpha * source_rms)
+                    return (
+                        alpha,
+                        rms(response) / (alpha * source_rms + 1e-12),
+                        cosine(response, linear_pred),
+                        rms(response - linear_pred) / (rms(response) + 1e-12),
+                    )
+
+                return one(0.25), one(0.50), one(1.00)
+
+            h_v_amp25, h_v_amp50, h_v_amp100 = finite_amplitude_curve(h_v, h_v_source_rms, h_v_fd)
+            h_q_amp25, h_q_amp50, h_q_amp100 = finite_amplitude_curve(h_q_lag, h_q_source_rms, h_q_fd)
+            h_v_actual_alpha, h_v_actual_gain, h_v_actual_cos, h_v_actual_relerr = h_v_amp100
+            h_q_actual_alpha, h_q_actual_gain, h_q_actual_cos, h_q_actual_relerr = h_q_amp100
+
+            # Cross-sample spillover: finite-difference actual Adam is the robust reference;
+            # the exact Adam JVP is retained only as a numerical diagnostic because it can NaN.
             batch_size = target.shape[0]
-            basis_indices = jax.random.randint(
-                basis_key,
-                shape=(num_basis,),
-                minval=0,
-                maxval=batch_size,
-            )
+            basis_indices = jax.random.randint(basis_key, shape=(num_basis,), minval=0, maxval=batch_size)
             basis = jax.nn.one_hot(basis_indices, batch_size, dtype=target.dtype)
 
-            def one_basis_adam(h_basis):
+            def one_basis_fd(h_basis):
+                plus = actual_train_output(target + fd_base_delta * h_basis)
+                minus = actual_train_output(target - fd_base_delta * h_basis)
+                return (plus - minus) / (2.0 * fd_base_delta)
+
+            def one_basis_adam_jvp(h_basis):
                 _, out = jax.jvp(actual_train_output, (target,), (h_basis,))
                 return out
 
             def one_basis_ntk(h_basis):
                 return ntk_output(h_basis, observations, actions)
 
-            basis_adam = jax.vmap(one_basis_adam)(basis)  # [K, C, B]
+            basis_fd = jax.vmap(one_basis_fd)(basis)
+            basis_adam_jvp = jax.vmap(one_basis_adam_jvp)(basis)
             basis_ntk = jax.vmap(one_basis_ntk)(basis)
 
             def spillover_stats(outputs):
                 mean_q_response = jnp.mean(outputs, axis=1)  # [K, B]
-                self_response = jnp.take_along_axis(
-                    mean_q_response, basis_indices[:, None], axis=1
-                )[:, 0]
+                self_response = jnp.take_along_axis(mean_q_response, basis_indices[:, None], axis=1)[:, 0]
                 total_sq = jnp.sum(mean_q_response ** 2, axis=1)
                 cross_l2 = jnp.sqrt(jnp.maximum(total_sq - self_response ** 2, 0.0) + 1e-12)
+                cross_rms_per_coord = cross_l2 / jnp.sqrt(jnp.maximum(float(batch_size - 1), 1.0))
                 ratio = cross_l2 / (jnp.abs(self_response) + 1e-8)
+                per_coord_ratio = cross_rms_per_coord / (jnp.abs(self_response) + 1e-8)
                 return (
                     jnp.mean(jnp.abs(self_response)),
                     jnp.mean(cross_l2),
                     jnp.mean(ratio),
+                    jnp.mean(cross_rms_per_coord),
+                    jnp.mean(per_coord_ratio),
                 )
 
-            adam_self, adam_spill, adam_spill_ratio = spillover_stats(basis_adam)
-            ntk_self, ntk_spill, ntk_spill_ratio = spillover_stats(basis_ntk)
+            fd_self, fd_spill, fd_spill_ratio, fd_spill_rms_coord, fd_spill_coord_ratio = spillover_stats(basis_fd)
+            adam_jvp_self, adam_jvp_spill, adam_jvp_spill_ratio, adam_jvp_spill_rms_coord, adam_jvp_spill_coord_ratio = spillover_stats(basis_adam_jvp)
+            ntk_self, ntk_spill, ntk_spill_ratio, ntk_spill_rms_coord, ntk_spill_coord_ratio = spillover_stats(basis_ntk)
+
+            # ----- Target-network lag dynamics and actual Q-update geometry. -----
+            probe_q_online_new_all = q_apply({"params": new_state.q_params}, probe_observations, probe_actions)
+            probe_q_target_new_all = q_apply({"params": new_state.q_target_params}, probe_observations, probe_actions)
+            probe_q_online_new = jnp.min(probe_q_online_new_all, axis=0)
+            probe_q_target_new = jnp.min(probe_q_target_new_all, axis=0)
+            lag_pre = eps_lag_probe
+            lag_post = probe_q_online_new - probe_q_target_new
+            online_delta = probe_q_online_new - probe_q_online
+            target_delta = probe_q_target_new - probe_q_target
+            lag_delta = lag_post - lag_pre
+            lag_recurrence_error = lag_post - (lag_pre + online_delta - target_delta)
+
+            probe_next_v_old = v_apply({"params": old_state.v_params}, probe_next_observations)
+            probe_backup_target = probe_rewards + (1.0 - probe_dones) * discount * probe_next_v_old
+            td_error_probe = probe_q_online_mean - probe_backup_target
+            q_update_probe_mean = jnp.mean(base_probe - probe_q_online_all, axis=0)
+            committed_q_probe = q_apply({"params": new_state.q_params}, probe_observations, probe_actions)
 
             ensemble_std_probe = jnp.mean(jnp.std(probe_q_online_all, axis=0))
-            td_error_old = jnp.mean(
-                q_apply({"params": old_state.q_params}, observations, actions), axis=0
-            ) - target
+            td_error_old = jnp.mean(q_apply({"params": old_state.q_params}, observations, actions), axis=0) - target
+
+            # Scaled propagated outputs.  Since local derivatives are measured on unit-RMS source
+            # directions, multiplying by source RMS reconstructs B h in the linear regime.
+            h_v_fd_scaled = h_v_fd * h_v_source_rms
+            h_q_fd_scaled = h_q_fd * h_q_source_rms
+            h_total_fd_scaled = h_total_fd * h_total_source_rms
+            h_v_ntk_scaled = h_v_ntk * h_v_source_rms
+            h_q_ntk_scaled = h_q_ntk * h_q_source_rms
+            linear_sum_fd = h_v_fd_scaled + h_q_fd_scaled
+
+            h_v_fd_mean = jnp.mean(h_v_fd_scaled, axis=0)
+            h_q_fd_mean = jnp.mean(h_q_fd_scaled, axis=0)
+            h_total_fd_mean = jnp.mean(h_total_fd_scaled, axis=0)
+
+            h_v_knn_fd_scaled = h_v_knn_fd * h_v_knn_source_rms
+            h_q_knn_fd_scaled = h_q_knn_fd * h_q_knn_source_rms
+            h_v_knn_fd_mean = jnp.mean(h_v_knn_fd_scaled, axis=0)
+            h_q_knn_fd_mean = jnp.mean(h_q_knn_fd_scaled, axis=0)
+
+            hq_lag_coeff, hq_lag_energy, hq_lag_harm = reinforcement_stats(h_q_fd_mean, eps_lag_probe)
+            hv_lag_coeff, hv_lag_energy, hv_lag_harm = reinforcement_stats(h_v_fd_mean, eps_lag_probe)
+            hq_td_coeff, hq_td_energy, hq_td_harm = reinforcement_stats(h_q_fd_mean, td_error_probe)
+            hv_td_coeff, hv_td_energy, hv_td_harm = reinforcement_stats(h_v_fd_mean, td_error_probe)
+            hq_knn_td_coeff, hq_knn_td_energy, hq_knn_td_harm = reinforcement_stats(h_q_knn_fd_mean, td_error_probe)
+            hv_knn_td_coeff, hv_knn_td_energy, hv_knn_td_harm = reinforcement_stats(h_v_knn_fd_mean, td_error_probe)
 
             log_dict = {
-                # Residual-source diagnostics. raw score magnitude is deliberately named
-                # "raw_score" because |psi_tau| is NOT itself the expectile residual.
+                # ---- Residual-source diagnostics and head calibration ----
                 "diag_residual/raw_score_mean_probe": jnp.mean(score_pre),
                 "diag_residual/raw_score_abs_mean_probe": jnp.mean(jnp.abs(score_pre)),
                 "diag_residual/kappa_batch_mean_probe": jnp.mean(weight_pre),
@@ -1376,64 +1736,371 @@ class IQLJAX:
                 "diag_residual/kappa_hat_mean_probe": jnp.mean(kappa_hat_probe),
                 "diag_residual/kappa_hat_min_probe": jnp.min(kappa_hat_probe),
                 "diag_residual/value_error_hat_rms_probe": rms(-g_hat_probe / kappa_hat_probe),
-                "diag_residual/head_g_mse_probe": jnp.mean((g_hat_probe - score_pre) ** 2),
-                "diag_residual/head_kappa_mse_probe": jnp.mean((kappa_hat_probe - weight_pre) ** 2),
-                "diag_residual/head_qnum_mse_probe": jnp.mean((q_num_hat_probe - q_num_target_probe) ** 2),
+                "diag_residual/value_error_hat_abs_p50_probe": abs_quantile(-g_hat_probe / kappa_hat_probe, 0.50),
+                "diag_residual/value_error_hat_abs_p90_probe": abs_quantile(-g_hat_probe / kappa_hat_probe, 0.90),
+                "diag_residual/value_error_hat_abs_p99_probe": abs_quantile(-g_hat_probe / kappa_hat_probe, 0.99),
+                "diag_residual/head_g_mse_probe": g_mse,
+                "diag_residual/head_kappa_mse_probe": kappa_mse,
+                "diag_residual/head_qnum_mse_probe": qnum_mse,
+                "diag_residual/head_g_nmse_vs_zero_probe": g_mse / (g_zero_mse + 1e-12),
+                "diag_residual/head_g_skill_vs_zero_probe": 1.0 - g_mse / (g_zero_mse + 1e-12),
+                "diag_residual/head_kappa_nmse_vs_mean_probe": kappa_mse / (kappa_mean_baseline_mse + 1e-12),
+                "diag_residual/head_qnum_nmse_vs_zero_probe": qnum_mse / (qnum_zero_mse + 1e-12),
                 "diag_residual/head_g_raw_corr_probe": corr(g_hat_probe, score_pre),
                 "diag_residual/head_kappa_raw_corr_probe": corr(kappa_hat_probe, weight_pre),
                 "diag_residual/head_qnum_raw_corr_probe": corr(q_num_hat_probe, q_num_target_probe),
+                "diag_residual/head_g_binned_cal_corr_probe": g_cal_corr,
+                "diag_residual/head_g_binned_cal_mse_probe": g_cal_mse,
+                "diag_residual/head_g_binned_sign_agree_probe": g_cal_sign,
+                "diag_residual/head_kappa_binned_cal_corr_probe": kappa_cal_corr,
+                "diag_residual/head_kappa_binned_cal_mse_probe": kappa_cal_mse,
+                "diag_residual/head_qnum_binned_cal_corr_probe": qnum_cal_corr,
+                "diag_residual/head_qnum_binned_cal_mse_probe": qnum_cal_mse,
+                "diag_residual/head_qnum_binned_sign_agree_probe": qnum_cal_sign,
 
-                # Correctability / under-training diagnostics. These compare the same
-                # frozen Q_target before and after the *actual single V update*.
+                # Independent kNN conditional reference: useful when the learned head has
+                # near-zero skill.  Radius/SE indicate when the non-parametric reference is weak.
+                "diag_knn/probe_neighbor_radius_mean": jnp.mean(knn_probe_radius),
+                "diag_knn/probe_neighbor_radius_p90": jnp.quantile(knn_probe_radius, 0.90),
+                "diag_knn/next_neighbor_radius_mean": jnp.mean(knn_next_radius),
+                "diag_knn/next_neighbor_radius_p90": jnp.quantile(knn_next_radius, 0.90),
+                "diag_knn/g_se_mean_probe": jnp.mean(g_knn_se_probe),
+                "diag_knn/kappa_se_mean_probe": jnp.mean(kappa_knn_se_probe),
+                "diag_knn/qnum_se_mean_probe": jnp.mean(qnum_knn_se_probe),
+                "diag_knn/g_se_mean_next": jnp.mean(g_knn_se_next),
+                "diag_knn/kappa_se_mean_next": jnp.mean(kappa_knn_se_next),
+                "diag_residual/g_knn_rms_probe": rms(g_knn_probe),
+                "diag_residual/kappa_knn_mean_probe": jnp.mean(kappa_knn_probe),
+                "diag_residual/value_error_knn_rms_probe": rms(d_knn_probe),
+                "diag_residual/head_vs_knn_g_corr_probe": corr(g_hat_probe, g_knn_probe),
+                "diag_residual/head_vs_knn_kappa_corr_probe": corr(kappa_hat_probe, kappa_knn_probe),
+                "diag_residual/head_vs_knn_qnum_corr_probe": corr(q_num_hat_probe, qnum_knn_probe),
+                "diag_residual/head_vs_knn_d_corr_probe": corr(-g_hat_probe / kappa_hat_probe, d_knn_probe),
+
+                # ---- Correctability / under-training diagnostics ----
                 "diag_residual/probe_v_loss_pre": probe_v_loss_pre,
                 "diag_residual/probe_v_loss_post": probe_v_loss_post,
                 "diag_residual/probe_v_loss_ratio": probe_v_loss_post / (probe_v_loss_pre + 1e-12),
                 "diag_residual/global_d_pre": d_global_pre,
                 "diag_residual/global_d_post": d_global_post,
                 "diag_residual/global_d_abs_ratio": jnp.abs(d_global_post) / (jnp.abs(d_global_pre) + 1e-8),
+                "diag_residual/binned_d_rms_pre": d_bin_pre_rms,
+                "diag_residual/binned_d_rms_post": d_bin_post_rms,
+                "diag_residual/binned_d_rms_post_over_pre": d_bin_post_rms / (d_bin_pre_rms + 1e-12),
+                "diag_residual/binned_d_abs_mean_pre": d_bin_pre_abs,
+                "diag_residual/binned_d_abs_max_pre": d_bin_pre_max,
+                "diag_residual/binned_d_abs_max_post": d_bin_post_max,
                 "diag_residual/v_grad_norm_pre": tree_l2(v_grad_pre),
                 "diag_residual/v_grad_norm_post": tree_l2(v_grad_post),
                 "diag_residual/v_grad_norm_ratio": tree_l2(v_grad_post) / (tree_l2(v_grad_pre) + 1e-12),
+                f"diag_residual/probe_v_loss_virtual_{v_short_steps}": probe_v_loss_short,
+                f"diag_residual/probe_v_loss_virtual_{v_long_steps}": probe_v_loss_long,
+                f"diag_residual/probe_v_loss_virtual_{v_short_steps}_over_pre": probe_v_loss_short / (probe_v_loss_pre + 1e-12),
+                f"diag_residual/probe_v_loss_virtual_{v_long_steps}_over_pre": probe_v_loss_long / (probe_v_loss_pre + 1e-12),
+                f"diag_residual/global_d_virtual_{v_short_steps}": d_short,
+                f"diag_residual/global_d_virtual_{v_long_steps}": d_long,
+                f"diag_residual/global_d_virtual_{v_short_steps}_abs_over_pre": jnp.abs(d_short) / (jnp.abs(d_global_pre) + 1e-8),
+                f"diag_residual/global_d_virtual_{v_long_steps}_abs_over_pre": jnp.abs(d_long) / (jnp.abs(d_global_pre) + 1e-8),
+                f"diag_residual/binned_d_rms_virtual_{v_short_steps}": d_bin_short_rms,
+                f"diag_residual/binned_d_rms_virtual_{v_long_steps}": d_bin_long_rms,
+                f"diag_residual/binned_d_rms_virtual_{v_short_steps}_over_pre": d_bin_short_rms / (d_bin_pre_rms + 1e-12),
+                f"diag_residual/binned_d_rms_virtual_{v_long_steps}_over_pre": d_bin_long_rms / (d_bin_pre_rms + 1e-12),
 
-                # Observable proxies entering the two theoretical channels.
+                # ---- Observable source proxies ----
                 "diag_source/h_v_rms": h_v_source_rms,
+                "diag_source/h_v_abs_p90": abs_quantile(h_v, 0.90),
+                "diag_source/h_v_abs_p99": abs_quantile(h_v, 0.99),
                 "diag_source/h_q_lag_rms": h_q_source_rms,
+                "diag_source/h_q_lag_abs_p90": abs_quantile(h_q_lag, 0.90),
+                "diag_source/h_q_lag_abs_p99": abs_quantile(h_q_lag, 0.99),
+                "diag_source/h_total_proxy_rms": h_total_source_rms,
+                "diag_source/h_q_vs_h_v_cos": cosine(h_q_lag, h_v),
+                "diag_source/h_v_knn_rms": h_v_knn_source_rms,
+                "diag_source/h_q_knn_rms": h_q_knn_source_rms,
+                "diag_source/h_v_head_vs_knn_cos": cosine(h_v, h_v_knn),
+                "diag_source/h_q_head_vs_knn_cos": cosine(h_q_lag, h_q_knn),
+                "diag_source/h_v_knn_over_head_rms": h_v_knn_source_rms / (h_v_source_rms + 1e-12),
+                "diag_source/h_q_knn_over_head_rms": h_q_knn_source_rms / (h_q_source_rms + 1e-12),
                 "diag_source/q_target_lag_rms_probe": rms(eps_lag_probe),
                 "diag_source/q_ensemble_std_mean_probe": ensemble_std_probe,
                 "diag_source/td_error_rms_train": rms(td_error_old),
+                "diag_source/td_error_rms_probe": rms(td_error_probe),
 
-                # B estimators on the same random direction: this directly tests whether
-                # the cheap estimators agree with paired finite differences.
+                # ---- B finite-difference numerical validity ----
+                "diag_B/fd_target_rms": target_rms,
+                "diag_B/fd_effective_delta": fd_base_delta,
+                "diag_B/fd_effective_delta_over_target_rms": fd_base_delta / (target_rms + 1e-12),
                 "diag_B/random_source_rms": random_source_rms,
                 "diag_B/fd_adam_random_gain_probe": rms(random_fd),
+                "diag_B/fd_forward_random_gain_probe": rms(random_fd_forward),
+                "diag_B/fd_small_random_gain_probe": rms(random_fd_small),
+                "diag_B/fd_large_random_gain_probe": rms(random_fd_large),
+                "diag_B/fd_central_vs_forward_cos_random": cosine(random_fd, random_fd_forward),
+                "diag_B/fd_small_vs_base_cos_random": cosine(random_fd_small, random_fd),
+                "diag_B/fd_large_vs_base_cos_random": cosine(random_fd_large, random_fd),
+                "diag_B/fd_small_over_base_gain_random": rms(random_fd_small) / (rms(random_fd) + 1e-12),
+                "diag_B/fd_large_over_base_gain_random": rms(random_fd_large) / (rms(random_fd) + 1e-12),
+                "diag_B/fd_finite_fraction_random": finite_fraction(random_fd),
                 "diag_B/jvp_adam_random_gain_probe": rms(random_adam_jvp),
+                "diag_B/jvp_adam_finite_fraction_random": finite_fraction(random_adam_jvp),
                 "diag_B/ntk_sgd_random_gain_probe": rms(random_ntk),
+                "diag_B/ntk_finite_fraction_random": finite_fraction(random_ntk),
                 "diag_B/fd_vs_jvp_adam_cos_random": cosine(random_fd, random_adam_jvp),
-                "diag_B/jvp_adam_vs_ntk_cos_random": cosine(random_adam_jvp, random_ntk),
+                "diag_B/fd_vs_ntk_cos_random": cosine(random_fd, random_ntk),
+                "diag_B/ntk_over_fd_gain_random": rms(random_ntk) / (rms(random_fd) + 1e-12),
 
-                # Directional propagation of the estimated IQL residual channel.
-                "diag_prop/h_v_fd_adam_q_rms": rms(h_v_fd) * h_v_source_rms,
+                # ---- Directional source-specific gain and realized propagation ----
+                "diag_gain/h_v_fd_adam": rms(h_v_fd),
+                "diag_gain/h_v_ntk_sgd": rms(h_v_ntk),
+                "diag_gain/h_q_lag_fd_adam": rms(h_q_fd),
+                "diag_gain/h_q_lag_ntk_sgd": rms(h_q_ntk),
+                "diag_gain/h_total_proxy_fd_adam": rms(h_total_fd),
+                "diag_gain/h_total_proxy_ntk_sgd": rms(h_total_ntk),
+                "diag_prop/h_v_fd_adam_q_rms": rms(h_v_fd_scaled),
                 "diag_prop/h_v_jvp_adam_q_rms": rms(h_v_adam_jvp) * h_v_source_rms,
-                "diag_prop/h_v_ntk_sgd_q_rms": rms(h_v_ntk) * h_v_source_rms,
+                "diag_prop/h_v_ntk_sgd_q_rms": rms(h_v_ntk_scaled),
                 "diag_prop/h_v_fd_vs_jvp_cos": cosine(h_v_fd, h_v_adam_jvp),
-
-                # h_Q is intentionally labelled a lag proxy, not the unobservable true epsilon channel.
-                "diag_prop/h_q_lag_fd_adam_q_rms": rms(h_q_fd) * h_q_source_rms,
+                "diag_prop/h_v_fd_vs_ntk_cos": cosine(h_v_fd, h_v_ntk),
+                "diag_prop/h_v_ntk_over_fd_gain": rms(h_v_ntk) / (rms(h_v_fd) + 1e-12),
+                "diag_prop/h_q_lag_fd_adam_q_rms": rms(h_q_fd_scaled),
                 "diag_prop/h_q_lag_jvp_adam_q_rms": rms(h_q_adam_jvp) * h_q_source_rms,
-                "diag_prop/h_q_lag_ntk_sgd_q_rms": rms(h_q_ntk) * h_q_source_rms,
+                "diag_prop/h_q_lag_ntk_sgd_q_rms": rms(h_q_ntk_scaled),
                 "diag_prop/h_q_lag_fd_vs_jvp_cos": cosine(h_q_fd, h_q_adam_jvp),
+                "diag_prop/h_q_lag_fd_vs_ntk_cos": cosine(h_q_fd, h_q_ntk),
+                "diag_prop/h_q_lag_ntk_over_fd_gain": rms(h_q_ntk) / (rms(h_q_fd) + 1e-12),
+                "diag_prop/h_total_proxy_fd_adam_q_rms": rms(h_total_fd_scaled),
+                "diag_prop/h_q_vs_h_v_fd_output_cos": cosine(h_q_fd_scaled, h_v_fd_scaled),
+                "diag_prop/two_channel_linear_sum_cos": cosine(h_total_fd_scaled, linear_sum_fd),
+                "diag_prop/two_channel_linear_sum_relerr": rms(h_total_fd_scaled - linear_sum_fd) / (rms(h_total_fd_scaled) + 1e-12),
+                "diag_prop/h_v_fd_abs_p90": abs_quantile(h_v_fd_mean, 0.90),
+                "diag_prop/h_q_lag_fd_abs_p90": abs_quantile(h_q_fd_mean, 0.90),
+                "diag_gain/h_v_knn_fd_adam": rms(h_v_knn_fd),
+                "diag_gain/h_q_knn_fd_adam": rms(h_q_knn_fd),
+                "diag_prop/h_v_knn_fd_adam_q_rms": rms(h_v_knn_fd_scaled),
+                "diag_prop/h_q_knn_fd_adam_q_rms": rms(h_q_knn_fd_scaled),
+                "diag_prop/h_v_head_vs_knn_output_cos": cosine(h_v_fd_scaled, h_v_knn_fd_scaled),
+                "diag_prop/h_q_head_vs_knn_output_cos": cosine(h_q_fd_scaled, h_q_knn_fd_scaled),
 
-                # Per-target spillover / cross-sample coupling.
-                "diag_B/basis_adam_self_abs_mean": adam_self,
-                "diag_B/basis_adam_spillover_l2_mean": adam_spill,
-                "diag_B/basis_adam_spillover_ratio_mean": adam_spill_ratio,
+                # Alignment: positive cosine with current lag/TD error means the propagated
+                # perturbation points in the same direction as the existing error proxy.
+                "diag_alignment/h_q_prop_with_lag_cos": cosine(h_q_fd_mean, eps_lag_probe),
+                "diag_alignment/h_v_prop_with_lag_cos": cosine(h_v_fd_mean, eps_lag_probe),
+                "diag_alignment/h_q_prop_with_td_error_cos": cosine(h_q_fd_mean, td_error_probe),
+                "diag_alignment/h_v_prop_with_td_error_cos": cosine(h_v_fd_mean, td_error_probe),
+                "diag_alignment/actual_q_update_with_negative_td_cos": cosine(q_update_probe_mean, -td_error_probe),
+
+                # Signed reinforcement / predicted error-energy change.  Positive values mean
+                # the propagated perturbation reinforces the chosen existing-error proxy.
+                "diag_harm/h_q_with_lag_signed_injection": hq_lag_coeff,
+                "diag_harm/h_q_with_lag_pred_rel_energy_change": hq_lag_energy,
+                "diag_harm/h_q_with_lag_positive_risk": hq_lag_harm,
+                "diag_harm/h_v_with_lag_signed_injection": hv_lag_coeff,
+                "diag_harm/h_v_with_lag_pred_rel_energy_change": hv_lag_energy,
+                "diag_harm/h_v_with_lag_positive_risk": hv_lag_harm,
+                "diag_harm/h_q_with_td_signed_injection": hq_td_coeff,
+                "diag_harm/h_q_with_td_pred_rel_energy_change": hq_td_energy,
+                "diag_harm/h_q_with_td_positive_risk": hq_td_harm,
+                "diag_harm/h_v_with_td_signed_injection": hv_td_coeff,
+                "diag_harm/h_v_with_td_pred_rel_energy_change": hv_td_energy,
+                "diag_harm/h_v_with_td_positive_risk": hv_td_harm,
+                "diag_harm/h_q_knn_with_td_signed_injection": hq_knn_td_coeff,
+                "diag_harm/h_q_knn_with_td_pred_rel_energy_change": hq_knn_td_energy,
+                "diag_harm/h_q_knn_with_td_positive_risk": hq_knn_td_harm,
+                "diag_harm/h_v_knn_with_td_signed_injection": hv_knn_td_coeff,
+                "diag_harm/h_v_knn_with_td_pred_rel_energy_change": hv_knn_td_energy,
+                "diag_harm/h_v_knn_with_td_positive_risk": hv_knn_td_harm,
+
+                # Actual-scale locality check: whether the linearized B remains predictive at
+                # the magnitude of the currently estimated source (clipped for safety).
+                "diag_locality/h_v_applied_alpha": h_v_actual_alpha,
+                "diag_locality/h_v_actual_scale_gain": h_v_actual_gain,
+                "diag_locality/h_v_actual_vs_linear_cos": h_v_actual_cos,
+                "diag_locality/h_v_actual_vs_linear_relerr": h_v_actual_relerr,
+                "diag_locality/h_q_lag_applied_alpha": h_q_actual_alpha,
+                "diag_locality/h_q_lag_actual_scale_gain": h_q_actual_gain,
+                "diag_locality/h_q_lag_actual_vs_linear_cos": h_q_actual_cos,
+                "diag_locality/h_q_lag_actual_vs_linear_relerr": h_q_actual_relerr,
+                "diag_amplitude/h_v_alpha25": h_v_amp25[0],
+                "diag_amplitude/h_v_gain25": h_v_amp25[1],
+                "diag_amplitude/h_v_cos25": h_v_amp25[2],
+                "diag_amplitude/h_v_relerr25": h_v_amp25[3],
+                "diag_amplitude/h_v_alpha50": h_v_amp50[0],
+                "diag_amplitude/h_v_gain50": h_v_amp50[1],
+                "diag_amplitude/h_v_cos50": h_v_amp50[2],
+                "diag_amplitude/h_v_relerr50": h_v_amp50[3],
+                "diag_amplitude/h_v_alpha100": h_v_amp100[0],
+                "diag_amplitude/h_v_gain100": h_v_amp100[1],
+                "diag_amplitude/h_v_cos100": h_v_amp100[2],
+                "diag_amplitude/h_v_relerr100": h_v_amp100[3],
+                "diag_amplitude/h_q_alpha25": h_q_amp25[0],
+                "diag_amplitude/h_q_gain25": h_q_amp25[1],
+                "diag_amplitude/h_q_cos25": h_q_amp25[2],
+                "diag_amplitude/h_q_relerr25": h_q_amp25[3],
+                "diag_amplitude/h_q_alpha50": h_q_amp50[0],
+                "diag_amplitude/h_q_gain50": h_q_amp50[1],
+                "diag_amplitude/h_q_cos50": h_q_amp50[2],
+                "diag_amplitude/h_q_relerr50": h_q_amp50[3],
+                "diag_amplitude/h_q_alpha100": h_q_amp100[0],
+                "diag_amplitude/h_q_gain100": h_q_amp100[1],
+                "diag_amplitude/h_q_cos100": h_q_amp100[2],
+                "diag_amplitude/h_q_relerr100": h_q_amp100[3],
+
+                # ---- Per-target spillover / cross-sample coupling ----
+                "diag_B/basis_fd_adam_self_abs_mean": fd_self,
+                "diag_B/basis_fd_adam_spillover_l2_mean": fd_spill,
+                "diag_B/basis_fd_adam_spillover_ratio_mean": fd_spill_ratio,
+                "diag_B/basis_fd_adam_spillover_rms_per_coord_mean": fd_spill_rms_coord,
+                "diag_B/basis_fd_adam_spillover_per_coord_ratio_mean": fd_spill_coord_ratio,
+                "diag_B/basis_jvp_adam_self_abs_mean": adam_jvp_self,
+                "diag_B/basis_jvp_adam_spillover_l2_mean": adam_jvp_spill,
+                "diag_B/basis_jvp_adam_spillover_ratio_mean": adam_jvp_spill_ratio,
+                "diag_B/basis_jvp_adam_spillover_rms_per_coord_mean": adam_jvp_spill_rms_coord,
+                "diag_B/basis_jvp_adam_spillover_per_coord_ratio_mean": adam_jvp_spill_coord_ratio,
+                "diag_B/basis_jvp_adam_finite_fraction": finite_fraction(basis_adam_jvp),
                 "diag_B/basis_ntk_self_abs_mean": ntk_self,
                 "diag_B/basis_ntk_spillover_l2_mean": ntk_spill,
                 "diag_B/basis_ntk_spillover_ratio_mean": ntk_spill_ratio,
+                "diag_B/basis_ntk_spillover_rms_per_coord_mean": ntk_spill_rms_coord,
+                "diag_B/basis_ntk_spillover_per_coord_ratio_mean": ntk_spill_coord_ratio,
+
+                # ---- Optimizer and target-network dynamics ----
+                "diag_optimizer/q_grad_norm": tree_l2(base_q_grads),
+                "diag_optimizer/q_update_param_norm": tree_l2(base_q_updates),
+                "diag_optimizer/q_param_norm": tree_l2(old_state.q_params),
+                "diag_optimizer/q_opt_state_norm": tree_l2(old_state.q_opt_state),
+                "diag_optimizer/q_update_per_grad": tree_l2(base_q_updates) / (tree_l2(base_q_grads) + 1e-12),
+                "diag_optimizer/q_output_change_rms_train": rms(base_train - q_apply({"params": old_state.q_params}, observations, actions)),
+                "diag_optimizer/q_output_change_rms_probe": rms(base_probe - probe_q_online_all),
+                "diag_optimizer/diagnostic_vs_committed_q_rms_probe": rms(base_probe - committed_q_probe),
+                "diag_target_lag/lag_pre_rms_probe": rms(lag_pre),
+                "diag_target_lag/lag_post_rms_probe": rms(lag_post),
+                "diag_target_lag/lag_post_over_pre": rms(lag_post) / (rms(lag_pre) + 1e-12),
+                "diag_target_lag/lag_delta_rms_probe": rms(lag_delta),
+                "diag_target_lag/online_delta_rms_probe": rms(online_delta),
+                "diag_target_lag/target_delta_rms_probe": rms(target_delta),
+                "diag_target_lag/target_tracking_ratio": rms(target_delta) / (rms(online_delta) + 1e-12),
+                "diag_target_lag/lag_delta_with_lag_pre_cos": cosine(lag_delta, lag_pre),
+                "diag_target_lag/lag_post_with_lag_pre_cos": cosine(lag_post, lag_pre),
+                "diag_target_lag/online_vs_target_delta_cos": cosine(online_delta, target_delta),
+                "diag_target_lag/recurrence_sanity_rms": rms(lag_recurrence_error),
             }
             return log_dict
 
         return diagnostic_step
+
+    def _build_horizon_diagnostic_step(self):
+        """Finite-horizon critic-fitting response B^(H) under repeated virtual Adam fits.
+
+        The one-step B diagnostic and the ridge/full-fit response were empirically very
+        different.  This diagnostic fills the missing time scale by repeatedly fitting the
+        *same frozen batch and target* for H=1/short/long virtual Adam steps, never committing
+        those updates.  Directions are deliberately observable and head-independent:
+          random, current TD-error pattern, and current online-target lag pattern.
+        """
+        q_apply = self.q_def.apply
+        v_apply = self.v_def.apply
+        q_tx = self.q_tx
+        discount = self.discount
+        fd_epsilon = self.diag_fd_epsilon
+        fd_relative_scale = self.diag_fd_relative_scale
+        short_steps = self.diag_horizon_short_steps
+        long_steps = self.diag_horizon_long_steps
+        diag_seed = self.diag_seed
+
+        def rms(x):
+            return jnp.sqrt(jnp.mean(jnp.asarray(x) ** 2) + 1e-12)
+
+        def cosine(a, b):
+            a = jnp.ravel(a)
+            b = jnp.ravel(b)
+            return jnp.sum(a * b) / (jnp.linalg.norm(a) * jnp.linalg.norm(b) + 1e-12)
+
+        def normalize(h):
+            return h / jnp.maximum(rms(h), 1e-8)
+
+        @jax.jit
+        def horizon_step(old_state: IQLState, batch: TensorBatch, probe_batch: TensorBatch):
+            observations = batch["observations"]
+            actions = batch["actions"]
+            rewards = jnp.squeeze(batch["rewards"], axis=-1)
+            next_observations = batch["next_observations"]
+            dones = jnp.squeeze(batch["dones"], axis=-1)
+            probe_observations = probe_batch["observations"]
+            probe_actions = probe_batch["actions"]
+
+            next_v = v_apply({"params": old_state.v_params}, next_observations)
+            target = rewards + (1.0 - dones) * discount * next_v
+            target_rms = rms(target)
+            delta = fd_epsilon * (jnp.maximum(target_rms, 1.0) if fd_relative_scale else 1.0)
+
+            q_online_all = q_apply({"params": old_state.q_params}, observations, actions)
+            q_target_all = q_apply({"params": old_state.q_target_params}, observations, actions)
+            h_td = jnp.mean(q_online_all, axis=0) - target
+            h_lag = jnp.min(q_online_all, axis=0) - jnp.min(q_target_all, axis=0)
+            key = jax.random.fold_in(jax.random.PRNGKey(diag_seed + 101), old_state.total_it + 1)
+            h_random = jax.random.rademacher(key, shape=target.shape, dtype=target.dtype)
+
+            directions = (normalize(h_random), normalize(h_td), normalize(h_lag))
+
+            def virtual_probe_output(target_arg, n_steps):
+                def one_step(_, carry):
+                    params, opt_state = carry
+
+                    def loss_fn(p):
+                        qs = q_apply({"params": p}, observations, actions)
+                        return jnp.mean((qs - target_arg[None, :]) ** 2)
+
+                    grads = jax.grad(loss_fn)(params)
+                    updates, opt_state_new = q_tx.update(grads, opt_state, params)
+                    params_new = optax.apply_updates(params, updates)
+                    return params_new, opt_state_new
+
+                params_h, _ = jax.lax.fori_loop(
+                    0, n_steps, one_step, (old_state.q_params, old_state.q_opt_state)
+                )
+                return q_apply({"params": params_h}, probe_observations, probe_actions)
+
+            def response(h_unit, n_steps):
+                plus = virtual_probe_output(target + delta * h_unit, n_steps)
+                minus = virtual_probe_output(target - delta * h_unit, n_steps)
+                return (plus - minus) / (2.0 * delta)
+
+            def three_horizons(h_unit):
+                b1 = response(h_unit, 1)
+                bs = response(h_unit, short_steps)
+                bl = response(h_unit, long_steps)
+                return b1, bs, bl
+
+            r1, rs, rl = three_horizons(directions[0])
+            t1, ts, tl = three_horizons(directions[1])
+            l1, ls, ll = three_horizons(directions[2])
+
+            return {
+                "diag_BH/fd_delta": delta,
+                "diag_BH/random_gain_h1": rms(r1),
+                f"diag_BH/random_gain_h{short_steps}": rms(rs),
+                f"diag_BH/random_gain_h{long_steps}": rms(rl),
+                f"diag_BH/random_h{short_steps}_over_h1": rms(rs) / (rms(r1) + 1e-12),
+                f"diag_BH/random_h{long_steps}_over_h1": rms(rl) / (rms(r1) + 1e-12),
+                f"diag_BH/random_h1_vs_h{short_steps}_cos": cosine(r1, rs),
+                f"diag_BH/random_h1_vs_h{long_steps}_cos": cosine(r1, rl),
+                "diag_BH/td_pattern_source_rms": rms(h_td),
+                "diag_BH/td_pattern_gain_h1": rms(t1),
+                f"diag_BH/td_pattern_gain_h{short_steps}": rms(ts),
+                f"diag_BH/td_pattern_gain_h{long_steps}": rms(tl),
+                f"diag_BH/td_pattern_h{short_steps}_over_h1": rms(ts) / (rms(t1) + 1e-12),
+                f"diag_BH/td_pattern_h{long_steps}_over_h1": rms(tl) / (rms(t1) + 1e-12),
+                f"diag_BH/td_pattern_h1_vs_h{long_steps}_cos": cosine(t1, tl),
+                "diag_BH/lag_pattern_source_rms": rms(h_lag),
+                "diag_BH/lag_pattern_gain_h1": rms(l1),
+                f"diag_BH/lag_pattern_gain_h{short_steps}": rms(ls),
+                f"diag_BH/lag_pattern_gain_h{long_steps}": rms(ll),
+                f"diag_BH/lag_pattern_h{short_steps}_over_h1": rms(ls) / (rms(l1) + 1e-12),
+                f"diag_BH/lag_pattern_h{long_steps}_over_h1": rms(ll) / (rms(l1) + 1e-12),
+                f"diag_BH/lag_pattern_h1_vs_h{long_steps}_cos": cosine(l1, ll),
+            }
+
+        return horizon_step
 
     def _build_ridge_diagnostic_step(self):
         """Local fit-to-convergence B approximation using matrix-free CG.
@@ -1453,6 +2120,8 @@ class IQLJAX:
         ridge_iters = self.diag_ridge_cg_iters
         ridge_tol = self.diag_ridge_cg_tol
         diag_seed = self.diag_seed
+        fd_epsilon = self.diag_fd_epsilon
+        fd_relative_scale = self.diag_fd_relative_scale
 
         def rms(x):
             return jnp.sqrt(jnp.mean(jnp.asarray(x) ** 2) + 1e-12)
@@ -1519,12 +2188,22 @@ class IQLJAX:
                 q_params_plus = optax.apply_updates(old_state.q_params, q_updates)
                 return q_apply({"params": q_params_plus}, probe_observations, probe_actions)
 
+            target_rms = rms(target)
+            delta = fd_epsilon * (jnp.maximum(target_rms, 1.0) if fd_relative_scale else 1.0)
+            fd_out = (
+                actual_probe_output(target + delta * h_unit)
+                - actual_probe_output(target - delta * h_unit)
+            ) / (2.0 * delta)
             _, adam_jvp = jax.jvp(actual_probe_output, (target,), (h_unit,))
 
             return {
                 "diag_B/ridge_random_gain_probe": rms(ridge_out),
+                "diag_B/ridge_vs_fd_adam_cos_random": cosine(ridge_out, fd_out),
+                "diag_B/ridge_over_fd_gain_random": rms(ridge_out) / (rms(fd_out) + 1e-12),
                 "diag_B/ridge_vs_jvp_adam_cos_random": cosine(ridge_out, adam_jvp),
                 "diag_B/ridge_cg_relative_residual": relative_linear_residual,
+                "diag_B/ridge_cg_quality_pass_005": (relative_linear_residual < 0.05).astype(jnp.float32),
+                "diag_B/ridge_cg_quality_pass_01": (relative_linear_residual < 0.10).astype(jnp.float32),
             }
 
         return ridge_step
@@ -1533,6 +2212,7 @@ class IQLJAX:
         self,
         batch: TensorBatch,
         diag_batch: Optional[TensorBatch] = None,
+        run_horizon_diagnostic: bool = False,
         run_ridge_diagnostic: bool = False,
     ) -> Dict[str, float]:
         old_state = self.state
@@ -1546,6 +2226,10 @@ class IQLJAX:
                 diag_batch,
             )
             log_dict.update(diag_log)
+
+            if run_horizon_diagnostic:
+                horizon_log = self._horizon_diagnostic_step(old_state, batch, diag_batch)
+                log_dict.update(horizon_log)
 
             if run_ridge_diagnostic:
                 ridge_log = self._ridge_diagnostic_step(old_state, batch, diag_batch)
@@ -2140,7 +2824,18 @@ def _train_impl(config: TrainConfig):
         diag_head_lr=config.diag_head_lr,
         diag_kappa_floor=config.diag_kappa_floor,
         diag_fd_epsilon=config.diag_fd_epsilon,
+        diag_fd_relative_scale=config.diag_fd_relative_scale,
+        diag_fd_small_multiplier=config.diag_fd_small_multiplier,
+        diag_fd_large_multiplier=config.diag_fd_large_multiplier,
         diag_num_basis_directions=config.diag_num_basis_directions,
+        diag_num_calibration_bins=config.diag_num_calibration_bins,
+        diag_enable_multistep_v_correctability=config.diag_enable_multistep_v_correctability,
+        diag_v_correctability_short_steps=config.diag_v_correctability_short_steps,
+        diag_v_correctability_long_steps=config.diag_v_correctability_long_steps,
+        diag_knn_k=config.diag_knn_k,
+        diag_actual_source_cap_fraction=config.diag_actual_source_cap_fraction,
+        diag_horizon_short_steps=config.diag_horizon_short_steps,
+        diag_horizon_long_steps=config.diag_horizon_long_steps,
         diag_ridge_lambda=config.diag_ridge_lambda,
         diag_ridge_cg_iters=config.diag_ridge_cg_iters,
         diag_ridge_cg_tol=config.diag_ridge_cg_tol,
@@ -2183,6 +2878,8 @@ def _train_impl(config: TrainConfig):
                 load_trainer_state=_load_progress_state,
                 get_restored_timestep=_training_timestep,
             )
+            if diagnostic_log_path is not None:
+                sanitize_diagnostic_jsonl(diagnostic_log_path, max_timestep=start_timestep)
             print(f"Restored training at timestep {start_timestep}.")
         else:
             start_timestep = _training_timestep()
@@ -2289,6 +2986,11 @@ def _train_impl(config: TrainConfig):
                 config.enable_propagation_diagnostics
                 and step % int(config.diag_every) == 0
             )
+            horizon_due = (
+                diag_due
+                and config.diag_enable_horizon_b
+                and step % int(config.diag_horizon_every) == 0
+            )
             ridge_due = (
                 diag_due
                 and config.diag_enable_ridge_b
@@ -2302,6 +3004,7 @@ def _train_impl(config: TrainConfig):
             log_dict = trainer.train(
                 batch,
                 diag_batch=diag_batch,
+                run_horizon_diagnostic=horizon_due,
                 run_ridge_diagnostic=ridge_due,
             )
 
