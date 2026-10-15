@@ -93,8 +93,8 @@ from algorithms.uk_offline.common.checkpointing import (
 
 TensorBatch = Dict[str, jnp.ndarray]
 
-ALGORITHM_NAME = "IQL-PD-V5"
-ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics v5"
+ALGORITHM_NAME = "IQL-PD-V6"
+ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics v6"
 
 EXP_ADV_MAX = 100.0
 LOG_STD_MIN = -20.0
@@ -203,6 +203,8 @@ class TrainConfig:
     diag_enable_residual_injection_calibration: bool = True
     diag_residual_calibration_every: int = 5000
     diag_residual_injection_fraction: float = 1e-2
+    diag_residual_injection_small_multiplier: float = 0.25
+    diag_residual_injection_large_multiplier: float = 4.0
 
     # Full Bellman-loop propagation diagnostic.  Unlike B^(H), which repeatedly
     # fits a frozen target, this virtually re-runs Q/V/target-network updates on a
@@ -211,6 +213,10 @@ class TrainConfig:
     diag_loop_every: int = 10000
     diag_loop_short_steps: int = 5
     diag_loop_long_steps: int = 20
+    # V6: in addition to the one-shot impulse response, replay the baseline TD/lag
+    # source direction at every virtual Bellman step.  This tests persistent forcing
+    # accumulation in epsilon_{k+1}=M_k epsilon_k+d_k even when impulse gain < 1.
+    diag_enable_forced_loop: bool = True
 
     # Finite-amplitude source diagnostics: evaluate the real Adam response at 25%, 50%,
     # and 100% of a safely clipped current source amplitude.
@@ -302,6 +308,9 @@ def validate_config(config: TrainConfig) -> None:
         assert config.diag_kernel_bandwidth_search_iters >= 4
         assert config.diag_residual_calibration_every > 0
         assert config.diag_residual_injection_fraction > 0.0
+        assert config.diag_residual_injection_small_multiplier > 0.0
+        assert config.diag_residual_injection_large_multiplier > 1.0
+        assert config.diag_residual_injection_small_multiplier < 1.0
         assert config.diag_loop_every > 0
         assert config.diag_loop_short_steps >= 1
         assert config.diag_loop_long_steps >= config.diag_loop_short_steps
@@ -945,8 +954,11 @@ class IQLJAX:
         diag_kernel_bandwidth_search_iters: int = 24,
         diag_enable_residual_injection_calibration: bool = True,
         diag_residual_injection_fraction: float = 1e-2,
+        diag_residual_injection_small_multiplier: float = 0.25,
+        diag_residual_injection_large_multiplier: float = 4.0,
         diag_loop_short_steps: int = 5,
         diag_loop_long_steps: int = 20,
+        diag_enable_forced_loop: bool = True,
         diag_actual_source_cap_fraction: float = 0.05,
         diag_horizon_short_steps: int = 5,
         diag_horizon_long_steps: int = 20,
@@ -992,8 +1004,11 @@ class IQLJAX:
         self.diag_kernel_bandwidth_search_iters = int(diag_kernel_bandwidth_search_iters)
         self.diag_enable_residual_injection_calibration = bool(diag_enable_residual_injection_calibration)
         self.diag_residual_injection_fraction = float(diag_residual_injection_fraction)
+        self.diag_residual_injection_small_multiplier = float(diag_residual_injection_small_multiplier)
+        self.diag_residual_injection_large_multiplier = float(diag_residual_injection_large_multiplier)
         self.diag_loop_short_steps = int(diag_loop_short_steps)
         self.diag_loop_long_steps = int(diag_loop_long_steps)
+        self.diag_enable_forced_loop = bool(diag_enable_forced_loop)
         self.diag_actual_source_cap_fraction = float(diag_actual_source_cap_fraction)
         self.diag_horizon_short_steps = int(diag_horizon_short_steps)
         self.diag_horizon_long_steps = int(diag_horizon_long_steps)
@@ -1332,6 +1347,9 @@ class IQLJAX:
         v_tx = self.v_tx
         discount = self.discount
         iql_tau = self.iql_tau
+        beta = self.beta
+        iql_deterministic = self.iql_deterministic
+        actor_apply_fn = self.actor_def.apply
         num_critics = self.num_critics
         qf_lr = self.qf_lr
         fd_epsilon = self.diag_fd_epsilon
@@ -2143,6 +2161,39 @@ class IQLJAX:
             q_value_scale = jnp.maximum(rms(probe_q_target), 1e-8)
             bellman_scale = jnp.maximum(target_rms, 1e-8)
 
+            # V6 policy-bridge diagnostics.  Value instability matters for control only when
+            # it changes the advantage-weighted behavior-cloning distribution or the actor.
+            policy_adv_probe = jax.lax.stop_gradient(probe_q_target - probe_v_pre)
+            policy_weight_probe = jnp.minimum(jnp.exp(beta * policy_adv_probe), EXP_ADV_MAX)
+            policy_weight_sum = jnp.sum(policy_weight_probe) + 1e-12
+            policy_weight_prob = policy_weight_probe / policy_weight_sum
+            policy_ess_fraction = (policy_weight_sum ** 2) / (
+                float(policy_weight_probe.shape[0]) * jnp.sum(policy_weight_probe ** 2) + 1e-12
+            )
+            policy_entropy_fraction = -jnp.sum(
+                policy_weight_prob * jnp.log(policy_weight_prob + 1e-12)
+            ) / jnp.log(float(policy_weight_probe.shape[0]) + 1e-12)
+            policy_saturation_fraction = jnp.mean(
+                (policy_weight_probe >= (EXP_ADV_MAX * (1.0 - 1e-6))).astype(jnp.float32)
+            )
+
+            def actor_mean(params):
+                out = actor_apply_fn({"params": params}, probe_observations, training=False)
+                return out if iql_deterministic else out[0]
+
+            actor_mean_old = actor_mean(old_state.actor_params)
+            actor_mean_new = actor_mean(new_state.actor_params)
+            actor_mean_delta = actor_mean_new - actor_mean_old
+
+            def weight_mass_top_decile(signal):
+                threshold = jnp.quantile(jnp.asarray(signal), 0.90)
+                mask = (jnp.asarray(signal) >= threshold).astype(jnp.float32)
+                return jnp.sum(policy_weight_probe * mask) / policy_weight_sum
+
+            abs_lag_probe = jnp.abs(eps_lag_probe)
+            abs_td_probe = jnp.abs(td_error_probe)
+            abs_residual_local_probe = jnp.abs(d_kernel_local_probe)
+
             log_dict = {
                 # ---- Residual-source diagnostics and head calibration ----
                 "diag_residual/raw_score_mean_probe": jnp.mean(score_pre),
@@ -2368,6 +2419,25 @@ class IQLJAX:
                 "diag_scale/prop_h_v_kernel_local_over_target": rms(h_v_kernel_local_fd_scaled) / bellman_scale,
                 "diag_scale/prop_h_q_kernel_local_over_target": rms(h_q_kernel_local_fd_scaled) / bellman_scale,
 
+                # ---- Policy bridge: does critic/value pathology reach AWBC extraction? ----
+                "diag_policy/adv_rms_probe": rms(policy_adv_probe),
+                "diag_policy/exp_adv_mean_probe": jnp.mean(policy_weight_probe),
+                "diag_policy/exp_adv_p90_probe": jnp.quantile(policy_weight_probe, 0.90),
+                "diag_policy/exp_adv_p99_probe": jnp.quantile(policy_weight_probe, 0.99),
+                "diag_policy/exp_adv_max_probe": jnp.max(policy_weight_probe),
+                "diag_policy/exp_adv_saturation_fraction": policy_saturation_fraction,
+                "diag_policy/awbc_ess_fraction": policy_ess_fraction,
+                "diag_policy/awbc_entropy_fraction": policy_entropy_fraction,
+                "diag_policy/weight_vs_abs_lag_corr": corr(policy_weight_probe, abs_lag_probe),
+                "diag_policy/weight_vs_abs_td_corr": corr(policy_weight_probe, abs_td_probe),
+                "diag_policy/weight_vs_abs_residual_local_corr": corr(policy_weight_probe, abs_residual_local_probe),
+                "diag_policy/weight_mass_top10_abs_lag": weight_mass_top_decile(abs_lag_probe),
+                "diag_policy/weight_mass_top10_abs_td": weight_mass_top_decile(abs_td_probe),
+                "diag_policy/weight_mass_top10_abs_residual_local": weight_mass_top_decile(abs_residual_local_probe),
+                "diag_policy/actor_mean_rms_probe": rms(actor_mean_old),
+                "diag_policy/actor_mean_delta_rms_probe": rms(actor_mean_delta),
+                "diag_policy/actor_mean_delta_over_mean_rms": rms(actor_mean_delta) / (rms(actor_mean_old) + 1e-12),
+
                 # ---- B finite-difference numerical validity ----
                 "diag_B/fd_target_rms": target_rms,
                 "diag_B/fd_effective_delta": fd_base_delta,
@@ -2576,13 +2646,14 @@ class IQLJAX:
         return diagnostic_step
 
     def _build_residual_calibration_step(self):
-        """Virtual ground-truth calibration for practical residual estimators.
+        """Controlled calibration of residual estimators across amplitude and structure.
 
-        We add a known smooth or random displacement to V only on a diagnostic probe.
-        Because d(s)=V(s)-V*(s), the central difference of a valid d-estimator with
-        respect to this injected V shift should recover the injected direction.  This
-        distinguishes an estimator that merely correlates with Q scale from one that can
-        actually detect systematic expectile-solver mismatch.
+        V5 showed that the local-kernel estimator can recover the *direction* of a smooth
+        injected V-displacement, but its magnitude is attenuated.  V6 therefore adds:
+          1) small/base/large amplitude sweeps to reveal a detection floor/nonlinearity;
+          2) direct power tests for the local-kernel MMR/cross-fit scalar diagnostics;
+          3) random-sign injection as a negative control.
+        No virtual perturbation is committed to training.
         """
         q_apply = self.q_def.apply
         v_apply = self.v_def.apply
@@ -2593,14 +2664,15 @@ class IQLJAX:
         kernel_target_neff = self.diag_kernel_target_neff
         kernel_search_iters = self.diag_kernel_bandwidth_search_iters
         injection_fraction = self.diag_residual_injection_fraction
+        small_mult = self.diag_residual_injection_small_multiplier
+        large_mult = self.diag_residual_injection_large_multiplier
         diag_seed = self.diag_seed
 
         def rms(x):
             return jnp.sqrt(jnp.mean(jnp.asarray(x) ** 2) + 1e-12)
 
         def cosine(a, b):
-            a = jnp.ravel(a)
-            b = jnp.ravel(b)
+            a = jnp.ravel(a); b = jnp.ravel(b)
             return jnp.sum(a * b) / (jnp.linalg.norm(a) * jnp.linalg.norm(b) + 1e-12)
 
         def corr(a, b):
@@ -2625,26 +2697,54 @@ class IQLJAX:
             lo = jnp.maximum(min_d * 1e-3, kernel_min_bandwidth ** 2)
             hi = jnp.maximum(max_d * 10.0, lo * 10.0)
             target = jnp.minimum(kernel_target_neff, float(max(n - 1, 1)))
+
             def neff(s2):
                 w = jnp.exp(-0.5 * dist2 / jnp.maximum(s2, 1e-12)) * off
                 ws = jnp.sum(w, axis=1) + 1e-12
                 return jnp.mean((ws ** 2) / (jnp.sum(w ** 2, axis=1) + 1e-12))
+
             def body(_, bounds):
                 l, h = bounds
-                m = jnp.sqrt(jnp.maximum(l*h, 1e-24))
+                m = jnp.sqrt(jnp.maximum(l * h, 1e-24))
                 e = neff(m)
                 return (jnp.where(e < target, m, l), jnp.where(e < target, h, m))
+
             lo2, hi2 = jax.lax.fori_loop(0, kernel_search_iters, body, (lo, hi))
-            s2 = jnp.sqrt(jnp.maximum(lo2*hi2, 1e-24))
+            s2 = jnp.sqrt(jnp.maximum(lo2 * hi2, 1e-24))
             return s2, neff(s2)
 
-        def kernel_conditional(states, values, sigma2):
+        def kernel_weights(states, sigma2):
             diff = states[:, None, :] - states[None, :, :]
             dist2 = jnp.mean(diff ** 2, axis=-1)
             w = jnp.exp(-0.5 * dist2 / jnp.maximum(sigma2, 1e-12))
-            w = w * (1.0 - jnp.eye(states.shape[0], dtype=w.dtype))
+            return w * (1.0 - jnp.eye(states.shape[0], dtype=w.dtype))
+
+        def kernel_conditional(states, values, sigma2):
+            w = kernel_weights(states, sigma2)
             ws = jnp.sum(w, axis=1) + 1e-12
             return jnp.sum(w * values[None, :], axis=1) / ws
+
+        def kernel_moment_energy(states, score, sigma2):
+            w = kernel_weights(states, sigma2)
+            pair = score[:, None] * w * score[None, :]
+            return jnp.sum(pair) / (jnp.sum(w) + 1e-12)
+
+        def crossfit_energy(states, score, sigma2):
+            n = states.shape[0]
+            split = n // 2
+            sa, sb = states[:split], states[split:]
+            ma, mb = score[:split], score[split:]
+
+            def cross_cond(query, ref, values):
+                diff = query[:, None, :] - ref[None, :, :]
+                d2 = jnp.mean(diff ** 2, axis=-1)
+                w = jnp.exp(-0.5 * d2 / jnp.maximum(sigma2, 1e-12))
+                ws = jnp.sum(w, axis=1) + 1e-12
+                return jnp.sum(w * values[None, :], axis=1) / ws
+
+            ga = cross_cond(sb, sa, ma)
+            gb = cross_cond(sa, sb, mb)
+            return 0.5 * (jnp.mean(ga * mb) + jnp.mean(gb * ma))
 
         @jax.jit
         def calibration_step(state: IQLState, probe_batch: TensorBatch):
@@ -2652,7 +2752,7 @@ class IQLJAX:
             a = probe_batch["actions"]
             q_target = jnp.min(q_apply({"params": state.q_target_params}, s, a), axis=0)
             v = v_apply({"params": state.v_params}, s)
-            amp = injection_fraction * jnp.maximum(rms(q_target), 1.0)
+            base_amp = injection_fraction * jnp.maximum(rms(q_target), 1.0)
 
             key = jax.random.fold_in(jax.random.PRNGKey(diag_seed + 404), state.total_it + 1)
             k1, k2 = jax.random.split(key)
@@ -2668,67 +2768,84 @@ class IQLJAX:
                 w = jnp.abs(iql_tau - (u < 0.0).astype(jnp.float32))
                 return w * u, w
 
-            def recover(direction):
+            base_score, _ = score_weight(v)
+            base_mmr = kernel_moment_energy(s, base_score, sigma2)
+            base_crossfit = crossfit_energy(s, base_score, sigma2)
+
+            def recover(direction, amp):
                 sp, wp = score_weight(v + amp * direction)
                 sm, wm = score_weight(v - amp * direction)
 
                 gkp = knn_conditional(s, sp); gkm = knn_conditional(s, sm)
                 kkp = knn_conditional(s, wp); kkm = knn_conditional(s, wm)
-                dkp = -gkp / jnp.maximum(kkp, kappa_floor)
-                dkm = -gkm / jnp.maximum(kkm, kappa_floor)
-                rec_knn = (dkp - dkm) / (2.0 * amp)
+                rec_knn = ((-gkp / jnp.maximum(kkp, kappa_floor))
+                           - (-gkm / jnp.maximum(kkm, kappa_floor))) / (2.0 * amp)
 
                 glp = kernel_conditional(s, sp, sigma2); glm = kernel_conditional(s, sm, sigma2)
                 klp = kernel_conditional(s, wp, sigma2); klm = kernel_conditional(s, wm, sigma2)
-                dlp = -glp / jnp.maximum(klp, kappa_floor)
-                dlm = -glm / jnp.maximum(klm, kappa_floor)
-                rec_local = (dlp - dlm) / (2.0 * amp)
+                rec_local = ((-glp / jnp.maximum(klp, kappa_floor))
+                             - (-glm / jnp.maximum(klm, kappa_floor))) / (2.0 * amp)
+
+                mmr_sym = 0.5 * (
+                    kernel_moment_energy(s, sp, sigma2) + kernel_moment_energy(s, sm, sigma2)
+                )
+                cf_sym = 0.5 * (crossfit_energy(s, sp, sigma2) + crossfit_energy(s, sm, sigma2))
+                mmr_delta = mmr_sym - base_mmr
+                cf_delta = cf_sym - base_crossfit
 
                 return (
-                    cosine(rec_knn, direction),
-                    rms(rec_knn),
-                    rms(rec_knn - direction) / (rms(direction) + 1e-12),
-                    corr(rec_knn, direction),
-                    cosine(rec_local, direction),
-                    rms(rec_local),
-                    rms(rec_local - direction) / (rms(direction) + 1e-12),
-                    corr(rec_local, direction),
+                    cosine(rec_knn, direction), rms(rec_knn),
+                    rms(rec_knn - direction) / (rms(direction) + 1e-12), corr(rec_knn, direction),
+                    cosine(rec_local, direction), rms(rec_local),
+                    rms(rec_local - direction) / (rms(direction) + 1e-12), corr(rec_local, direction),
+                    mmr_delta, mmr_delta / (amp ** 2 + 1e-12),
+                    cf_delta, cf_delta / (amp ** 2 + 1e-12),
                 )
 
-            smooth_stats = recover(smooth)
-            random_stats = recover(random_dir)
-            return {
-                "diag_rescal/injection_amplitude": amp,
+            amp_small = base_amp * small_mult
+            amp_large = base_amp * large_mult
+            smooth_small = recover(smooth, amp_small)
+            smooth_base = recover(smooth, base_amp)
+            smooth_large = recover(smooth, amp_large)
+            random_base = recover(random_dir, base_amp)
+
+            out = {
+                "diag_rescal/injection_amplitude": base_amp,
+                "diag_rescal/injection_amplitude_small": amp_small,
+                "diag_rescal/injection_amplitude_large": amp_large,
                 "diag_rescal/local_kernel_sigma2": sigma2,
                 "diag_rescal/local_kernel_neff": achieved_neff,
-                "diag_rescal/smooth_knn_cos": smooth_stats[0],
-                "diag_rescal/smooth_knn_gain": smooth_stats[1],
-                "diag_rescal/smooth_knn_relerr": smooth_stats[2],
-                "diag_rescal/smooth_knn_corr": smooth_stats[3],
-                "diag_rescal/smooth_kernel_local_cos": smooth_stats[4],
-                "diag_rescal/smooth_kernel_local_gain": smooth_stats[5],
-                "diag_rescal/smooth_kernel_local_relerr": smooth_stats[6],
-                "diag_rescal/smooth_kernel_local_corr": smooth_stats[7],
-                "diag_rescal/random_knn_cos": random_stats[0],
-                "diag_rescal/random_knn_gain": random_stats[1],
-                "diag_rescal/random_knn_relerr": random_stats[2],
-                "diag_rescal/random_knn_corr": random_stats[3],
-                "diag_rescal/random_kernel_local_cos": random_stats[4],
-                "diag_rescal/random_kernel_local_gain": random_stats[5],
-                "diag_rescal/random_kernel_local_relerr": random_stats[6],
-                "diag_rescal/random_kernel_local_corr": random_stats[7],
+                "diag_rescal/base_kernel_local_moment_energy": base_mmr,
+                "diag_rescal/base_kernel_local_crossfit_energy": base_crossfit,
             }
+
+            # Backward-compatible V5 aliases use the base amplitude.
+            names = ("knn_cos", "knn_gain", "knn_relerr", "knn_corr",
+                     "kernel_local_cos", "kernel_local_gain", "kernel_local_relerr", "kernel_local_corr",
+                     "mmr_delta", "mmr_delta_over_amp2", "crossfit_delta", "crossfit_delta_over_amp2")
+            for name, value in zip(names, smooth_base):
+                out[f"diag_rescal/smooth_{name}"] = value
+            for name, value in zip(names, random_base):
+                out[f"diag_rescal/random_{name}"] = value
+
+            for tag, stats in (("small", smooth_small), ("base", smooth_base), ("large", smooth_large)):
+                for name, value in zip(names, stats):
+                    out[f"diag_rescal/smooth_{name}_{tag}"] = value
+            return out
 
         return calibration_step
 
-    def _build_closed_loop_diagnostic_step(self):
-        """Actual Q/V/target-network feedback response to a one-time target perturbation.
 
-        B^(H) above intentionally freezes the target and repeatedly fits the critic.  Here each
-        virtual step re-computes IQL's V target, Bellman target, Q update and Polyak target update
-        on a fixed sampled minibatch sequence.  Thus the response includes the Bellman feedback
-        path that the original stability recursion M_k = gamma B_k D_k was meant to capture.
-        Actor updates are omitted because vanilla IQL Q/V updates do not depend on the actor.
+    def _build_closed_loop_diagnostic_step(self):
+        """Bellman-loop impulse and persistent-forcing diagnostics.
+
+        V5 established that one-shot impulse gains Phi^(H) can remain below one even when
+        frozen-target B^(H) is expansive.  The original recursion, however, contains a new
+        forcing d_k at every iteration.  V6 therefore keeps the impulse response and adds a
+        *forced response*: at every virtual step it injects the baseline run's current TD- or
+        online-target-lag direction.  The forcing directions are computed from an unperturbed
+        baseline rollout and are shared by +/- branches, so the central difference remains a
+        local response measurement rather than a branch-dependent intervention.
         """
         q_apply = self.q_def.apply
         v_apply = self.v_def.apply
@@ -2741,114 +2858,180 @@ class IQLJAX:
         fd_relative_scale = self.diag_fd_relative_scale
         short_steps = self.diag_loop_short_steps
         long_steps = self.diag_loop_long_steps
+        enable_forced = self.diag_enable_forced_loop
         diag_seed = self.diag_seed
 
         def rms(x):
             return jnp.sqrt(jnp.mean(jnp.asarray(x) ** 2) + 1e-12)
 
-        def cosine(a,b):
-            a=jnp.ravel(a); b=jnp.ravel(b)
-            return jnp.sum(a*b)/(jnp.linalg.norm(a)*jnp.linalg.norm(b)+1e-12)
+        def cosine(a, b):
+            a = jnp.ravel(a); b = jnp.ravel(b)
+            return jnp.sum(a * b) / (jnp.linalg.norm(a) * jnp.linalg.norm(b) + 1e-12)
 
         def normdir(h):
             return h / jnp.maximum(rms(h), 1e-8)
 
+        def sequence_coherence(seq, n):
+            x = seq[:n]
+            denom = jnp.sum(jax.vmap(rms)(x)) + 1e-12
+            return rms(jnp.sum(x, axis=0)) / denom
+
+        def consecutive_cosine(seq, n):
+            x = seq[:n]
+            if n <= 1:
+                return jnp.asarray(1.0, dtype=x.dtype)
+            a, b = x[1:], x[:-1]
+            dot = jnp.sum(a * b, axis=1)
+            den = jnp.linalg.norm(a, axis=1) * jnp.linalg.norm(b, axis=1) + 1e-12
+            return jnp.mean(dot / den)
+
         @jax.jit
         def loop_step(old_state: IQLState, batch_seq: TensorBatch, probe_batch: TensorBatch):
+            steps = batch_seq["observations"].shape[0]
             first_obs = batch_seq["observations"][0]
             first_actions = batch_seq["actions"][0]
             first_rewards = jnp.squeeze(batch_seq["rewards"][0], axis=-1)
             first_next = batch_seq["next_observations"][0]
             first_dones = jnp.squeeze(batch_seq["dones"][0], axis=-1)
             first_next_v = v_apply({"params": old_state.v_params}, first_next)
-            first_target = first_rewards + (1.0-first_dones)*discount*first_next_v
-            delta = fd_epsilon * (jnp.maximum(rms(first_target),1.0) if fd_relative_scale else 1.0)
-
-            q_online = q_apply({"params": old_state.q_params}, first_obs, first_actions)
-            q_target = q_apply({"params": old_state.q_target_params}, first_obs, first_actions)
-            h_td = jnp.mean(q_online, axis=0) - first_target
-            h_lag = jnp.min(q_online, axis=0) - jnp.min(q_target, axis=0)
-            key = jax.random.fold_in(jax.random.PRNGKey(diag_seed + 808), old_state.total_it + 1)
-            h_random = jax.random.rademacher(key, shape=first_target.shape, dtype=first_target.dtype)
-            dirs = (normdir(h_random), normdir(h_td), normdir(h_lag))
+            first_target = first_rewards + (1.0 - first_dones) * discount * first_next_v
+            delta = fd_epsilon * (jnp.maximum(rms(first_target), 1.0) if fd_relative_scale else 1.0)
 
             probe_obs = probe_batch["observations"]
             probe_act = probe_batch["actions"]
+            probe_rew = jnp.squeeze(probe_batch["rewards"], axis=-1)
+            probe_next = probe_batch["next_observations"]
+            probe_done = jnp.squeeze(probe_batch["dones"], axis=-1)
 
-            def simulate(h_unit, sign):
-                carry0 = (
-                    old_state.q_params, old_state.q_target_params, old_state.q_opt_state,
-                    old_state.v_params, old_state.v_opt_state,
+            carry0 = (
+                old_state.q_params, old_state.q_target_params, old_state.q_opt_state,
+                old_state.v_params, old_state.v_opt_state,
+            )
+
+            def update_once(carry, obs, act, rew, nxt, done, extra_target):
+                q_params, q_target_params, q_opt_state, v_params, v_opt_state = carry
+                rew = jnp.squeeze(rew, axis=-1)
+                done = jnp.squeeze(done, axis=-1)
+
+                next_v = v_apply({"params": v_params}, nxt)
+                q_backup = rew + (1.0 - done) * discount * next_v + extra_target
+                target_qs = q_apply({"params": q_target_params}, obs, act)
+                target_q_for_v = jax.lax.stop_gradient(jnp.min(target_qs, axis=0))
+
+                def v_loss_fn(p):
+                    vv = v_apply({"params": p}, obs)
+                    u = target_q_for_v - vv
+                    w = jnp.abs(iql_tau - (u < 0.0).astype(jnp.float32))
+                    return jnp.mean(w * u ** 2)
+
+                v_grads = jax.grad(v_loss_fn)(v_params)
+                v_updates, v_opt_state_new = v_tx.update(v_grads, v_opt_state, v_params)
+                v_params_new = optax.apply_updates(v_params, v_updates)
+
+                def q_loss_fn(p):
+                    qq = q_apply({"params": p}, obs, act)
+                    return jnp.mean((qq - jax.lax.stop_gradient(q_backup)[None, :]) ** 2)
+
+                q_grads = jax.grad(q_loss_fn)(q_params)
+                q_updates, q_opt_state_new = q_tx.update(q_grads, q_opt_state, q_params)
+                q_params_new = optax.apply_updates(q_params, q_updates)
+                q_target_params_new = optax.incremental_update(q_params_new, q_target_params, target_tau)
+                new_carry = (q_params_new, q_target_params_new, q_opt_state_new, v_params_new, v_opt_state_new)
+                return new_carry
+
+            def probe_metrics(carry):
+                q_params, q_target_params, _, v_params, _ = carry
+                q_online_all = q_apply({"params": q_params}, probe_obs, probe_act)
+                q_target_all = q_apply({"params": q_target_params}, probe_obs, probe_act)
+                probe_online_min = jnp.min(q_online_all, axis=0)
+                probe_online_mean = jnp.mean(q_online_all, axis=0)
+                probe_target_min = jnp.min(q_target_all, axis=0)
+                lag = probe_online_min - probe_target_min
+                pnext_v = v_apply({"params": v_params}, probe_next)
+                pbackup = probe_rew + (1.0 - probe_done) * discount * pnext_v
+                td = probe_online_mean - pbackup
+                return probe_online_min, lag, td
+
+            # Unperturbed baseline rollout: supplies a realistic direction at every step and
+            # logs whether the observable error on a fixed probe is persistent/coherent.
+            def baseline_one(carry, xs):
+                obs, act, rew, nxt, done = xs
+                q_params, q_target_params, _, v_params, _ = carry
+                rew_s = jnp.squeeze(rew, axis=-1)
+                done_s = jnp.squeeze(done, axis=-1)
+                next_v = v_apply({"params": v_params}, nxt)
+                q_backup = rew_s + (1.0 - done_s) * discount * next_v
+                q_online = q_apply({"params": q_params}, obs, act)
+                q_target = q_apply({"params": q_target_params}, obs, act)
+                h_td = jnp.mean(q_online, axis=0) - q_backup
+                h_lag = jnp.min(q_online, axis=0) - jnp.min(q_target, axis=0)
+                new_carry = update_once(carry, obs, act, rew, nxt, done, jnp.zeros_like(q_backup))
+                p_online, p_lag, p_td = probe_metrics(new_carry)
+                return new_carry, (
+                    normdir(h_td), normdir(h_lag), rms(h_td), rms(h_lag),
+                    p_online, p_lag, p_td,
                 )
 
-                def one_step(carry, xs):
-                    q_params, q_target_params, q_opt_state, v_params, v_opt_state = carry
-                    idx, obs, act, rew, nxt, done = xs
-                    rew = jnp.squeeze(rew, axis=-1)
-                    done = jnp.squeeze(done, axis=-1)
+            xs = (
+                batch_seq["observations"], batch_seq["actions"], batch_seq["rewards"],
+                batch_seq["next_observations"], batch_seq["dones"],
+            )
+            _, baseline = jax.lax.scan(baseline_one, carry0, xs)
+            td_dirs, lag_dirs, td_rms_seq, lag_rms_seq, base_probe_q, base_probe_lag, base_probe_td = baseline
 
-                    # Original IQL sequencing: Q Bellman target uses old V of this virtual step.
-                    next_v = v_apply({"params": v_params}, nxt)
-                    q_backup = rew + (1.0-done)*discount*next_v
-                    q_backup = q_backup + jnp.where(idx == 0, sign*delta*h_unit, 0.0)
+            key = jax.random.fold_in(jax.random.PRNGKey(diag_seed + 808), old_state.total_it + 1)
+            h_random = jax.random.rademacher(key, shape=first_target.shape, dtype=first_target.dtype)
+            random_dirs = jnp.broadcast_to(normdir(h_random)[None, :], td_dirs.shape)
 
-                    target_qs = q_apply({"params": q_target_params}, obs, act)
-                    target_q_for_v = jax.lax.stop_gradient(jnp.min(target_qs, axis=0))
+            def simulate(direction_seq, sign, persistent):
+                def one(carry, xs2):
+                    idx, obs, act, rew, nxt, done, direction = xs2
+                    active = jnp.asarray(1.0, dtype=direction.dtype) if persistent else (idx == 0).astype(direction.dtype)
+                    extra = sign * delta * active * direction
+                    new_carry = update_once(carry, obs, act, rew, nxt, done, extra)
+                    p_online, p_lag, _ = probe_metrics(new_carry)
+                    return new_carry, (p_online, p_lag)
 
-                    def v_loss_fn(p):
-                        vv = v_apply({"params": p}, obs)
-                        u = target_q_for_v - vv
-                        w = jnp.abs(iql_tau - (u < 0.0).astype(jnp.float32))
-                        return jnp.mean(w * u**2)
-                    v_grads = jax.grad(v_loss_fn)(v_params)
-                    v_updates, v_opt_state_new = v_tx.update(v_grads, v_opt_state, v_params)
-                    v_params_new = optax.apply_updates(v_params, v_updates)
-
-                    def q_loss_fn(p):
-                        qq = q_apply({"params": p}, obs, act)
-                        return jnp.mean((qq - jax.lax.stop_gradient(q_backup)[None,:])**2)
-                    q_grads = jax.grad(q_loss_fn)(q_params)
-                    q_updates, q_opt_state_new = q_tx.update(q_grads, q_opt_state, q_params)
-                    q_params_new = optax.apply_updates(q_params, q_updates)
-                    q_target_params_new = optax.incremental_update(q_params_new, q_target_params, target_tau)
-
-                    probe_online = jnp.min(q_apply({"params": q_params_new}, probe_obs, probe_act), axis=0)
-                    probe_target = jnp.min(q_apply({"params": q_target_params_new}, probe_obs, probe_act), axis=0)
-                    probe_lag = probe_online - probe_target
-                    new_carry = (q_params_new, q_target_params_new, q_opt_state_new, v_params_new, v_opt_state_new)
-                    return new_carry, (probe_online, probe_lag)
-
-                steps = batch_seq["observations"].shape[0]
                 idxs = jnp.arange(steps, dtype=jnp.int32)
-                xs = (idxs, batch_seq["observations"], batch_seq["actions"], batch_seq["rewards"], batch_seq["next_observations"], batch_seq["dones"])
-                _, outs = jax.lax.scan(one_step, carry0, xs)
+                xs2 = (
+                    idxs, batch_seq["observations"], batch_seq["actions"], batch_seq["rewards"],
+                    batch_seq["next_observations"], batch_seq["dones"], direction_seq,
+                )
+                _, outs = jax.lax.scan(one, carry0, xs2)
                 return outs
 
-            def response(h_unit):
-                plus_q, plus_lag = simulate(h_unit, 1.0)
-                minus_q, minus_lag = simulate(h_unit, -1.0)
-                return (plus_q-minus_q)/(2.0*delta), (plus_lag-minus_lag)/(2.0*delta)
+            def response(direction_seq, persistent=False):
+                plus_q, plus_lag = simulate(direction_seq, 1.0, persistent)
+                minus_q, minus_lag = simulate(direction_seq, -1.0, persistent)
+                return (plus_q - minus_q) / (2.0 * delta), (plus_lag - minus_lag) / (2.0 * delta)
 
-            rq, rlag = response(dirs[0])
-            tq, tlag = response(dirs[1])
-            lq, llag = response(dirs[2])
+            rq, rlag = response(random_dirs, persistent=False)
+            tq, tlag = response(td_dirs, persistent=False)
+            lq, llag = response(lag_dirs, persistent=False)
+
+            if enable_forced:
+                ftq, ftlag = response(td_dirs, persistent=True)
+                flq, fllag = response(lag_dirs, persistent=True)
+            else:
+                ftq = jnp.full_like(tq, jnp.nan); ftlag = jnp.full_like(tlag, jnp.nan)
+                flq = jnp.full_like(lq, jnp.nan); fllag = jnp.full_like(llag, jnp.nan)
 
             i1 = 0
             ishort = short_steps - 1
             ilong = long_steps - 1
 
-            def pack(prefix, qresp, lagresp, source):
+            def pack_impulse(prefix, qresp, lagresp, source_rms):
                 g1 = rms(qresp[i1]); gs = rms(qresp[ishort]); gl = rms(qresp[ilong])
                 return {
-                    f"diag_loop/{prefix}_source_rms": rms(source),
+                    f"diag_loop/{prefix}_source_rms": source_rms,
                     f"diag_loop/{prefix}_q_gain_h1": g1,
                     f"diag_loop/{prefix}_q_gain_h{short_steps}": gs,
                     f"diag_loop/{prefix}_q_gain_h{long_steps}": gl,
-                    f"diag_loop/{prefix}_q_h{short_steps}_over_h1": gs/(g1+1e-12),
-                    f"diag_loop/{prefix}_q_h{long_steps}_over_h1": gl/(g1+1e-12),
-                    f"diag_loop/{prefix}_q_expansive_h1": (g1>1.0).astype(jnp.float32),
-                    f"diag_loop/{prefix}_q_expansive_h{short_steps}": (gs>1.0).astype(jnp.float32),
-                    f"diag_loop/{prefix}_q_expansive_h{long_steps}": (gl>1.0).astype(jnp.float32),
+                    f"diag_loop/{prefix}_q_h{short_steps}_over_h1": gs / (g1 + 1e-12),
+                    f"diag_loop/{prefix}_q_h{long_steps}_over_h1": gl / (g1 + 1e-12),
+                    f"diag_loop/{prefix}_q_expansive_h1": (g1 > 1.0).astype(jnp.float32),
+                    f"diag_loop/{prefix}_q_expansive_h{short_steps}": (gs > 1.0).astype(jnp.float32),
+                    f"diag_loop/{prefix}_q_expansive_h{long_steps}": (gl > 1.0).astype(jnp.float32),
                     f"diag_loop/{prefix}_q_h1_vs_h{short_steps}_cos": cosine(qresp[i1], qresp[ishort]),
                     f"diag_loop/{prefix}_q_h1_vs_h{long_steps}_cos": cosine(qresp[i1], qresp[ilong]),
                     f"diag_loop/{prefix}_lag_gain_h1": rms(lagresp[i1]),
@@ -2856,13 +3039,64 @@ class IQLJAX:
                     f"diag_loop/{prefix}_lag_gain_h{long_steps}": rms(lagresp[ilong]),
                 }
 
+            def pack_forced(prefix, qresp, lagresp, impulse_qresp, source_rms_seq, baseline_error):
+                g1 = rms(qresp[i1]); gs = rms(qresp[ishort]); gl = rms(qresp[ilong])
+                return {
+                    f"diag_forced/{prefix}_q_response_h1": g1,
+                    f"diag_forced/{prefix}_q_response_h{short_steps}": gs,
+                    f"diag_forced/{prefix}_q_response_h{long_steps}": gl,
+                    f"diag_forced/{prefix}_q_energy_gain_h{short_steps}": gs / jnp.sqrt(float(short_steps)),
+                    f"diag_forced/{prefix}_q_energy_gain_h{long_steps}": gl / jnp.sqrt(float(long_steps)),
+                    f"diag_forced/{prefix}_q_per_step_gain_h{short_steps}": gs / float(short_steps),
+                    f"diag_forced/{prefix}_q_per_step_gain_h{long_steps}": gl / float(long_steps),
+                    f"diag_forced/{prefix}_vs_impulse_h{short_steps}": gs / (rms(impulse_qresp[ishort]) + 1e-12),
+                    f"diag_forced/{prefix}_vs_impulse_h{long_steps}": gl / (rms(impulse_qresp[ilong]) + 1e-12),
+                    f"diag_forced/{prefix}_q_with_baseline_error_cos_h{short_steps}": cosine(qresp[ishort], baseline_error[ishort]),
+                    f"diag_forced/{prefix}_q_with_baseline_error_cos_h{long_steps}": cosine(qresp[ilong], baseline_error[ilong]),
+                    f"diag_forced/{prefix}_lag_response_h{short_steps}": rms(lagresp[ishort]),
+                    f"diag_forced/{prefix}_lag_response_h{long_steps}": rms(lagresp[ilong]),
+                    f"diag_forced/{prefix}_natural_source_rms_h1": source_rms_seq[i1],
+                    f"diag_forced/{prefix}_natural_source_rms_mean_h{short_steps}": jnp.mean(source_rms_seq[:short_steps]),
+                    f"diag_forced/{prefix}_natural_source_rms_mean_h{long_steps}": jnp.mean(source_rms_seq[:long_steps]),
+                    f"diag_forced/{prefix}_natural_source_rms_max_h{long_steps}": jnp.max(source_rms_seq[:long_steps]),
+                    f"diag_forced/{prefix}_natural_source_rms_h{long_steps}_over_h1": source_rms_seq[ilong] / (source_rms_seq[i1] + 1e-12),
+                }
+
             out = {"diag_loop/fd_delta": delta}
-            out.update(pack("random", rq, rlag, h_random))
-            out.update(pack("td", tq, tlag, h_td))
-            out.update(pack("lag", lq, llag, h_lag))
+            out.update(pack_impulse("random", rq, rlag, rms(h_random)))
+            out.update(pack_impulse("td", tq, tlag, td_rms_seq[i1]))
+            out.update(pack_impulse("lag", lq, llag, lag_rms_seq[i1]))
+
+            # Natural unperturbed error trajectory on one *fixed probe*, so temporal
+            # direction cosines are meaningful unlike cross-batch sample-index vectors.
+            out.update({
+                "diag_loopbase/probe_lag_rms_h1": rms(base_probe_lag[i1]),
+                f"diag_loopbase/probe_lag_rms_h{short_steps}": rms(base_probe_lag[ishort]),
+                f"diag_loopbase/probe_lag_rms_h{long_steps}": rms(base_probe_lag[ilong]),
+                f"diag_loopbase/probe_lag_h1_vs_h{short_steps}_cos": cosine(base_probe_lag[i1], base_probe_lag[ishort]),
+                f"diag_loopbase/probe_lag_h1_vs_h{long_steps}_cos": cosine(base_probe_lag[i1], base_probe_lag[ilong]),
+                f"diag_loopbase/probe_lag_coherence_h{short_steps}": sequence_coherence(base_probe_lag, short_steps),
+                f"diag_loopbase/probe_lag_coherence_h{long_steps}": sequence_coherence(base_probe_lag, long_steps),
+                f"diag_loopbase/probe_lag_consecutive_cos_h{short_steps}": consecutive_cosine(base_probe_lag, short_steps),
+                f"diag_loopbase/probe_lag_consecutive_cos_h{long_steps}": consecutive_cosine(base_probe_lag, long_steps),
+                "diag_loopbase/probe_td_rms_h1": rms(base_probe_td[i1]),
+                f"diag_loopbase/probe_td_rms_h{short_steps}": rms(base_probe_td[ishort]),
+                f"diag_loopbase/probe_td_rms_h{long_steps}": rms(base_probe_td[ilong]),
+                f"diag_loopbase/probe_td_h1_vs_h{short_steps}_cos": cosine(base_probe_td[i1], base_probe_td[ishort]),
+                f"diag_loopbase/probe_td_h1_vs_h{long_steps}_cos": cosine(base_probe_td[i1], base_probe_td[ilong]),
+                f"diag_loopbase/probe_td_coherence_h{short_steps}": sequence_coherence(base_probe_td, short_steps),
+                f"diag_loopbase/probe_td_coherence_h{long_steps}": sequence_coherence(base_probe_td, long_steps),
+                f"diag_loopbase/probe_td_consecutive_cos_h{short_steps}": consecutive_cosine(base_probe_td, short_steps),
+                f"diag_loopbase/probe_td_consecutive_cos_h{long_steps}": consecutive_cosine(base_probe_td, long_steps),
+            })
+
+            if enable_forced:
+                out.update(pack_forced("td", ftq, ftlag, tq, td_rms_seq, base_probe_td))
+                out.update(pack_forced("lag", flq, fllag, lq, lag_rms_seq, base_probe_lag))
             return out
 
         return loop_step
+
 
     def _build_horizon_diagnostic_step(self):
         """Finite-horizon critic-fitting response B^(H) under repeated virtual Adam fits.
@@ -3747,8 +3981,11 @@ def _train_impl(config: TrainConfig):
         diag_kernel_bandwidth_search_iters=config.diag_kernel_bandwidth_search_iters,
         diag_enable_residual_injection_calibration=config.diag_enable_residual_injection_calibration,
         diag_residual_injection_fraction=config.diag_residual_injection_fraction,
+        diag_residual_injection_small_multiplier=config.diag_residual_injection_small_multiplier,
+        diag_residual_injection_large_multiplier=config.diag_residual_injection_large_multiplier,
         diag_loop_short_steps=config.diag_loop_short_steps,
         diag_loop_long_steps=config.diag_loop_long_steps,
+        diag_enable_forced_loop=config.diag_enable_forced_loop,
         diag_actual_source_cap_fraction=config.diag_actual_source_cap_fraction,
         diag_horizon_short_steps=config.diag_horizon_short_steps,
         diag_horizon_long_steps=config.diag_horizon_long_steps,
