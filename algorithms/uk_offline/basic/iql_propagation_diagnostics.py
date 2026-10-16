@@ -93,8 +93,8 @@ from algorithms.uk_offline.common.checkpointing import (
 
 TensorBatch = Dict[str, jnp.ndarray]
 
-ALGORITHM_NAME = "IQL-PD-V7"
-ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics v7"
+ALGORITHM_NAME = "IQL-PD-V8"
+ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics v8"
 
 EXP_ADV_MAX = 100.0
 LOG_STD_MIN = -20.0
@@ -157,6 +157,13 @@ class TrainConfig:
     diag_hidden_dim: int = 128
     diag_head_lr: float = 3e-4
     diag_kappa_floor: float = 1e-3
+
+    # V8 lightweight value-system divergence endpoint.  This uses the fixed probe only
+    # (forward passes, no virtual optimizer rollout), so it can run more frequently than
+    # the expensive propagation diagnostics.  It tracks online/target Q, V, Bellman
+    # targets, critic disagreement, tails, finite fractions, and one-step radial growth.
+    diag_enable_value_divergence: bool = True
+    diag_divergence_every: int = 250
 
     # Finite-difference B diagnostics. diag_fd_epsilon is interpreted as a relative
     # perturbation scale when diag_fd_relative_scale=True:
@@ -311,6 +318,7 @@ def validate_config(config: TrainConfig) -> None:
         assert config.diag_hidden_dim > 0
         assert config.diag_head_lr > 0.0
         assert config.diag_kappa_floor > 0.0
+        assert config.diag_divergence_every > 0
         assert config.diag_fd_epsilon > 0.0
         assert config.diag_fd_small_multiplier > 0.0
         assert config.diag_fd_large_multiplier > config.diag_fd_small_multiplier
@@ -1126,6 +1134,7 @@ class IQLJAX:
         self.initial_actor_opt_state = tree_to_device(self.initial_actor_opt_state, self.device)
         self.initial_actor_key = tree_to_device(self.initial_actor_key, self.device)
         self._train_step = self._build_train_step()
+        self._value_divergence_diagnostic_step = self._build_value_divergence_diagnostic_step()
         self._propagation_diagnostic_step = self._build_propagation_diagnostic_step()
         self._residual_calibration_step = self._build_residual_calibration_step()
         self._horizon_diagnostic_step = self._build_horizon_diagnostic_step()
@@ -1354,6 +1363,208 @@ class IQLJAX:
             return new_state, log_dict
 
         return train_step
+
+    def _build_value_divergence_diagnostic_step(self):
+        """Cheap fixed-probe outcome diagnostic for Q/V/Bellman divergence.
+
+        V7 showed that the value subsystem can run away well before a very large TD-error
+        threshold fires.  This pass therefore treats learned-value boundedness as a first-class
+        outcome rather than only a side effect of propagation diagnostics.  It intentionally
+        uses only forward evaluations on the fixed probe plus old/new parameter states, so it
+        can be scheduled more frequently than finite-difference or virtual-rollout diagnostics.
+
+        No hard-coded "diverged" threshold is emitted.  Raw/tail scales and one-step growth
+        quantities are logged so 10x/30x/100x onset criteria can be varied offline without
+        changing training or rerunning an experiment.
+        """
+        q_apply = self.q_def.apply
+        v_apply = self.v_def.apply
+        discount = self.discount
+        num_critics = self.num_critics
+
+        def rms(x):
+            x = jnp.asarray(x)
+            return jnp.sqrt(jnp.mean(x ** 2) + 1e-12)
+
+        def cosine(a, b):
+            a = jnp.ravel(jnp.asarray(a))
+            b = jnp.ravel(jnp.asarray(b))
+            return jnp.sum(a * b) / (jnp.linalg.norm(a) * jnp.linalg.norm(b) + 1e-12)
+
+        def abs_quantile(x, q):
+            return jnp.quantile(jnp.abs(jnp.asarray(x)), q)
+
+        def finite_fraction(x):
+            return jnp.mean(jnp.isfinite(jnp.asarray(x)).astype(jnp.float32))
+
+        def tree_l2(tree):
+            leaves = jax.tree_util.tree_leaves(tree)
+            return jnp.sqrt(sum(jnp.sum(jnp.asarray(x, dtype=jnp.float32) ** 2) for x in leaves) + 1e-12)
+
+        def tree_delta_l2(a, b):
+            return tree_l2(jax.tree_util.tree_map(lambda x, y: x - y, a, b))
+
+        def tree_finite_fraction(tree):
+            leaves = jax.tree_util.tree_leaves(tree)
+            finite = sum(jnp.sum(jnp.isfinite(jnp.asarray(x)).astype(jnp.float32)) for x in leaves)
+            count = sum(jnp.asarray(x).size for x in leaves)
+            return finite / jnp.maximum(float(count), 1.0)
+
+        def distribution_stats(prefix, x):
+            x = jnp.asarray(x)
+            return {
+                f"diag_div/{prefix}_mean": jnp.mean(x),
+                f"diag_div/{prefix}_rms": rms(x),
+                f"diag_div/{prefix}_p01": jnp.quantile(x, 0.01),
+                f"diag_div/{prefix}_p50": jnp.quantile(x, 0.50),
+                f"diag_div/{prefix}_p99": jnp.quantile(x, 0.99),
+                f"diag_div/{prefix}_abs_p90": abs_quantile(x, 0.90),
+                f"diag_div/{prefix}_abs_p99": abs_quantile(x, 0.99),
+                f"diag_div/{prefix}_abs_max": jnp.max(jnp.abs(x)),
+                f"diag_div/{prefix}_finite_fraction": finite_fraction(x),
+            }
+
+        def growth_stats(prefix, pre, post):
+            pre_r = rms(pre)
+            post_r = rms(post)
+            delta = post - pre
+            denom = pre_r ** 2 + 1e-12
+            return {
+                f"diag_growth/{prefix}_rms_pre": pre_r,
+                f"diag_growth/{prefix}_rms_post": post_r,
+                f"diag_growth/{prefix}_rms_post_over_pre": post_r / (pre_r + 1e-12),
+                f"diag_growth/{prefix}_delta_rms": rms(delta),
+                f"diag_growth/{prefix}_delta_over_pre_rms": rms(delta) / (pre_r + 1e-12),
+                f"diag_growth/{prefix}_delta_with_pre_cos": cosine(delta, pre),
+                f"diag_growth/{prefix}_relative_energy_change": (post_r ** 2 - pre_r ** 2) / denom,
+            }
+
+        @jax.jit
+        def divergence_step(old_state: IQLState, new_state: IQLState, probe_batch: TensorBatch):
+            obs = probe_batch["observations"]
+            act = probe_batch["actions"]
+            rew = jnp.squeeze(probe_batch["rewards"], axis=-1)
+            nxt = probe_batch["next_observations"]
+            done = jnp.squeeze(probe_batch["dones"], axis=-1)
+
+            q_online_pre_all = q_apply({"params": old_state.q_params}, obs, act)
+            q_online_post_all = q_apply({"params": new_state.q_params}, obs, act)
+            q_target_pre_all = q_apply({"params": old_state.q_target_params}, obs, act)
+            q_target_post_all = q_apply({"params": new_state.q_target_params}, obs, act)
+
+            q_online_min_pre = jnp.min(q_online_pre_all, axis=0)
+            q_online_min_post = jnp.min(q_online_post_all, axis=0)
+            q_online_mean_pre = jnp.mean(q_online_pre_all, axis=0)
+            q_online_mean_post = jnp.mean(q_online_post_all, axis=0)
+            q_target_min_pre = jnp.min(q_target_pre_all, axis=0)
+            q_target_min_post = jnp.min(q_target_post_all, axis=0)
+            q_target_mean_post = jnp.mean(q_target_post_all, axis=0)
+
+            v_pre = v_apply({"params": old_state.v_params}, obs)
+            v_post = v_apply({"params": new_state.v_params}, obs)
+            next_v_pre = v_apply({"params": old_state.v_params}, nxt)
+            next_v_post = v_apply({"params": new_state.v_params}, nxt)
+            bootstrap_pre = (1.0 - done) * discount * next_v_pre
+            bootstrap_post = (1.0 - done) * discount * next_v_post
+            bellman_pre = rew + bootstrap_pre
+            bellman_post = rew + bootstrap_post
+
+            q_online_spread_post = jnp.max(q_online_post_all, axis=0) - jnp.min(q_online_post_all, axis=0)
+            q_target_spread_post = jnp.max(q_target_post_all, axis=0) - jnp.min(q_target_post_all, axis=0)
+            q_online_std_post = jnp.std(q_online_post_all, axis=0)
+            q_target_std_post = jnp.std(q_target_post_all, axis=0)
+
+            reward_reference_scale = jnp.maximum(
+                jnp.maximum(rms(rew), abs_quantile(rew, 0.99)),
+                1e-8,
+            )
+            nominal_return_scale = reward_reference_scale / jnp.maximum(1.0 - discount, 1e-6)
+
+            out = {}
+            out.update(distribution_stats("q_online_min", q_online_min_post))
+            out.update(distribution_stats("q_target_min", q_target_min_post))
+            out.update(distribution_stats("v", v_post))
+            out.update(distribution_stats("bellman_target", bellman_post))
+
+            # Aggregate and per-critic scales.  Per-critic tails distinguish a shared
+            # bootstrapping runaway from one critic failing first.
+            out.update({
+                "diag_div/q_online_mean_rms": rms(q_online_mean_post),
+                "diag_div/q_target_mean_rms": rms(q_target_mean_post),
+                "diag_div/q_online_ensemble_std_rms": rms(q_online_std_post),
+                "diag_div/q_target_ensemble_std_rms": rms(q_target_std_post),
+                "diag_div/q_online_ensemble_spread_rms": rms(q_online_spread_post),
+                "diag_div/q_target_ensemble_spread_rms": rms(q_target_spread_post),
+                "diag_div/q_online_disagreement_over_scale": rms(q_online_spread_post) / (rms(q_online_min_post) + 1e-12),
+                "diag_div/q_target_disagreement_over_scale": rms(q_target_spread_post) / (rms(q_target_min_post) + 1e-12),
+                "diag_div/q_online_to_target_rms_ratio": rms(q_online_min_post) / (rms(q_target_min_post) + 1e-12),
+                "diag_div/v_to_q_target_rms_ratio": rms(v_post) / (rms(q_target_min_post) + 1e-12),
+                "diag_div/bellman_to_q_online_rms_ratio": rms(bellman_post) / (rms(q_online_mean_post) + 1e-12),
+                "diag_div/q_target_minus_v_rms": rms(q_target_min_post - v_post),
+                "diag_div/q_target_minus_v_over_q": rms(q_target_min_post - v_post) / (rms(q_target_min_post) + 1e-12),
+                "diag_div/probe_td_rms": rms(q_online_mean_post - bellman_post),
+                "diag_div/probe_td_over_q": rms(q_online_mean_post - bellman_post) / (rms(q_online_mean_post) + 1e-12),
+                "diag_div/reward_rms": rms(rew),
+                "diag_div/reward_abs_p99": abs_quantile(rew, 0.99),
+                "diag_div/bootstrap_rms": rms(bootstrap_post),
+                "diag_div/bootstrap_over_bellman_rms": rms(bootstrap_post) / (rms(bellman_post) + 1e-12),
+                "diag_div/reward_over_bellman_rms": rms(rew) / (rms(bellman_post) + 1e-12),
+                "diag_div/nominal_discounted_return_scale": nominal_return_scale,
+                "diag_div/q_online_min_over_nominal_return": rms(q_online_min_post) / (nominal_return_scale + 1e-12),
+                "diag_div/q_target_min_over_nominal_return": rms(q_target_min_post) / (nominal_return_scale + 1e-12),
+                "diag_div/v_over_nominal_return": rms(v_post) / (nominal_return_scale + 1e-12),
+                "diag_div/bellman_target_over_nominal_return": rms(bellman_post) / (nominal_return_scale + 1e-12),
+            })
+
+            for i in range(num_critics):
+                qi_post = q_online_post_all[i]
+                qti_post = q_target_post_all[i]
+                qi_pre = q_online_pre_all[i]
+                qti_pre = q_target_pre_all[i]
+                out.update({
+                    f"diag_div/q{i + 1}_online_rms": rms(qi_post),
+                    f"diag_div/q{i + 1}_online_abs_p99": abs_quantile(qi_post, 0.99),
+                    f"diag_div/q{i + 1}_online_abs_max": jnp.max(jnp.abs(qi_post)),
+                    f"diag_div/q{i + 1}_online_finite_fraction": finite_fraction(qi_post),
+                    f"diag_div/q{i + 1}_target_rms": rms(qti_post),
+                    f"diag_div/q{i + 1}_target_abs_p99": abs_quantile(qti_post, 0.99),
+                    f"diag_div/q{i + 1}_target_abs_max": jnp.max(jnp.abs(qti_post)),
+                    f"diag_div/q{i + 1}_target_finite_fraction": finite_fraction(qti_post),
+                    f"diag_growth/q{i + 1}_online_rms_post_over_pre": rms(qi_post) / (rms(qi_pre) + 1e-12),
+                    f"diag_growth/q{i + 1}_target_rms_post_over_pre": rms(qti_post) / (rms(qti_pre) + 1e-12),
+                })
+
+            # One committed training step: does the learned function move radially outward?
+            # Positive delta/pre cosine plus positive relative energy change is a direct local
+            # signature of function-scale growth, independent of an arbitrary divergence threshold.
+            out.update(growth_stats("q_online_min", q_online_min_pre, q_online_min_post))
+            out.update(growth_stats("q_target_min", q_target_min_pre, q_target_min_post))
+            out.update(growth_stats("v", v_pre, v_post))
+            out.update(growth_stats("bellman_target", bellman_pre, bellman_post))
+            out.update(growth_stats("q_online_mean", q_online_mean_pre, q_online_mean_post))
+
+            # Parameter/optimizer health distinguishes output runaway driven by bootstrapped
+            # targets from outright parameter/numerical explosion.
+            out.update({
+                "diag_div/q_param_norm": tree_l2(new_state.q_params),
+                "diag_div/q_target_param_norm": tree_l2(new_state.q_target_params),
+                "diag_div/v_param_norm": tree_l2(new_state.v_params),
+                "diag_div/q_opt_state_norm": tree_l2(new_state.q_opt_state),
+                "diag_div/v_opt_state_norm": tree_l2(new_state.v_opt_state),
+                "diag_div/q_param_finite_fraction": tree_finite_fraction(new_state.q_params),
+                "diag_div/q_target_param_finite_fraction": tree_finite_fraction(new_state.q_target_params),
+                "diag_div/v_param_finite_fraction": tree_finite_fraction(new_state.v_params),
+                "diag_growth/q_param_delta_norm": tree_delta_l2(new_state.q_params, old_state.q_params),
+                "diag_growth/q_param_delta_over_param": tree_delta_l2(new_state.q_params, old_state.q_params) / (tree_l2(old_state.q_params) + 1e-12),
+                "diag_growth/q_target_param_delta_norm": tree_delta_l2(new_state.q_target_params, old_state.q_target_params),
+                "diag_growth/q_target_param_delta_over_param": tree_delta_l2(new_state.q_target_params, old_state.q_target_params) / (tree_l2(old_state.q_target_params) + 1e-12),
+                "diag_growth/v_param_delta_norm": tree_delta_l2(new_state.v_params, old_state.v_params),
+                "diag_growth/v_param_delta_over_param": tree_delta_l2(new_state.v_params, old_state.v_params) / (tree_l2(old_state.v_params) + 1e-12),
+            })
+            return out
+
+        return divergence_step
+
 
     def _build_propagation_diagnostic_step(self):
         """Build the expensive Stage-1 diagnostic pass.
@@ -3113,6 +3324,10 @@ class IQLJAX:
                 "diag_actionref/neighbor_radius_p90": jnp.quantile(action_ref_radius, 0.90),
                 "diag_actionref/value_error_rms": rms(d_v_action_ref),
                 "diag_actionref/critic_shift_rms": rms(d_q_action_ref),
+                "diag_actionref/value_error_over_q": rms(d_v_action_ref) / (rms(q_target) + 1e-12),
+                "diag_actionref/critic_shift_over_q": rms(d_q_action_ref) / (rms(q_target) + 1e-12),
+                "diag_actionref/critic_shift_over_value_error": rms(d_q_action_ref) / (rms(d_v_action_ref) + 1e-12),
+                "diag_actionref/value_error_vs_critic_shift_cos": cosine(d_v_action_ref, d_q_action_ref),
                 "diag_actionref/linearized_value_error_rms": rms(d_v_action_linear),
                 "diag_actionref/linearized_vs_exact_cos": cosine(d_v_action_linear, d_v_action_ref),
                 "diag_actionref/linearized_vs_exact_corr": corr(d_v_action_linear, d_v_action_ref),
@@ -3835,6 +4050,8 @@ class IQLJAX:
         batch: TensorBatch,
         diag_batch: Optional[TensorBatch] = None,
         residual_reference_batch: Optional[TensorBatch] = None,
+        run_divergence_diagnostic: bool = False,
+        run_propagation_diagnostic: bool = False,
         run_residual_calibration: bool = False,
         run_horizon_diagnostic: bool = False,
         run_loop_diagnostic: bool = False,
@@ -3845,30 +4062,35 @@ class IQLJAX:
         self.state, log_dict = self._train_step(self.state, batch)
 
         if self.enable_propagation_diagnostics and diag_batch is not None:
-            diag_log = self._propagation_diagnostic_step(
-                old_state,
-                self.state,
-                batch,
-                diag_batch,
-            )
-            log_dict.update(diag_log)
+            if run_divergence_diagnostic:
+                div_log = self._value_divergence_diagnostic_step(old_state, self.state, diag_batch)
+                log_dict.update(div_log)
 
-            if run_residual_calibration:
-                ref_batch = residual_reference_batch if residual_reference_batch is not None else diag_batch
-                rescal_log = self._residual_calibration_step(old_state, diag_batch, ref_batch)
-                log_dict.update(rescal_log)
+            if run_propagation_diagnostic:
+                diag_log = self._propagation_diagnostic_step(
+                    old_state,
+                    self.state,
+                    batch,
+                    diag_batch,
+                )
+                log_dict.update(diag_log)
 
-            if run_horizon_diagnostic:
-                horizon_log = self._horizon_diagnostic_step(old_state, batch, diag_batch)
-                log_dict.update(horizon_log)
+                if run_residual_calibration:
+                    ref_batch = residual_reference_batch if residual_reference_batch is not None else diag_batch
+                    rescal_log = self._residual_calibration_step(old_state, diag_batch, ref_batch)
+                    log_dict.update(rescal_log)
 
-            if run_loop_diagnostic and loop_batch_sequence is not None:
-                loop_log = self._closed_loop_diagnostic_step(old_state, loop_batch_sequence, diag_batch)
-                log_dict.update(loop_log)
+                if run_horizon_diagnostic:
+                    horizon_log = self._horizon_diagnostic_step(old_state, batch, diag_batch)
+                    log_dict.update(horizon_log)
 
-            if run_ridge_diagnostic:
-                ridge_log = self._ridge_diagnostic_step(old_state, batch, diag_batch)
-                log_dict.update(ridge_log)
+                if run_loop_diagnostic and loop_batch_sequence is not None:
+                    loop_log = self._closed_loop_diagnostic_step(old_state, loop_batch_sequence, diag_batch)
+                    log_dict.update(loop_log)
+
+                if run_ridge_diagnostic:
+                    ridge_log = self._ridge_diagnostic_step(old_state, batch, diag_batch)
+                    log_dict.update(ridge_log)
 
         return {key: float(jax.device_get(value)) for key, value in log_dict.items()}
 
@@ -4647,31 +4869,37 @@ def _train_impl(config: TrainConfig):
         for t in range(start_timestep, int(config.max_timesteps)):
             batch = replay_buffer.sample(config.batch_size)
             step = t + 1
-            diag_due = (
+            propagation_due = (
                 config.enable_propagation_diagnostics
                 and step % int(config.diag_every) == 0
             )
+            divergence_due = (
+                config.enable_propagation_diagnostics
+                and config.diag_enable_value_divergence
+                and step % int(config.diag_divergence_every) == 0
+            )
+            diagnostic_due = propagation_due or divergence_due
             residual_calibration_due = (
-                diag_due
+                propagation_due
                 and config.diag_enable_residual_injection_calibration
                 and step % int(config.diag_residual_calibration_every) == 0
             )
             horizon_due = (
-                diag_due
+                propagation_due
                 and config.diag_enable_horizon_b
                 and step % int(config.diag_horizon_every) == 0
             )
             loop_due = (
-                diag_due
+                propagation_due
                 and config.diag_enable_loop_propagation
                 and step % int(config.diag_loop_every) == 0
             )
             ridge_due = (
-                diag_due
+                propagation_due
                 and config.diag_enable_ridge_b
                 and step % int(config.diag_ridge_every) == 0
             )
-            diag_batch = diagnostic_probe_batch if diag_due else None
+            diag_batch = diagnostic_probe_batch if diagnostic_due else None
             loop_batch_sequence = None
             if loop_due:
                 loop_rng = np.random.default_rng(seed + 1_000_003 * int(step) + 17)
@@ -4688,6 +4916,8 @@ def _train_impl(config: TrainConfig):
                 batch,
                 diag_batch=diag_batch,
                 residual_reference_batch=diagnostic_action_ref_batch if residual_calibration_due else None,
+                run_divergence_diagnostic=divergence_due,
+                run_propagation_diagnostic=propagation_due,
                 run_residual_calibration=residual_calibration_due,
                 run_horizon_diagnostic=horizon_due,
                 run_loop_diagnostic=loop_due,
@@ -4695,7 +4925,7 @@ def _train_impl(config: TrainConfig):
                 run_ridge_diagnostic=ridge_due,
             )
 
-            if diag_due:
+            if diagnostic_due:
                 diagnostic_record = {
                     "timestep": int(step),
                     **{
@@ -4708,7 +4938,7 @@ def _train_impl(config: TrainConfig):
                     with open(diagnostic_log_path, "a", encoding="utf-8") as f:
                         f.write(json.dumps(diagnostic_record, allow_nan=True) + "\n")
 
-            if config.log_wandb and (step % config.log_every == 0 or diag_due):
+            if config.log_wandb and (step % config.log_every == 0 or diagnostic_due):
                 _wandb_log(log_dict, int(jax.device_get(trainer.state.total_it)))
     
             if (t + 1) % config.eval_freq == 0:
