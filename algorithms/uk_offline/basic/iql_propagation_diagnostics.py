@@ -111,8 +111,8 @@ from algorithms.uk_offline.common.checkpointing import (
 TensorBatch = Dict[str, jnp.ndarray]
 
 
-ALGORITHM_NAME = "IQL-PD-V9"
-ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics v9"
+ALGORITHM_NAME = "IQL-PD-V10"
+ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics v10 (V9 + signed/centered diagnostics)"
 
 
 EXP_ADV_MAX = 100.0
@@ -548,6 +548,25 @@ def tree_to_device(tree, device):
 
 def soft_update(params, target_params, tau: float):
     return optax.incremental_update(params, target_params, tau)
+
+
+def stable_tree_log10_l2(tree):
+    """Log10 Euclidean norm without squaring unscaled float32 tensors.
+
+    For an identically zero tree return -inf; NaN/Inf leaves remain diagnosable
+    with the separately logged finite fractions.  Does not modify parameters.
+    """
+    leaves = [jnp.asarray(x, dtype=jnp.float32) for x in jax.tree_util.tree_leaves(tree)]
+    if not leaves:
+        return jnp.asarray(-jnp.inf, dtype=jnp.float32)
+    maximum = jnp.max(jnp.stack([jnp.max(jnp.abs(x)) for x in leaves]))
+    scale = jnp.maximum(maximum, jnp.asarray(1e-30, dtype=jnp.float32))
+    squared = sum(jnp.sum(jnp.square(x / scale)) for x in leaves)
+    return jnp.where(
+        squared > 0.0,
+        jnp.log10(scale) + 0.5 * jnp.log10(jnp.maximum(squared, 1e-30)),
+        -jnp.inf,
+    )
 
 
 
@@ -1658,6 +1677,29 @@ class IQLJAX:
             x = jnp.asarray(x)
             return jnp.mean(jnp.maximum(x, 0.0) ** 2) / (jnp.mean(x ** 2) + 1e-12)
 
+        def centered(x):
+            """Remove each critic's state-independent bias over the fixed probe."""
+            return jnp.asarray(x) - jnp.mean(jnp.asarray(x), axis=-1, keepdims=True)
+
+        def signed_energy_accounting(error_pre, online_change, target_change):
+            """Exact fixed-probe energy identity e' = e + dq - dy, scale-normalized.
+
+            Signed q work = 2 <e,dq>/||e||^2; signed target work =
+            -2 <e,dy>/||e||^2. The quadratic correction is always nonnegative.
+            These are *observed one-step changes*, not causal interventions.
+            """
+            scale = jnp.maximum(rms(error_pre), 1e-8)
+            e = error_pre / scale
+            dq = online_change / scale
+            dy = target_change / scale
+            de = dq - dy
+            denom = jnp.mean(e * e) + 1e-12
+            q_work = 2.0 * jnp.mean(e * dq) / denom
+            target_work = -2.0 * jnp.mean(e * dy) / denom
+            quadratic = jnp.mean(de * de) / denom
+            delta_energy = (jnp.mean((e + de) ** 2) - jnp.mean(e ** 2)) / denom
+            return q_work, target_work, quadratic, delta_energy, (q_work + target_work + quadratic - delta_energy)
+
 
         def pairwise_critic_cos(x):
             if num_critics < 2:
@@ -1747,6 +1789,27 @@ class IQLJAX:
             td_common_post = jnp.mean(td_all_post, axis=0)
             td_disagreement_post = td_all_post - td_common_post[None, :]
 
+            # V10: distinguish state-independent offset growth from a changing
+            # state-dependent common-mode pattern.  Each critic is centered over
+            # probe samples before common/disagreement energy is compared.
+            q_online_centered_post = centered(q_online_post_all)
+            q_target_centered_post = centered(q_target_post_all)
+            q_common_centered_post = centered(q_online_common_post)
+            qt_common_centered_post = centered(q_target_common_post)
+            q_common_lag_pre = q_online_common_pre - q_target_common_pre
+            q_common_delta = q_online_common_post - q_online_common_pre
+            q_target_common_delta = q_target_common_post - q_target_common_pre
+            bellman_delta = bellman_post - bellman_pre
+            td_common_pre = q_online_common_pre - bellman_pre
+            (td_q_work, td_target_work, td_quadratic, td_energy_change,
+             td_identity_resid) = signed_energy_accounting(
+                td_common_pre, q_common_delta, bellman_delta
+            )
+            (lag_q_work, lag_target_work, lag_quadratic, lag_energy_change,
+             lag_identity_resid) = signed_energy_accounting(
+                q_common_lag_pre, q_common_delta, q_target_common_delta
+            )
+
 
             reward_reference_scale = jnp.maximum(
                 jnp.maximum(rms(rew), abs_quantile(rew, 0.99)),
@@ -1808,6 +1871,46 @@ class IQLJAX:
                 ),
             })
 
+
+            # V10 diagnostics: offset-corrected mode structure and *signed* energy
+            # accounting for observed Q/V/target changes on the same fixed probe.
+            # These must not be mistaken for a full Jacobian or a causal ablation.
+            out.update({
+                "diag_mode_shape/q_online_centered_common_energy_fraction": common_energy_fraction(
+                    q_common_centered_post, q_online_centered_post
+                ),
+                "diag_mode_shape/q_target_centered_common_energy_fraction": common_energy_fraction(
+                    qt_common_centered_post, q_target_centered_post
+                ),
+                "diag_mode_shape/q_common_centered_rms": rms(q_common_centered_post),
+                "diag_mode_shape/q_common_offset_energy_fraction": (
+                    jnp.mean(q_online_common_post) ** 2 / (jnp.mean(q_online_common_post ** 2) + 1e-12)
+                ),
+                "diag_mode_shape/q_common_centered_to_disagreement_ratio": rms(q_common_centered_post) / (
+                    rms(centered(q_online_disagreement_post)) + 1e-12
+                ),
+                "diag_mode_shape/q_common_mean_signed": jnp.mean(q_online_common_post),
+                "diag_feedback/td_pre_rms": rms(td_common_pre),
+                "diag_feedback/td_post_rms": rms(td_common_post),
+                "diag_feedback/td_q_signed_work": td_q_work,
+                "diag_feedback/td_target_signed_work": td_target_work,
+                "diag_feedback/td_quadratic_work": td_quadratic,
+                "diag_feedback/td_relative_energy_change": td_energy_change,
+                "diag_feedback/td_energy_identity_residual": td_identity_resid,
+                "diag_feedback/td_q_delta_with_negative_pre_td_cos": cosine(q_common_delta, -td_common_pre),
+                "diag_feedback/td_bellman_drift_with_pre_td_cos": cosine(bellman_delta, td_common_pre),
+                "diag_feedback/td_q_delta_rms": rms(q_common_delta),
+                "diag_feedback/td_bellman_drift_rms": rms(bellman_delta),
+                "diag_feedback/lag_pre_rms": rms(q_common_lag_pre),
+                "diag_feedback/lag_post_rms": rms(q_common_lag_post),
+                "diag_feedback/lag_q_signed_work": lag_q_work,
+                "diag_feedback/lag_target_signed_work": lag_target_work,
+                "diag_feedback/lag_quadratic_work": lag_quadratic,
+                "diag_feedback/lag_relative_energy_change": lag_energy_change,
+                "diag_feedback/lag_energy_identity_residual": lag_identity_resid,
+                "diag_feedback/lag_q_delta_with_pre_lag_cos": cosine(q_common_delta, q_common_lag_pre),
+                "diag_feedback/lag_target_delta_with_pre_lag_cos": cosine(q_target_common_delta, q_common_lag_pre),
+            })
 
             # Aggregate and per-critic scales.  Per-critic tails distinguish a shared
             # bootstrapping runaway from one critic failing first.
@@ -1889,11 +1992,17 @@ class IQLJAX:
                 "diag_optimizer/q_adam_count": jnp.asarray(q_adam_state.count, dtype=jnp.float32),
                 "diag_optimizer/q_adam_mu_norm": tree_l2(q_adam_state.mu),
                 "diag_optimizer/q_adam_nu_norm": tree_l2(q_adam_state.nu),
+                "diag_optimizer/q_adam_mu_log10_l2_stable": stable_tree_log10_l2(q_adam_state.mu),
+                "diag_optimizer/q_adam_nu_log10_l2_stable": stable_tree_log10_l2(q_adam_state.nu),
                 "diag_optimizer/q_adam_mu_finite_fraction": tree_finite_fraction(q_adam_state.mu),
                 "diag_optimizer/q_adam_nu_finite_fraction": tree_finite_fraction(q_adam_state.nu),
                 "diag_optimizer/v_adam_count": jnp.asarray(v_adam_state.count, dtype=jnp.float32),
                 "diag_optimizer/v_adam_mu_norm": tree_l2(v_adam_state.mu),
                 "diag_optimizer/v_adam_nu_norm": tree_l2(v_adam_state.nu),
+                "diag_optimizer/v_adam_mu_log10_l2_stable": stable_tree_log10_l2(v_adam_state.mu),
+                "diag_optimizer/v_adam_nu_log10_l2_stable": stable_tree_log10_l2(v_adam_state.nu),
+                "diag_optimizer/q_param_log10_l2_stable": stable_tree_log10_l2(new_state.q_params),
+                "diag_optimizer/v_param_log10_l2_stable": stable_tree_log10_l2(new_state.v_params),
                 "diag_optimizer/v_adam_mu_finite_fraction": tree_finite_fraction(v_adam_state.mu),
                 "diag_optimizer/v_adam_nu_finite_fraction": tree_finite_fraction(v_adam_state.nu),
                 "diag_div/q_param_finite_fraction": tree_finite_fraction(new_state.q_params),
@@ -3029,6 +3138,26 @@ class IQLJAX:
             )
 
 
+            # V10: unlike cosine alone, the signed projection reports how large
+            # the *amplitude-scaled* common response is relative to pre-update
+            # common online-target lag.  Head/kNN/kernel are separate proxies,
+            # not interchangeable estimators of a known ground-truth error.
+            def signed_common_response(response, error):
+                scale = jnp.maximum(rms(error), 1e-8)
+                r = response / scale
+                e = error / scale
+                denom = jnp.mean(e * e) + 1e-12
+                projection = jnp.mean(r * e) / denom
+                quadratic = jnp.mean(r * r) / denom
+                return projection, 2.0 * projection + quadratic, rms(response) / scale
+
+            head_signed = signed_common_response(h_q_fd_mean, probe_common_lag)
+            knn_signed = signed_common_response(h_q_knn_fd_mean, probe_common_lag)
+            kernel_signed = signed_common_response(h_q_kernel_fd_mean, probe_common_lag)
+            local_signed = signed_common_response(h_q_kernel_local_fd_mean, probe_common_lag)
+            v_head_signed = signed_common_response(h_v_fd_mean, probe_common_lag)
+            random_signed = signed_common_response(jnp.mean(random_fd, axis=0), probe_common_lag)
+
             # End-to-end closed-loop proxies.  Unlike diag_gain/* (which measures only B
             # along a target-error direction), these compare the propagated critic change to
             # the current observable critic-lag error.  They are practical M-direction proxies
@@ -3390,6 +3519,8 @@ class IQLJAX:
                 "diag_B/fd_finite_fraction_random": finite_fraction(random_fd),
                 "diag_B/jvp_adam_random_gain_probe": rms(random_adam_jvp),
                 "diag_B/jvp_adam_finite_fraction_random": finite_fraction(random_adam_jvp),
+                "diag_B/jvp_adam_finite_fraction_h_q": finite_fraction(h_q_adam_jvp),
+                "diag_B/jvp_adam_finite_fraction_h_v": finite_fraction(h_v_adam_jvp),
                 "diag_B/ntk_sgd_random_gain_probe": rms(random_ntk),
                 "diag_B/ntk_finite_fraction_random": finite_fraction(random_ntk),
                 "diag_B/fd_vs_jvp_adam_cos_random": cosine(random_fd, random_adam_jvp),
@@ -3477,6 +3608,44 @@ class IQLJAX:
                     h_q_fd_disagreement_gain + 1e-12
                 ),
 
+
+                # V10 source-amplitude-aware signed common-mode propagation.
+                # Values > 0 in *_signed_lag_coeff reinforce the *current lag*;
+                # *_pred_rel_energy_change includes the quadratic response term.
+                "diag_signed_B/common_lag_rms": rms(probe_common_lag),
+                "diag_signed_B/common_lag_over_q_rms": rms(probe_common_lag) / (
+                    rms(probe_q_online_common) + 1e-12
+                ),
+                # Do not interpret signed ratios if the reference error is
+                # effectively zero relative to the function's natural scale.
+                "diag_signed_B/common_lag_scale_reliable": (
+                    rms(probe_common_lag) > 1e-6 * jnp.maximum(rms(probe_q_online_common), 1.0)
+                ).astype(jnp.float32),
+                "diag_signed_B/h_q_head_common_signed_lag_coeff": head_signed[0],
+                "diag_signed_B/h_q_head_common_pred_rel_energy_change": head_signed[1],
+                "diag_signed_B/h_q_head_common_response_over_lag": head_signed[2],
+                "diag_signed_B/h_q_knn_common_signed_lag_coeff": knn_signed[0],
+                "diag_signed_B/h_q_knn_common_pred_rel_energy_change": knn_signed[1],
+                "diag_signed_B/h_q_knn_common_response_over_lag": knn_signed[2],
+                "diag_signed_B/h_q_kernel_common_signed_lag_coeff": kernel_signed[0],
+                "diag_signed_B/h_q_kernel_common_pred_rel_energy_change": kernel_signed[1],
+                "diag_signed_B/h_q_kernel_common_response_over_lag": kernel_signed[2],
+                "diag_signed_B/h_q_kernel_local_common_signed_lag_coeff": local_signed[0],
+                "diag_signed_B/h_q_kernel_local_common_pred_rel_energy_change": local_signed[1],
+                "diag_signed_B/h_q_kernel_local_common_response_over_lag": local_signed[2],
+                "diag_signed_B/h_v_head_common_signed_lag_coeff": v_head_signed[0],
+                "diag_signed_B/h_v_head_common_pred_rel_energy_change": v_head_signed[1],
+                "diag_signed_B/random_unit_common_signed_lag_coeff": random_signed[0],
+                "diag_signed_B/random_unit_common_pred_rel_energy_change": random_signed[1],
+                "diag_signed_B/h_q_head_vs_knn_signed_agree": (
+                    jnp.sign(head_signed[0]) == jnp.sign(knn_signed[0])
+                ).astype(jnp.float32),
+                "diag_signed_B/h_q_head_vs_local_kernel_signed_agree": (
+                    jnp.sign(head_signed[0]) == jnp.sign(local_signed[0])
+                ).astype(jnp.float32),
+                "diag_signed_B/h_q_knn_vs_local_kernel_signed_agree": (
+                    jnp.sign(knn_signed[0]) == jnp.sign(local_signed[0])
+                ).astype(jnp.float32),
 
                 # End-to-end critic-error recursion proxies.  Values > 1 mean that the
                 # propagated component alone is larger than the current observable lag proxy.
@@ -3595,6 +3764,8 @@ class IQLJAX:
                 # ---- Optimizer and target-network dynamics ----
                 "diag_optimizer/q_grad_norm": tree_l2(base_q_grads),
                 "diag_optimizer/q_update_param_norm": tree_l2(base_q_updates),
+                "diag_optimizer/q_grad_log10_l2_stable": stable_tree_log10_l2(base_q_grads),
+                "diag_optimizer/q_update_log10_l2_stable": stable_tree_log10_l2(base_q_updates),
                 "diag_optimizer/q_param_norm": tree_l2(old_state.q_params),
                 "diag_optimizer/q_opt_state_norm": tree_l2(old_state.q_opt_state),
                 "diag_optimizer/q_adam_count": jnp.asarray(old_state.q_opt_state[0].count, dtype=jnp.float32),
@@ -4213,7 +4384,7 @@ class IQLJAX:
                 td_cf = q_common_cf - backup_cf
                 return (
                     rms(q_common_cf), rms(v_cf), rms(lag_common_cf),
-                    rms(td_cf), rms(backup_cf),
+                    rms(td_cf), rms(backup_cf), q_common_cf, lag_common_cf,
                 )
 
 
@@ -4248,7 +4419,8 @@ class IQLJAX:
                 hard_cf = rollout_target_tau(jnp.asarray(1.0, dtype=jnp.float32))
             else:
                 nan5 = tuple(jnp.asarray(jnp.nan, dtype=jnp.float32) for _ in range(5))
-                frozen_cf = fast_cf = very_fast_cf = hard_cf = nan5
+                nanprobe = jnp.full_like(pre_probe_q, jnp.nan)
+                frozen_cf = fast_cf = very_fast_cf = hard_cf = nan5 + (nanprobe, nanprobe)
                 fast_tau = very_fast_tau = jnp.asarray(jnp.nan, dtype=jnp.float32)
 
 
@@ -4533,8 +4705,13 @@ class IQLJAX:
 
             if enable_target_tau_counterfactual:
                 def add_cf(tag, vals, tau_value):
-                    qv, vv, lagv, tdv, bv = vals
-                    bq, bv0, blag, btd, bb = base_cf
+                    qv, vv, lagv, tdv, bv, q_common_vec, lag_common_vec = vals
+                    bq, bv0, blag, btd, bb, bq_vec, blag_vec = base_cf
+                    q_diff = q_common_vec - bq_vec
+                    lag_diff = lag_common_vec - blag_vec
+                    bq_scale = jnp.maximum(rms(bq_vec), 1e-8)
+                    bq_unit, q_diff_unit = bq_vec / bq_scale, q_diff / bq_scale
+                    q_signed = jnp.mean(q_diff_unit * bq_unit) / (jnp.mean(bq_unit ** 2) + 1e-12)
                     out.update({
                         f"diag_target_cf/{tag}_tau": tau_value,
                         f"diag_target_cf/{tag}_q_common_rms_h{long_steps}": qv,
@@ -4546,6 +4723,13 @@ class IQLJAX:
                         f"diag_target_cf/{tag}_v_over_base": vv / (bv0 + 1e-12),
                         f"diag_target_cf/{tag}_lag_over_base": lagv / (blag + 1e-12),
                         f"diag_target_cf/{tag}_td_over_base": tdv / (btd + 1e-12),
+                        # Signed deviations from the *same* baseline branch's common-Q,
+                        # not an effect attributed solely to the target-lag mediator.
+                        f"diag_target_cf/{tag}_q_delta_common_rms_over_base": rms(q_diff) / bq_scale,
+                        f"diag_target_cf/{tag}_q_delta_common_signed_projection": q_signed,
+                        f"diag_target_cf/{tag}_q_delta_common_with_base_cos": cosine(q_diff, bq_vec),
+                        f"diag_target_cf/{tag}_q_relative_energy_change": (qv / (bq + 1e-12)) ** 2 - 1.0,
+                        f"diag_target_cf/{tag}_common_lag_delta_rms": rms(lag_diff),
                     })
 
 
