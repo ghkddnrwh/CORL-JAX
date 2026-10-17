@@ -4296,7 +4296,7 @@ class IQLJAX:
                 def one(carry, xs2):
                     obs, act, rew, nxt, done, source = xs2
                     extra = sign * alpha * source
-                    new_carry = update_once(carry, obs, act, rew, nxt, done, extra)
+                    new_carry = update_once(carry, obs, act, rew, nxt, done, extra, target_tau)
                     p_online, p_lag, _, _ = probe_metrics(new_carry)
                     return new_carry, (p_online, p_lag)
 
