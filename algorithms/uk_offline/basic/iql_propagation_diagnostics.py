@@ -111,8 +111,8 @@ from algorithms.uk_offline.common.checkpointing import (
 TensorBatch = Dict[str, jnp.ndarray]
 
 
-ALGORITHM_NAME = "IQL-PD-V10"
-ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics v10 (V9 + signed/centered diagnostics)"
+ALGORITHM_NAME = "IQL-PD-V12"
+ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics v12 (V11 + pathway-cut feedback counterfactuals)"
 
 
 EXP_ADV_MAX = 100.0
@@ -202,6 +202,11 @@ class TrainConfig:
     # target-update-rate counterfactuals without committing any parameter changes.
     diag_enable_common_mode_diagnostics: bool = True
     diag_enable_target_tau_counterfactual: bool = True
+    # V12: causal pathway-cut virtual experiments (diagnostic-only; no training mutation).
+    # Compare baseline to (i) frozen target-Q-to-V input, (ii) frozen V-to-Q backup,
+    # and (iii) both edges cut.  Uses the same minibatch sequence/optimizer states.
+    # Expensive: 2 extra virtual scans when the existing alpha=0 branch is enabled.
+    diag_enable_pathway_counterfactual: bool = True
     diag_target_tau_fast_multiplier: float = 5.0
     diag_target_tau_very_fast_multiplier: float = 20.0
 
@@ -1193,6 +1198,7 @@ class IQLJAX:
         diag_enable_actual_source_forcing: bool = True,
         diag_enable_common_mode_diagnostics: bool = True,
         diag_enable_target_tau_counterfactual: bool = True,
+        diag_enable_pathway_counterfactual: bool = True,
         diag_target_tau_fast_multiplier: float = 5.0,
         diag_target_tau_very_fast_multiplier: float = 20.0,
         diag_actual_source_cap_fraction: float = 0.05,
@@ -1251,6 +1257,7 @@ class IQLJAX:
         self.diag_enable_actual_source_forcing = bool(diag_enable_actual_source_forcing)
         self.diag_enable_common_mode_diagnostics = bool(diag_enable_common_mode_diagnostics)
         self.diag_enable_target_tau_counterfactual = bool(diag_enable_target_tau_counterfactual)
+        self.diag_enable_pathway_counterfactual = bool(diag_enable_pathway_counterfactual)
         self.diag_target_tau_fast_multiplier = float(diag_target_tau_fast_multiplier)
         self.diag_target_tau_very_fast_multiplier = float(diag_target_tau_very_fast_multiplier)
         self.diag_actual_source_cap_fraction = float(diag_actual_source_cap_fraction)
@@ -1616,6 +1623,7 @@ class IQLJAX:
         q_apply = self.q_def.apply
         v_apply = self.v_def.apply
         discount = self.discount
+        iql_tau = self.iql_tau
         num_critics = self.num_critics
 
 
@@ -1800,6 +1808,57 @@ class IQLJAX:
             q_common_delta = q_online_common_post - q_online_common_pre
             q_target_common_delta = q_target_common_post - q_target_common_pre
             bellman_delta = bellman_post - bellman_pre
+
+            # V11: exact, observed *sampled-probe* expectile-loss accounting.
+            # L(Q_target_min, V) = E[w_tau(Q_target_min - V) * (Q_target_min - V)^2].
+            # The old expectile weights are held fixed for the first three
+            # Taylor terms; the final term accounts EXACTLY for sign switches.
+            # Scale before squaring to avoid spurious float32 overflow during
+            # value runaway. All reported work terms are ratios to pre-loss.
+            vflow_scale = jnp.maximum(
+                jnp.maximum(rms(q_target_min_pre), rms(q_target_min_post)),
+                jnp.maximum(jnp.maximum(rms(v_pre), rms(v_post)), 1.0),
+            )
+            vflow_u0 = (q_target_min_pre - v_pre) / vflow_scale
+            vflow_dq = (q_target_min_post - q_target_min_pre) / vflow_scale
+            vflow_dv = (v_post - v_pre) / vflow_scale
+            vflow_u1 = vflow_u0 + vflow_dq - vflow_dv
+            vflow_w0 = jnp.where(vflow_u0 >= 0.0, iql_tau, 1.0 - iql_tau)
+            vflow_w1 = jnp.where(vflow_u1 >= 0.0, iql_tau, 1.0 - iql_tau)
+            vflow_l0 = jnp.mean(vflow_w0 * vflow_u0 ** 2)
+            vflow_l1 = jnp.mean(vflow_w1 * vflow_u1 ** 2)
+            vflow_den = jnp.maximum(vflow_l0, 1e-12)
+            vflow_v_work = -2.0 * jnp.mean(vflow_w0 * vflow_u0 * vflow_dv) / vflow_den
+            vflow_target_work = 2.0 * jnp.mean(vflow_w0 * vflow_u0 * vflow_dq) / vflow_den
+            vflow_quadratic = jnp.mean(vflow_w0 * (vflow_dq - vflow_dv) ** 2) / vflow_den
+            vflow_weight_switch = jnp.mean((vflow_w1 - vflow_w0) * vflow_u1 ** 2) / vflow_den
+            vflow_delta_loss = (vflow_l1 - vflow_l0) / vflow_den
+            vflow_identity_residual = (
+                vflow_v_work + vflow_target_work + vflow_quadratic
+                + vflow_weight_switch - vflow_delta_loss
+            )
+            vflow_frozen_u1 = vflow_u0 - vflow_dv
+            vflow_frozen_w1 = jnp.where(
+                vflow_frozen_u1 >= 0.0, iql_tau, 1.0 - iql_tau
+            )
+            vflow_frozen_post = jnp.mean(vflow_frozen_w1 * vflow_frozen_u1 ** 2)
+            vflow_min_switch = jnp.mean(
+                (jnp.argmin(q_target_pre_all, axis=0)
+                 != jnp.argmin(q_target_post_all, axis=0)).astype(jnp.float32)
+            )
+
+            # This captures co-directionality of ACTUAL observed function steps;
+            # it does not purport to identify a causal Jacobian or true V error.
+            chain_scale = jnp.maximum(rms(q_online_common_pre), 1e-8)
+            chain_q0 = q_online_common_pre / chain_scale
+            chain_dq = q_common_delta / chain_scale
+            chain_dy = bellman_delta / chain_scale
+            chain_radial_q_work = 2.0 * jnp.mean(chain_q0 * chain_dq) / (
+                jnp.mean(chain_q0 ** 2) + 1e-12
+            )
+            chain_radial_target_work = 2.0 * jnp.mean(chain_q0 * chain_dy) / (
+                jnp.mean(chain_q0 ** 2) + 1e-12
+            )
             td_common_pre = q_online_common_pre - bellman_pre
             (td_q_work, td_target_work, td_quadratic, td_energy_change,
              td_identity_resid) = signed_energy_accounting(
@@ -1910,6 +1969,52 @@ class IQLJAX:
                 "diag_feedback/lag_energy_identity_residual": lag_identity_resid,
                 "diag_feedback/lag_q_delta_with_pre_lag_cos": cosine(q_common_delta, q_common_lag_pre),
                 "diag_feedback/lag_target_delta_with_pre_lag_cos": cosine(q_target_common_delta, q_common_lag_pre),
+            })
+
+            # New V11 signals: separates an expectile V-fitting step from the
+            # simultaneous movement of its clipped target Q; reports the weight
+            # boundary effect explicitly so the loss accounting is exact.
+            out.update({
+                "diag_vflow/pre_loss_scaled": vflow_l0,
+                "diag_vflow/post_loss_scaled": vflow_l1,
+                "diag_vflow/pre_loss_scale_reliable": (vflow_l0 > 1e-10).astype(jnp.float32),
+                "diag_vflow/v_update_signed_work": vflow_v_work,
+                "diag_vflow/target_q_drift_signed_work": vflow_target_work,
+                "diag_vflow/quadratic_work": vflow_quadratic,
+                "diag_vflow/weight_switch_work": vflow_weight_switch,
+                "diag_vflow/relative_loss_change": vflow_delta_loss,
+                "diag_vflow/energy_identity_residual": vflow_identity_residual,
+                "diag_vflow/frozen_target_loss_post_over_pre": vflow_frozen_post / vflow_den,
+                "diag_vflow/moving_target_loss_post_over_pre": vflow_l1 / vflow_den,
+                "diag_vflow/target_min_selector_switch_fraction": vflow_min_switch,
+                "diag_vflow/adv_positive_fraction_pre": jnp.mean((vflow_u0 >= 0.0).astype(jnp.float32)),
+                "diag_vflow/adv_positive_fraction_post": jnp.mean((vflow_u1 >= 0.0).astype(jnp.float32)),
+                "diag_vflow/adv_sign_switch_fraction": jnp.mean(
+                    ((vflow_u0 >= 0.0) != (vflow_u1 >= 0.0)).astype(jnp.float32)
+                ),
+                "diag_vflow/positive_adv_weighted_loss_fraction_pre": jnp.mean(
+                    jnp.where(vflow_u0 >= 0.0, vflow_w0 * vflow_u0 ** 2, 0.0)
+                ) / jnp.maximum(vflow_l0, 1e-12),
+                "diag_vflow/q_target_drift_rms": rms(q_target_min_post - q_target_min_pre),
+                "diag_vflow/v_step_rms": rms(v_post - v_pre),
+                "diag_vflow/target_drift_over_v_step": rms(q_target_min_post - q_target_min_pre) / (
+                    rms(v_post - v_pre) + 1e-12
+                ),
+                "diag_vflow/v_step_with_pre_adv_cos": cosine(v_post - v_pre, q_target_min_pre - v_pre),
+                "diag_vflow/target_drift_with_v_step_cos": cosine(
+                    q_target_min_post - q_target_min_pre, v_post - v_pre
+                ),
+                "diag_chain/q_delta_with_bellman_delta_cos": cosine(q_common_delta, bellman_delta),
+                "diag_chain/q_delta_over_bellman_delta_rms": rms(q_common_delta) / (
+                    rms(bellman_delta) + 1e-12
+                ),
+                "diag_chain/q_pre_radial_q_signed_work": chain_radial_q_work,
+                "diag_chain/q_pre_radial_bellman_signed_work": chain_radial_target_work,
+                "diag_chain/next_v_step_rms": rms(next_v_post - next_v_pre),
+                "diag_chain/bellman_delta_with_pre_q_cos": cosine(bellman_delta, q_online_common_pre),
+                "diag_chain/bellman_drift_over_old_q_rms": rms(bellman_delta) / (
+                    rms(q_online_common_pre) + 1e-12
+                ),
             })
 
             # Aggregate and per-critic scales.  Per-critic tails distinguish a shared
@@ -4199,6 +4304,7 @@ class IQLJAX:
         enable_forced = self.diag_enable_forced_loop
         enable_actual_source_forcing = self.diag_enable_actual_source_forcing
         enable_target_tau_counterfactual = self.diag_enable_target_tau_counterfactual
+        enable_pathway_counterfactual = self.diag_enable_pathway_counterfactual
         target_tau_fast_multiplier = self.diag_target_tau_fast_multiplier
         target_tau_very_fast_multiplier = self.diag_target_tau_very_fast_multiplier
         diag_seed = self.diag_seed
@@ -4267,13 +4373,20 @@ class IQLJAX:
             )
 
 
-            def update_once(carry, obs, act, rew, nxt, done, extra_target, tau_value):
+            def update_once(carry, obs, act, rew, nxt, done, extra_target, tau_value,
+                            fixed_backup_v_params=None):
+                # Optional source-side intervention: train V normally, but stop
+                # feeding its changing output into the next-state Bellman backup.
+                # The default None reproduces V11 bit-for-bit at this call site.
                 q_params, q_target_params, q_opt_state, v_params, v_opt_state = carry
                 rew = jnp.squeeze(rew, axis=-1)
                 done = jnp.squeeze(done, axis=-1)
 
 
-                next_v = v_apply({"params": v_params}, nxt)
+                backup_v_params = (
+                    v_params if fixed_backup_v_params is None else fixed_backup_v_params
+                )
+                next_v = v_apply({"params": backup_v_params}, nxt)
                 q_backup = rew + (1.0 - done) * discount * next_v + extra_target
                 target_qs = q_apply({"params": q_target_params}, obs, act)
                 target_q_for_v = jax.lax.stop_gradient(jnp.min(target_qs, axis=0))
@@ -4385,19 +4498,25 @@ class IQLJAX:
                 return (
                     rms(q_common_cf), rms(v_cf), rms(lag_common_cf),
                     rms(td_cf), rms(backup_cf), q_common_cf, lag_common_cf,
+                    v_cf, backup_cf,
                 )
 
 
-            def rollout_target_tau(tau_value):
+            def rollout_target_tau(tau_value, freeze_backup_v=False):
+                # V12 pathway cuts are *input interventions*, not permanent parameter
+                # freezes: the V parameters and optimizer are still updated in every
+                # branch.  freeze_backup_v changes ONLY which V network builds Q y.
+                # tau=0 holds the target-Q input to the V loss at checkpoint values.
+                fixed_v = old_state.v_params if freeze_backup_v else None
+
                 def one(carry, xs_cf):
                     obs, act, rew, nxt, done = xs_cf
-                    rew_s = jnp.squeeze(rew, axis=-1)
-                    done_s = jnp.squeeze(done, axis=-1)
-                    next_v = v_apply({"params": carry[3]}, nxt)
-                    q_backup = rew_s + (1.0 - done_s) * discount * next_v
+                    # The source is exactly zero for counterfactuals; no need to
+                    # evaluate extra V outputs just to construct zeros.
+                    source_zero = jnp.zeros((obs.shape[0],), dtype=rew.dtype)
                     return update_once(
                         carry, obs, act, rew, nxt, done,
-                        jnp.zeros_like(q_backup), tau_value
+                        source_zero, tau_value, fixed_backup_v_params=fixed_v
                     ), None
                 final_carry, _ = jax.lax.scan(one, carry0, xs)
                 return cf_probe_metrics(final_carry)
@@ -4420,8 +4539,24 @@ class IQLJAX:
             else:
                 nan5 = tuple(jnp.asarray(jnp.nan, dtype=jnp.float32) for _ in range(5))
                 nanprobe = jnp.full_like(pre_probe_q, jnp.nan)
-                frozen_cf = fast_cf = very_fast_cf = hard_cf = nan5 + (nanprobe, nanprobe)
+                frozen_cf = fast_cf = very_fast_cf = hard_cf = nan5 + (
+                    nanprobe, nanprobe, nanprobe, nanprobe
+                )
                 fast_tau = very_fast_tau = jnp.asarray(jnp.nan, dtype=jnp.float32)
+
+            # V12 2x2 pathway cut (same checkpoint, batches, learning rates, optimizer
+            # state, probe). In the alpha=0 branch target Q never changes, so it is
+            # exactly the target-Q -> V input cut. Reuse that V9 branch when present.
+            # The two new branches cut V -> Bellman y, and both edges respectively.
+            if enable_pathway_counterfactual:
+                if not enable_target_tau_counterfactual:
+                    frozen_cf = rollout_target_tau(jnp.asarray(0.0, dtype=jnp.float32))
+                cut_backup_cf = rollout_target_tau(
+                    jnp.asarray(target_tau, dtype=jnp.float32), freeze_backup_v=True
+                )
+                cut_both_cf = rollout_target_tau(
+                    jnp.asarray(0.0, dtype=jnp.float32), freeze_backup_v=True
+                )
 
 
             key = jax.random.fold_in(jax.random.PRNGKey(diag_seed + 808), old_state.total_it + 1)
@@ -4705,10 +4840,14 @@ class IQLJAX:
 
             if enable_target_tau_counterfactual:
                 def add_cf(tag, vals, tau_value):
-                    qv, vv, lagv, tdv, bv, q_common_vec, lag_common_vec = vals
-                    bq, bv0, blag, btd, bb, bq_vec, blag_vec = base_cf
+                    (qv, vv, lagv, tdv, bv, q_common_vec, lag_common_vec,
+                     v_vec, bellman_vec) = vals
+                    (bq, bv0, blag, btd, bb, bq_vec, blag_vec,
+                     base_v_vec, base_bellman_vec) = base_cf
                     q_diff = q_common_vec - bq_vec
                     lag_diff = lag_common_vec - blag_vec
+                    v_diff = v_vec - base_v_vec
+                    bellman_diff = bellman_vec - base_bellman_vec
                     bq_scale = jnp.maximum(rms(bq_vec), 1e-8)
                     bq_unit, q_diff_unit = bq_vec / bq_scale, q_diff / bq_scale
                     q_signed = jnp.mean(q_diff_unit * bq_unit) / (jnp.mean(bq_unit ** 2) + 1e-12)
@@ -4730,6 +4869,26 @@ class IQLJAX:
                         f"diag_target_cf/{tag}_q_delta_common_with_base_cos": cosine(q_diff, bq_vec),
                         f"diag_target_cf/{tag}_q_relative_energy_change": (qv / (bq + 1e-12)) ** 2 - 1.0,
                         f"diag_target_cf/{tag}_common_lag_delta_rms": rms(lag_diff),
+                        # V11: observed *joint* branch differences, not mediation
+                        # identification. No additional optimizer rollouts.
+                        f"diag_target_cf/{tag}_v_delta_rms_over_base": rms(v_diff) / (
+                            rms(base_v_vec) + 1e-12
+                        ),
+                        f"diag_target_cf/{tag}_v_delta_signed_projection": jnp.mean(
+                            v_diff * base_v_vec
+                        ) / (jnp.mean(base_v_vec ** 2) + 1e-12),
+                        f"diag_target_cf/{tag}_bellman_delta_rms_over_base": rms(bellman_diff) / (
+                            rms(base_bellman_vec) + 1e-12
+                        ),
+                        f"diag_target_cf/{tag}_bellman_delta_signed_projection": jnp.mean(
+                            bellman_diff * base_bellman_vec
+                        ) / (jnp.mean(base_bellman_vec ** 2) + 1e-12),
+                        f"diag_target_cf/{tag}_q_delta_with_bellman_delta_cos": cosine(
+                            q_diff, bellman_diff
+                        ),
+                        f"diag_target_cf/{tag}_q_delta_over_bellman_delta_rms": rms(q_diff) / (
+                            rms(bellman_diff) + 1e-12
+                        ),
                     })
 
 
@@ -4746,6 +4905,132 @@ class IQLJAX:
                 add_cf("very_fast", very_fast_cf, very_fast_tau)
                 add_cf("hard", hard_cf, jnp.asarray(1.0, dtype=jnp.float32))
 
+            if enable_pathway_counterfactual:
+                # The alpha=0 rollout is the cut of the target-Q -> V edge.
+                # Distinct from a frozen-V-parameter control, which would disable
+                # the V optimizer and confound feedback with capacity to fit.
+                initial_cf = cf_probe_metrics(carry0)
+                branch_cfs = {
+                    "base": base_cf,
+                    "cut_target_q_to_v": frozen_cf,
+                    "cut_v_to_backup": cut_backup_cf,
+                    "cut_both": cut_both_cf,
+                }
+
+                # Original-scale and centered-scale comparisons. A common Q offset
+                # can dominate RMS; separating the two avoids treating a global
+                # shift as evidence of changing state-dependent dynamics.
+                def center(x):
+                    return x - jnp.mean(x)
+
+                def rms0(x):
+                    # Zero-preserving, scale-stable norm for small branch differences.
+                    # The legacy rms() has a 1e-6 floor; using it here would
+                    # fabricate nonzero differences even for the BASE branch.
+                    m = jnp.max(jnp.abs(x))
+                    scale = jnp.maximum(m, jnp.asarray(1e-30, dtype=x.dtype))
+                    return jnp.where(m == 0.0, jnp.asarray(0.0, dtype=x.dtype),
+                                     scale * jnp.sqrt(jnp.mean(jnp.square(x / scale))))
+
+                def compare_branch(tag, vals):
+                    bq = base_cf[5]
+                    bv = base_cf[7]
+                    by = base_cf[8]
+                    q = vals[5]
+                    v = vals[7]
+                    y = vals[8]
+                    dq, dv, dy = q - bq, v - bv, y - by
+                    qscale = jnp.maximum(rms0(bq), 1e-8)
+                    vscale = jnp.maximum(rms0(bv), 1e-8)
+                    yscale = jnp.maximum(rms0(by), 1e-8)
+                    qcenter = center(bq)
+                    dc = center(dq)
+                    out.update({
+                        f"diag_pathcf/{tag}_q_over_base": vals[0] / (base_cf[0] + 1e-12),
+                        f"diag_pathcf/{tag}_v_over_base": vals[1] / (base_cf[1] + 1e-12),
+                        f"diag_pathcf/{tag}_bellman_over_base": vals[4] / (base_cf[4] + 1e-12),
+                        f"diag_pathcf/{tag}_lag_over_base": vals[2] / (base_cf[2] + 1e-12),
+                        f"diag_pathcf/{tag}_q_delta_rms_over_base": rms0(dq) / qscale,
+                        f"diag_pathcf/{tag}_v_delta_rms_over_base": rms0(dv) / vscale,
+                        f"diag_pathcf/{tag}_bellman_delta_rms_over_base": rms0(dy) / yscale,
+                        f"diag_pathcf/{tag}_q_delta_signed_projection": jnp.mean(dq * bq) / (
+                            jnp.mean(bq ** 2) + 1e-12
+                        ),
+                        f"diag_pathcf/{tag}_q_delta_centered_signed_projection": jnp.mean(
+                            dc * qcenter
+                        ) / (jnp.mean(qcenter ** 2) + 1e-12),
+                        f"diag_pathcf/{tag}_q_delta_with_bellman_delta_cos": cosine(dq, dy),
+                        f"diag_pathcf/{tag}_q_delta_mean_over_base_rms": jnp.mean(dq) / qscale,
+                        f"diag_pathcf/{tag}_q_delta_centered_rms_over_base": rms0(dc) / qscale,
+                        f"diag_pathcf/{tag}_q_finite_fraction": jnp.mean(
+                            jnp.isfinite(q).astype(jnp.float32)
+                        ),
+                        f"diag_pathcf/{tag}_v_finite_fraction": jnp.mean(
+                            jnp.isfinite(v).astype(jnp.float32)
+                        ),
+                        f"diag_pathcf/{tag}_q_delta_above_32eps_fraction": jnp.mean(
+                            (jnp.abs(dq) > 32.0 * jnp.finfo(jnp.float32).eps *
+                             jnp.maximum(jnp.abs(bq), 1.0)).astype(jnp.float32)
+                        ),
+                        # Report increase from the common checkpoint separately from
+                        # decrease relative to baseline (they are NOT the same claim).
+                        f"diag_pathcf/{tag}_q_growth_over_initial": vals[0] / (
+                            initial_cf[0] + 1e-12
+                        ),
+                        f"diag_pathcf/{tag}_v_growth_over_initial": vals[1] / (
+                            initial_cf[1] + 1e-12
+                        ),
+                    })
+
+                for branch_tag, branch_vals in branch_cfs.items():
+                    compare_branch(branch_tag, branch_vals)
+
+                # Exact 2x2 factorial contrast of two *input cuts* in probe
+                # function space, not an identified causal mediator decomposition.
+                # Positive/negative values depend on direction; norms are unsigned.
+                q_interact = (
+                    base_cf[5] - cut_backup_cf[5] - frozen_cf[5] + cut_both_cf[5]
+                )
+                v_interact = (
+                    base_cf[7] - cut_backup_cf[7] - frozen_cf[7] + cut_both_cf[7]
+                )
+                y_interact = (
+                    base_cf[8] - cut_backup_cf[8] - frozen_cf[8] + cut_both_cf[8]
+                )
+                bq = base_cf[5]
+                out.update({
+                    "diag_pathcf/horizon": jnp.asarray(steps, dtype=jnp.float32),
+                    "diag_pathcf/target_q_input_cut_tau": jnp.asarray(0.0, dtype=jnp.float32),
+                    "diag_pathcf/v_backup_input_cut_tau": jnp.asarray(target_tau, dtype=jnp.float32),
+                    "diag_pathcf/interaction_q_rms_over_base": rms0(q_interact) / (
+                        rms0(bq) + 1e-12
+                    ),
+                    "diag_pathcf/interaction_q_signed_projection": jnp.mean(q_interact * bq) / (
+                        jnp.mean(bq ** 2) + 1e-12
+                    ),
+                    "diag_pathcf/interaction_q_centered_rms_over_base": rms0(
+                        center(q_interact)
+                    ) / (rms0(bq) + 1e-12),
+                    "diag_pathcf/base_centered_q_over_raw_rms": rms0(
+                        center(bq)
+                    ) / (rms0(bq) + 1e-12),
+                    "diag_pathcf/interaction_v_rms_over_base": rms0(v_interact) / (
+                        rms0(base_cf[7]) + 1e-12
+                    ),
+                    "diag_pathcf/interaction_bellman_rms_over_base": rms0(y_interact) / (
+                        rms0(base_cf[8]) + 1e-12
+                    ),
+                    # This check is algebraically zero up to float rounding and
+                    # catches accidental branch ordering / unpacking errors.
+                    "diag_pathcf/interaction_reconstruction_rms_over_base": jnp.sqrt(
+                        jnp.mean(jnp.square(
+                            q_interact - (
+                                (base_cf[5] - cut_backup_cf[5]) -
+                                (frozen_cf[5] - cut_both_cf[5])
+                            )
+                        ))
+                    ) / (rms0(bq) + 1e-12),
+                })
 
             if enable_forced:
                 out.update(pack_forced("td", ftq, ftlag, tq, td_rms_seq, base_probe_td))
@@ -5802,6 +6087,7 @@ def _train_impl(config: TrainConfig):
         diag_enable_actual_source_forcing=config.diag_enable_actual_source_forcing,
         diag_enable_common_mode_diagnostics=config.diag_enable_common_mode_diagnostics,
         diag_enable_target_tau_counterfactual=config.diag_enable_target_tau_counterfactual,
+        diag_enable_pathway_counterfactual=config.diag_enable_pathway_counterfactual,
         diag_target_tau_fast_multiplier=config.diag_target_tau_fast_multiplier,
         diag_target_tau_very_fast_multiplier=config.diag_target_tau_very_fast_multiplier,
         diag_actual_source_cap_fraction=config.diag_actual_source_cap_fraction,
