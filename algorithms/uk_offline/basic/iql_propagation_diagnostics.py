@@ -111,8 +111,8 @@ from algorithms.uk_offline.common.checkpointing import (
 TensorBatch = Dict[str, jnp.ndarray]
 
 
-ALGORITHM_NAME = "IQL-PD-V13"
-ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics v13 (V12 + sparse multi-horizon edge cuts)"
+ALGORITHM_NAME = "IQL-PD-V14"
+ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics v14 (V13 + paired impulse and sustained target forcing)"
 
 
 EXP_ADV_MAX = 100.0
@@ -214,6 +214,14 @@ class TrainConfig:
     diag_enable_extended_pathway: bool = True
     diag_extended_every: int = 50000
     diag_extended_horizon_steps: int = 100
+    # V14: paired +/- controlled Bellman-target injections, on the SAME 20/50/Hfull
+    # virtual training sequence and probe as V13 (separate from the old H20 loop).
+    # impulse: inject at virtual step 0 only; sustained: inject on every virtual step.
+    # The perturbation is an EXTERNAL CONSTANT target offset, not a measured
+    # endogenous approximation-error source or a full Jacobian eigenmode.
+    # Four additional virtual scans at diag_extended_every: can be expensive.
+    diag_enable_source_response: bool = True
+    diag_source_response_relative_scale: float = 1e-2
     diag_target_tau_fast_multiplier: float = 5.0
     diag_target_tau_very_fast_multiplier: float = 20.0
 
@@ -426,6 +434,8 @@ def validate_config(config: TrainConfig) -> None:
             assert config.diag_extended_every % config.diag_every == 0
             assert config.diag_extended_horizon_steps >= 50
             assert config.diag_extended_horizon_steps <= 500  # guard accidental giant scans
+            if config.diag_enable_source_response:
+                assert 0.0 < config.diag_source_response_relative_scale <= 0.1
         assert config.diag_actual_source_cap_fraction > 0.0
         assert config.diag_horizon_every > 0
         assert config.diag_horizon_short_steps >= 1
@@ -1213,6 +1223,8 @@ class IQLJAX:
         diag_enable_pathway_counterfactual: bool = True,
         diag_enable_extended_pathway: bool = True,
         diag_extended_horizon_steps: int = 100,
+        diag_enable_source_response: bool = True,
+        diag_source_response_relative_scale: float = 1e-2,
         diag_target_tau_fast_multiplier: float = 5.0,
         diag_target_tau_very_fast_multiplier: float = 20.0,
         diag_actual_source_cap_fraction: float = 0.05,
@@ -1274,6 +1286,8 @@ class IQLJAX:
         self.diag_enable_pathway_counterfactual = bool(diag_enable_pathway_counterfactual)
         self.diag_enable_extended_pathway = bool(diag_enable_extended_pathway)
         self.diag_extended_horizon_steps = int(diag_extended_horizon_steps)
+        self.diag_enable_source_response = bool(diag_enable_source_response)
+        self.diag_source_response_relative_scale = float(diag_source_response_relative_scale)
         self.diag_target_tau_fast_multiplier = float(diag_target_tau_fast_multiplier)
         self.diag_target_tau_very_fast_multiplier = float(diag_target_tau_very_fast_multiplier)
         self.diag_actual_source_cap_fraction = float(diag_actual_source_cap_fraction)
@@ -5088,6 +5102,8 @@ class IQLJAX:
         discount = self.discount
         polyak = self.tau
         expectile = self.iql_tau
+        enable_source_response = self.diag_enable_source_response
+        source_rel_amplitude = self.diag_source_response_relative_scale
 
         def srms(x):
             x = jnp.asarray(x, dtype=jnp.float32)
@@ -5129,8 +5145,18 @@ class IQLJAX:
                         jnp.mean(target, axis=0))
 
             initial = metrics(carry0)
+            # A known, state-independent +1 Bellman-target direction on each
+            # future minibatch. Scale from the FIRST virtual minibatch target
+            # rather than the whole rollout to avoid future-information leakage.
+            b0 = (batch_seq['rewards'][0, :, 0]
+                  + (1. - batch_seq['dones'][0, :, 0]) * discount
+                  * v_apply({'params': old_state.v_params},
+                            batch_seq['next_observations'][0]))
+            source_scale = jnp.maximum(srms(b0), jnp.asarray(1.0, jnp.float32))
+            delta = source_rel_amplitude * source_scale
 
-            def rollout(cut_q_input: bool, cut_backup_input: bool):
+            def rollout(cut_q_input: bool, cut_backup_input: bool,
+                        injection: str = 'none', sign: float = 1.0):
                 def one(carry, data):
                     index, obs, act, rew, nxt, done = data
                     qp, qtp, qo, vp, vo = carry
@@ -5143,6 +5169,12 @@ class IQLJAX:
                         q_apply({'params': q_input_params}, obs, act), axis=0))
                     next_value = v_apply({'params': backup_v_params}, nxt)
                     backup = rew + (1.0 - done) * discount * next_value
+                    # A matched external Bellman-target input, NOT an
+                    # estimated endogenous approximation-error source.
+                    if injection == 'impulse':
+                        backup = backup + jnp.where(index == 0, sign * delta, 0.)
+                    elif injection == 'sustained':
+                        backup = backup + sign * delta
 
                     def v_loss(p):
                         u = target_q - v_apply({'params': p}, obs)
@@ -5179,6 +5211,11 @@ class IQLJAX:
             base = rollout(False, False)
             cut_q = rollout(True, False)
             cut_backup = rollout(False, True)
+            if enable_source_response:
+                impulse_plus = rollout(False, False, 'impulse', 1.0)
+                impulse_minus = rollout(False, False, 'impulse', -1.0)
+                sustained_plus = rollout(False, False, 'sustained', 1.0)
+                sustained_minus = rollout(False, False, 'sustained', -1.0)
             out = {
                 'diag_multihorizon/horizon': jnp.asarray(steps, dtype=jnp.float32),
                 'diag_multihorizon/checkpoint_q_rms': srms(initial[0]),
@@ -5222,6 +5259,50 @@ class IQLJAX:
                 b = out[f'diag_multihorizon/{name}_q_delta_rms_over_base_hfull']
                 out[f'diag_multihorizon/{name}_effect_hfull_over_h20'] = b / jnp.maximum(a, 1e-12)
                 out[f'diag_multihorizon/{name}_h20_effect_above_1e-6'] = (a > 1e-6).astype(jnp.float32)
+            if enable_source_response:
+                out['diag_source_response/relative_target_perturbation'] = jnp.asarray(
+                    source_rel_amplitude, dtype=jnp.float32)
+                out['diag_source_response/absolute_target_delta'] = delta
+                out['diag_source_response/first_backup_rms'] = srms(b0)
+                out['diag_source_response/horizon'] = jnp.asarray(steps, dtype=jnp.float32)
+                # In each paired experiment, estimate odd (linear) and even
+                # (nonlinear/asymmetry) components relative to BASELINE.
+                # Using (plus-base) and (minus-base) reduces cancellation.
+                for idx, suffix in ((19, 'h20'), (49, 'h50'), (steps - 1, 'hfull')):
+                    bq, bv, by, _, _ = (x[idx] for x in base)
+                    for mode, pp, mm in (
+                            ('impulse', impulse_plus, impulse_minus),
+                            ('sustained', sustained_plus, sustained_minus)):
+                        pq, pv, py, _, _ = (x[idx] for x in pp)
+                        mq, mv, my, _, _ = (x[idx] for x in mm)
+                        dqp, dqm = pq - bq, mq - bq
+                        odd = 0.5 * (dqp - dqm)
+                        even = 0.5 * (dqp + dqm)
+                        q_response = odd / delta
+                        v_response = (0.5 * ((pv - bv) - (mv - bv))) / delta
+                        bellman_response = (0.5 * ((py - by) - (my - by))) / delta
+                        prefix = f'diag_source_response/{mode}_'
+                        out[prefix + 'q_sensitivity_rms_' + suffix] = srms(q_response)
+                        out[prefix + 'q_odd_delta_over_base_' + suffix] = (
+                            srms(odd) / jnp.maximum(srms(bq), 1e-30))
+                        out[prefix + 'q_centered_sensitivity_rms_' + suffix] = (
+                            srms(q_response - jnp.mean(q_response)))
+                        out[prefix + 'q_response_mean_' + suffix] = jnp.mean(q_response)
+                        out[prefix + 'q_odd_signed_projection_' + suffix] = proj(odd, bq)
+                        out[prefix + 'q_even_over_odd_' + suffix] = (
+                            srms(even) / jnp.maximum(srms(odd), 1e-30))
+                        out[prefix + 'v_sensitivity_rms_' + suffix] = srms(v_response)
+                        out[prefix + 'bellman_sensitivity_rms_' + suffix] = srms(bellman_response)
+                        out[prefix + 'q_response_finite_fraction_' + suffix] = (
+                            jnp.mean(jnp.isfinite(q_response).astype(jnp.float32)))
+                    ig = out['diag_source_response/impulse_q_sensitivity_rms_' + suffix]
+                    fg = out['diag_source_response/sustained_q_sensitivity_rms_' + suffix]
+                    out['diag_source_response/sustained_over_impulse_' + suffix] = (
+                        fg / jnp.maximum(ig, 1e-30))
+                    out['diag_source_response/impulse_gain_above_1e-6_' + suffix] = (
+                        (ig > 1e-6).astype(jnp.float32))
+                # Ratios are ill-conditioned when the impulse response is zero:
+                # the accompanying validity flag must be checked first.
             return out
 
         return diagnostic
@@ -6292,6 +6373,8 @@ def _train_impl(config: TrainConfig):
         diag_enable_pathway_counterfactual=config.diag_enable_pathway_counterfactual,
         diag_enable_extended_pathway=config.diag_enable_extended_pathway,
         diag_extended_horizon_steps=config.diag_extended_horizon_steps,
+        diag_enable_source_response=config.diag_enable_source_response,
+        diag_source_response_relative_scale=config.diag_source_response_relative_scale,
         diag_target_tau_fast_multiplier=config.diag_target_tau_fast_multiplier,
         diag_target_tau_very_fast_multiplier=config.diag_target_tau_very_fast_multiplier,
         diag_actual_source_cap_fraction=config.diag_actual_source_cap_fraction,
