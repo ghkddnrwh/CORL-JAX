@@ -111,8 +111,8 @@ from algorithms.uk_offline.common.checkpointing import (
 TensorBatch = Dict[str, jnp.ndarray]
 
 
-ALGORITHM_NAME = "IQL-PD-V12"
-ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics v12 (V11 + pathway-cut feedback counterfactuals)"
+ALGORITHM_NAME = "IQL-PD-V13"
+ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics v13 (V12 + sparse multi-horizon edge cuts)"
 
 
 EXP_ADV_MAX = 100.0
@@ -207,6 +207,13 @@ class TrainConfig:
     # and (iii) both edges cut.  Uses the same minibatch sequence/optimizer states.
     # Expensive: 2 extra virtual scans when the existing alpha=0 branch is enabled.
     diag_enable_pathway_counterfactual: bool = True
+    # V13: a sparse, longer virtual experiment with *edge-specific* input cuts.
+    # Unlike V12 alpha=0, cut_target_q_to_v keeps target-network Polyak updates
+    # active, but feeds checkpoint target-Q only into the V loss.
+    # Logs H=20, 50, and diag_extended_horizon_steps; diagnostic-only.
+    diag_enable_extended_pathway: bool = True
+    diag_extended_every: int = 50000
+    diag_extended_horizon_steps: int = 100
     diag_target_tau_fast_multiplier: float = 5.0
     diag_target_tau_very_fast_multiplier: float = 20.0
 
@@ -414,6 +421,11 @@ def validate_config(config: TrainConfig) -> None:
         assert config.diag_loop_every > 0
         assert config.diag_loop_short_steps >= 1
         assert config.diag_loop_long_steps >= config.diag_loop_short_steps
+        if config.diag_enable_extended_pathway:
+            assert config.diag_extended_every > 0
+            assert config.diag_extended_every % config.diag_every == 0
+            assert config.diag_extended_horizon_steps >= 50
+            assert config.diag_extended_horizon_steps <= 500  # guard accidental giant scans
         assert config.diag_actual_source_cap_fraction > 0.0
         assert config.diag_horizon_every > 0
         assert config.diag_horizon_short_steps >= 1
@@ -1199,6 +1211,8 @@ class IQLJAX:
         diag_enable_common_mode_diagnostics: bool = True,
         diag_enable_target_tau_counterfactual: bool = True,
         diag_enable_pathway_counterfactual: bool = True,
+        diag_enable_extended_pathway: bool = True,
+        diag_extended_horizon_steps: int = 100,
         diag_target_tau_fast_multiplier: float = 5.0,
         diag_target_tau_very_fast_multiplier: float = 20.0,
         diag_actual_source_cap_fraction: float = 0.05,
@@ -1258,6 +1272,8 @@ class IQLJAX:
         self.diag_enable_common_mode_diagnostics = bool(diag_enable_common_mode_diagnostics)
         self.diag_enable_target_tau_counterfactual = bool(diag_enable_target_tau_counterfactual)
         self.diag_enable_pathway_counterfactual = bool(diag_enable_pathway_counterfactual)
+        self.diag_enable_extended_pathway = bool(diag_enable_extended_pathway)
+        self.diag_extended_horizon_steps = int(diag_extended_horizon_steps)
         self.diag_target_tau_fast_multiplier = float(diag_target_tau_fast_multiplier)
         self.diag_target_tau_very_fast_multiplier = float(diag_target_tau_very_fast_multiplier)
         self.diag_actual_source_cap_fraction = float(diag_actual_source_cap_fraction)
@@ -1358,6 +1374,7 @@ class IQLJAX:
         self._residual_calibration_step = self._build_residual_calibration_step()
         self._horizon_diagnostic_step = self._build_horizon_diagnostic_step()
         self._closed_loop_diagnostic_step = self._build_closed_loop_diagnostic_step()
+        self._extended_pathway_diagnostic_step = self._build_extended_pathway_diagnostic_step()
         self._ridge_diagnostic_step = self._build_ridge_diagnostic_step()
         self._actor_refit_step = self._build_actor_refit_step()
 
@@ -5050,6 +5067,166 @@ class IQLJAX:
 
 
 
+
+    def _build_extended_pathway_diagnostic_step(self):
+        """V13: sparse multi-horizon feedback-edge controls (diagnostic only).
+
+        The same checkpoint, optimizer states and minibatch sequence are used for
+        all three branches. Target-network Polyak updates remain NORMAL in every
+        branch. cut_target_q_to_v replaces only the target-Q INPUT of V fitting
+        with checkpoint target Q. cut_v_to_backup replaces only the V INPUT to Q
+        Bellman targets with checkpoint V. Neither freezes the V optimizer.
+
+        Probe records are taken at H=20, H=50, and H=full sequence. This extends
+        V12's 20-step susceptibility measurement; even H=100 is NOT a long-term
+        causal stability or convergence guarantee.
+        """
+        q_apply = self.q_def.apply
+        v_apply = self.v_def.apply
+        q_tx = self.q_tx
+        v_tx = self.v_tx
+        discount = self.discount
+        polyak = self.tau
+        expectile = self.iql_tau
+
+        def srms(x):
+            x = jnp.asarray(x, dtype=jnp.float32)
+            maxabs = jnp.max(jnp.abs(x))
+            scale = jnp.maximum(maxabs, jnp.asarray(1e-30, dtype=x.dtype))
+            return jnp.where(maxabs == 0., 0.,
+                             scale * jnp.sqrt(jnp.mean(jnp.square(x / scale))))
+
+        def proj(delta, ref):
+            scale = jnp.maximum(jnp.maximum(jnp.max(jnp.abs(delta)),
+                                            jnp.max(jnp.abs(ref))), 1e-30)
+            d, r = delta / scale, ref / scale
+            return jnp.mean(d * r) / (jnp.mean(r * r) + 1e-30)
+
+        @jax.jit
+        def diagnostic(old_state: IQLState, batch_seq: TensorBatch, probe_batch: TensorBatch):
+            steps = batch_seq['observations'].shape[0]
+            assert steps >= 50
+            probe_obs = probe_batch['observations']
+            probe_act = probe_batch['actions']
+            probe_next = probe_batch['next_observations']
+            probe_reward = jnp.squeeze(probe_batch['rewards'], axis=-1)
+            probe_done = jnp.squeeze(probe_batch['dones'], axis=-1)
+            # Preserves the historical V12 closed-loop update ordering: V and Q
+            # gradients both use the pre-update parameter state at each step.
+            carry0 = (old_state.q_params, old_state.q_target_params,
+                      old_state.q_opt_state, old_state.v_params, old_state.v_opt_state)
+
+            def metrics(carry):
+                qp, qtp, _, vp, _ = carry
+                online = q_apply({'params': qp}, probe_obs, probe_act)
+                target = q_apply({'params': qtp}, probe_obs, probe_act)
+                common_q = jnp.mean(online, axis=0)
+                common_lag = common_q - jnp.mean(target, axis=0)
+                value = v_apply({'params': vp}, probe_obs)
+                next_value = v_apply({'params': vp}, probe_next)
+                backup = probe_reward + (1.0 - probe_done) * discount * next_value
+                return (common_q, value, backup, common_lag,
+                        jnp.mean(target, axis=0))
+
+            initial = metrics(carry0)
+
+            def rollout(cut_q_input: bool, cut_backup_input: bool):
+                def one(carry, data):
+                    index, obs, act, rew, nxt, done = data
+                    qp, qtp, qo, vp, vo = carry
+                    rew = jnp.squeeze(rew, axis=-1)
+                    done = jnp.squeeze(done, axis=-1)
+                    # Freeze the edge input, NOT the source network optimizer.
+                    q_input_params = (old_state.q_target_params if cut_q_input else qtp)
+                    backup_v_params = (old_state.v_params if cut_backup_input else vp)
+                    target_q = jax.lax.stop_gradient(jnp.min(
+                        q_apply({'params': q_input_params}, obs, act), axis=0))
+                    next_value = v_apply({'params': backup_v_params}, nxt)
+                    backup = rew + (1.0 - done) * discount * next_value
+
+                    def v_loss(p):
+                        u = target_q - v_apply({'params': p}, obs)
+                        weights = jnp.abs(expectile - (u < 0.).astype(jnp.float32))
+                        return jnp.mean(weights * jnp.square(u))
+
+                    vg = jax.grad(v_loss)(vp)
+                    v_update, new_vo = v_tx.update(vg, vo, vp)
+                    new_vp = optax.apply_updates(vp, v_update)
+
+                    def q_loss(p):
+                        qs = q_apply({'params': p}, obs, act)
+                        return jnp.mean(jnp.square(qs - jax.lax.stop_gradient(backup)[None, :]))
+
+                    qg = jax.grad(q_loss)(qp)
+                    q_update, new_qo = q_tx.update(qg, qo, qp)
+                    new_qp = optax.apply_updates(qp, q_update)
+                    new_qtp = optax.incremental_update(new_qp, qtp, polyak)
+                    new_carry = (new_qp, new_qtp, new_qo, new_vp, new_vo)
+                    # Compute probe outputs only on milestone steps; zeros are
+                    # placeholders outside milestones and are never logged.
+                    selected = (index == 19) | (index == 49) | (index == steps - 1)
+                    record = jax.lax.cond(selected, lambda: metrics(new_carry),
+                                          lambda: jax.tree_util.tree_map(jnp.zeros_like, initial))
+                    return new_carry, record
+
+                idx = jnp.arange(steps, dtype=jnp.int32)
+                xs = (idx, batch_seq['observations'], batch_seq['actions'],
+                      batch_seq['rewards'], batch_seq['next_observations'],
+                      batch_seq['dones'])
+                _, recordings = jax.lax.scan(one, carry0, xs)
+                return recordings
+
+            base = rollout(False, False)
+            cut_q = rollout(True, False)
+            cut_backup = rollout(False, True)
+            out = {
+                'diag_multihorizon/horizon': jnp.asarray(steps, dtype=jnp.float32),
+                'diag_multihorizon/checkpoint_q_rms': srms(initial[0]),
+                'diag_multihorizon/checkpoint_v_rms': srms(initial[1]),
+                'diag_multihorizon/probe_batch_size': jnp.asarray(probe_obs.shape[0], dtype=jnp.float32),
+                'diag_multihorizon/normal_polyak_all_branches': jnp.asarray(1.0),
+            }
+
+            # Use distinct static suffixes so historic V12 logs remain untouched.
+            for idx, suffix in ((19, 'h20'), (49, 'h50'), (steps - 1, 'hfull')):
+                bq, bv, by, blag, btarg = (x[idx] for x in base)
+                out[f'diag_multihorizon/base_q_rms_{suffix}'] = srms(bq)
+                out[f'diag_multihorizon/base_v_rms_{suffix}'] = srms(bv)
+                out[f'diag_multihorizon/base_bellman_rms_{suffix}'] = srms(by)
+                out[f'diag_multihorizon/base_lag_rms_{suffix}'] = srms(blag)
+                out[f'diag_multihorizon/base_q_growth_from_checkpoint_{suffix}'] = (
+                    srms(bq) / jnp.maximum(srms(initial[0]), 1e-30))
+                for name, series in (('cut_target_q_input', cut_q),
+                                     ('cut_v_backup_input', cut_backup)):
+                    cq, cv, cy, clag, ctarg = (x[idx] for x in series)
+                    dq = cq - bq
+                    out[f'diag_multihorizon/{name}_q_over_base_{suffix}'] = (
+                        srms(cq) / jnp.maximum(srms(bq), 1e-30))
+                    out[f'diag_multihorizon/{name}_v_over_base_{suffix}'] = (
+                        srms(cv) / jnp.maximum(srms(bv), 1e-30))
+                    out[f'diag_multihorizon/{name}_q_delta_rms_over_base_{suffix}'] = (
+                        srms(dq) / jnp.maximum(srms(bq), 1e-30))
+                    out[f'diag_multihorizon/{name}_q_delta_signed_projection_{suffix}'] = (
+                        proj(dq, bq))
+                    out[f'diag_multihorizon/{name}_q_delta_centered_rms_over_base_{suffix}'] = (
+                        srms(dq - jnp.mean(dq)) / jnp.maximum(srms(bq), 1e-30))
+                    out[f'diag_multihorizon/{name}_target_common_rms_{suffix}'] = srms(ctarg)
+                    out[f'diag_multihorizon/{name}_lag_rms_{suffix}'] = srms(clag)
+                    out[f'diag_multihorizon/{name}_q_finite_fraction_{suffix}'] = jnp.mean(
+                        jnp.isfinite(cq).astype(jnp.float32))
+
+            # Growth of a *branch difference*, not absolute Q growth. Separate
+            # numerator/denominator makes a near-zero 20-step difference visible.
+            for name in ('cut_target_q_input', 'cut_v_backup_input'):
+                a = out[f'diag_multihorizon/{name}_q_delta_rms_over_base_h20']
+                b = out[f'diag_multihorizon/{name}_q_delta_rms_over_base_hfull']
+                out[f'diag_multihorizon/{name}_effect_hfull_over_h20'] = b / jnp.maximum(a, 1e-12)
+                out[f'diag_multihorizon/{name}_h20_effect_above_1e-6'] = (a > 1e-6).astype(jnp.float32)
+            return out
+
+        return diagnostic
+
+
     def _build_horizon_diagnostic_step(self):
         """Finite-horizon critic-fitting response B^(H) under repeated virtual Adam fits.
 
@@ -5328,6 +5505,8 @@ class IQLJAX:
         run_residual_calibration: bool = False,
         run_horizon_diagnostic: bool = False,
         run_loop_diagnostic: bool = False,
+        run_extended_diagnostic: bool = False,
+        extended_batch_sequence: Optional[TensorBatch] = None,
         loop_batch_sequence: Optional[TensorBatch] = None,
         run_ridge_diagnostic: bool = False,
     ) -> Dict[str, float]:
@@ -5366,6 +5545,29 @@ class IQLJAX:
                     loop_log = self._closed_loop_diagnostic_step(old_state, loop_batch_sequence, diag_batch)
                     log_dict.update(loop_log)
 
+
+                if run_extended_diagnostic and extended_batch_sequence is not None:
+                    ext_log = self._extended_pathway_diagnostic_step(
+                        old_state, extended_batch_sequence, diag_batch
+                    )
+                    log_dict.update(ext_log)
+                    # At coincident 50k checkpoints both diagnostics share the
+                    # same first 20 minibatches and original optimizer state.
+                    # Check the new edge-specific implementation against V12.
+                    v12_base = 'diag_target_cf/base_q_common_rms_h20'
+                    if v12_base in log_dict:
+                        q13 = ext_log['diag_multihorizon/base_q_rms_h20']
+                        q12 = log_dict[v12_base]
+                        log_dict['diag_multihorizon/v12_baseline_h20_relative_mismatch'] = (
+                            jnp.abs(q13 - q12) / jnp.maximum(jnp.abs(q12), 1e-30)
+                        )
+                    v12_cut = 'diag_pathcf/cut_target_q_to_v_q_over_base'
+                    if v12_cut in log_dict:
+                        r13 = ext_log['diag_multihorizon/cut_target_q_input_q_over_base_h20']
+                        r12 = log_dict[v12_cut]
+                        log_dict['diag_multihorizon/v12_frozen_target_h20_relative_mismatch'] = (
+                            jnp.abs(r13 - r12) / jnp.maximum(jnp.abs(r12), 1e-30)
+                        )
 
                 if run_ridge_diagnostic:
                     ridge_log = self._ridge_diagnostic_step(old_state, batch, diag_batch)
@@ -6088,6 +6290,8 @@ def _train_impl(config: TrainConfig):
         diag_enable_common_mode_diagnostics=config.diag_enable_common_mode_diagnostics,
         diag_enable_target_tau_counterfactual=config.diag_enable_target_tau_counterfactual,
         diag_enable_pathway_counterfactual=config.diag_enable_pathway_counterfactual,
+        diag_enable_extended_pathway=config.diag_enable_extended_pathway,
+        diag_extended_horizon_steps=config.diag_extended_horizon_steps,
         diag_target_tau_fast_multiplier=config.diag_target_tau_fast_multiplier,
         diag_target_tau_very_fast_multiplier=config.diag_target_tau_very_fast_multiplier,
         diag_actual_source_cap_fraction=config.diag_actual_source_cap_fraction,
@@ -6267,7 +6471,12 @@ def _train_impl(config: TrainConfig):
                 and config.diag_enable_value_divergence
                 and step % int(config.diag_divergence_every) == 0
             )
-            diagnostic_due = propagation_due or divergence_due
+            extended_due = (
+                config.enable_propagation_diagnostics
+                and config.diag_enable_extended_pathway
+                and step % int(config.diag_extended_every) == 0
+            )
+            diagnostic_due = propagation_due or divergence_due or extended_due
             residual_calibration_due = (
                 propagation_due
                 and config.diag_enable_residual_injection_calibration
@@ -6302,6 +6511,21 @@ def _train_impl(config: TrainConfig):
                 }
 
 
+            extended_batch_sequence = None
+            if extended_due:
+                # Independent diagnostic RNG: no consumption of training NumPy RNG.
+                # The first 20 batches match the V12 loop branch at coincident steps
+                # to allow h20 consistency checks, regardless of overall horizon.
+                ext_rng = np.random.default_rng(seed + 1_000_003 * int(step) + 17)
+                ext_batches = [batch] + [
+                    replay_buffer.sample_with_rng(config.batch_size, ext_rng)
+                    for _ in range(int(config.diag_extended_horizon_steps) - 1)
+                ]
+                extended_batch_sequence = {
+                    key: jnp.stack([b[key] for b in ext_batches], axis=0)
+                    for key in batch.keys()
+                }
+
             log_dict = trainer.train(
                 batch,
                 diag_batch=diag_batch,
@@ -6311,6 +6535,8 @@ def _train_impl(config: TrainConfig):
                 run_residual_calibration=residual_calibration_due,
                 run_horizon_diagnostic=horizon_due,
                 run_loop_diagnostic=loop_due,
+                run_extended_diagnostic=extended_due,
+                extended_batch_sequence=extended_batch_sequence,
                 loop_batch_sequence=loop_batch_sequence,
                 run_ridge_diagnostic=ridge_due,
             )
