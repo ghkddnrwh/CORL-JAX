@@ -111,8 +111,8 @@ from algorithms.uk_offline.common.checkpointing import (
 TensorBatch = Dict[str, jnp.ndarray]
 
 
-ALGORITHM_NAME = "IQL-PD-V14"
-ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics v14 (V13 + paired impulse and sustained target forcing)"
+ALGORITHM_NAME = "IQL-PD-V15"
+ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics v15 (V14 + input-budget and centered forcing controls)"
 
 
 EXP_ADV_MAX = 100.0
@@ -222,6 +222,15 @@ class TrainConfig:
     # Four additional virtual scans at diag_extended_every: can be expensive.
     diag_enable_source_response: bool = True
     diag_source_response_relative_scale: float = 1e-2
+    # V15 controlled response checks, only executed during the sparse extended
+    # diagnostic. Additional four virtual +/- rollouts per checkpoint:
+    # (1) sustained constant perturbation with the SAME total L1-per-step-RMS
+    #     input budget as the existing impulse, delta/H each step;
+    # (2) the same equal-budget sustained injection along a centered/clipped
+    #     frozen-checkpoint TD-residual pattern, normalized to unit RMS per batch.
+    # Frozen residual is a source SHAPE PROXY, never ground-truth value error.
+    diag_enable_forcing_controls: bool = True
+    diag_forcing_control_clip: float = 5.0
     diag_target_tau_fast_multiplier: float = 5.0
     diag_target_tau_very_fast_multiplier: float = 20.0
 
@@ -436,6 +445,8 @@ def validate_config(config: TrainConfig) -> None:
             assert config.diag_extended_horizon_steps <= 500  # guard accidental giant scans
             if config.diag_enable_source_response:
                 assert 0.0 < config.diag_source_response_relative_scale <= 0.1
+            if config.diag_enable_forcing_controls:
+                assert config.diag_forcing_control_clip >= 1.0
         assert config.diag_actual_source_cap_fraction > 0.0
         assert config.diag_horizon_every > 0
         assert config.diag_horizon_short_steps >= 1
@@ -1225,6 +1236,8 @@ class IQLJAX:
         diag_extended_horizon_steps: int = 100,
         diag_enable_source_response: bool = True,
         diag_source_response_relative_scale: float = 1e-2,
+        diag_enable_forcing_controls: bool = True,
+        diag_forcing_control_clip: float = 5.0,
         diag_target_tau_fast_multiplier: float = 5.0,
         diag_target_tau_very_fast_multiplier: float = 20.0,
         diag_actual_source_cap_fraction: float = 0.05,
@@ -1288,6 +1301,8 @@ class IQLJAX:
         self.diag_extended_horizon_steps = int(diag_extended_horizon_steps)
         self.diag_enable_source_response = bool(diag_enable_source_response)
         self.diag_source_response_relative_scale = float(diag_source_response_relative_scale)
+        self.diag_enable_forcing_controls = bool(diag_enable_forcing_controls)
+        self.diag_forcing_control_clip = float(diag_forcing_control_clip)
         self.diag_target_tau_fast_multiplier = float(diag_target_tau_fast_multiplier)
         self.diag_target_tau_very_fast_multiplier = float(diag_target_tau_very_fast_multiplier)
         self.diag_actual_source_cap_fraction = float(diag_actual_source_cap_fraction)
@@ -5104,6 +5119,9 @@ class IQLJAX:
         expectile = self.iql_tau
         enable_source_response = self.diag_enable_source_response
         source_rel_amplitude = self.diag_source_response_relative_scale
+        enable_forcing_controls = (self.diag_enable_source_response
+                                   and self.diag_enable_forcing_controls)
+        control_clip = self.diag_forcing_control_clip
 
         def srms(x):
             x = jnp.asarray(x, dtype=jnp.float32)
@@ -5154,6 +5172,36 @@ class IQLJAX:
                             batch_seq['next_observations'][0]))
             source_scale = jnp.maximum(srms(b0), jnp.asarray(1.0, jnp.float32))
             delta = source_rel_amplitude * source_scale
+            # Equal total per-step-RMS L1 budget: the impulse receives delta
+            # once; each matched sustained step receives delta / H. The input
+            # budget at H20/H50 is only 20/H or 50/H of delta, respectively.
+            budget_delta_step = delta / jnp.asarray(steps, dtype=jnp.float32)
+
+            if enable_forcing_controls:
+                # Frozen-checkpoint TD residual as a *shape proxy*, NOT a true
+                # approximation error. Evaluate once on each fixed future batch,
+                # outside the perturbation branches, so all branches receive
+                # exactly the same source sequence and preserve the baseline.
+                def frozen_td_shape(obs, act, rew, nxt, done):
+                    q_old = jnp.mean(q_apply({'params': old_state.q_params}, obs, act), axis=0)
+                    y_old = (jnp.squeeze(rew, -1)
+                             + (1.0 - jnp.squeeze(done, -1)) * discount
+                             * v_apply({'params': old_state.v_params}, nxt))
+                    raw = q_old - y_old
+                    raw = raw - jnp.mean(raw)
+                    raw_rms = srms(raw)
+                    unit = raw / jnp.maximum(raw_rms, 1e-6)
+                    unit = jnp.clip(unit, -control_clip, control_clip)
+                    unit = unit - jnp.mean(unit)
+                    clipped_rms = srms(unit)
+                    return jnp.where(clipped_rms > 1e-6,
+                                     unit / jnp.maximum(clipped_rms, 1e-6),
+                                     jnp.zeros_like(unit))
+                frozen_shapes = jax.vmap(frozen_td_shape)(
+                    batch_seq['observations'], batch_seq['actions'],
+                    batch_seq['rewards'], batch_seq['next_observations'],
+                    batch_seq['dones'])
+                shape_rms_per_step = jax.vmap(srms)(frozen_shapes)
 
             def rollout(cut_q_input: bool, cut_backup_input: bool,
                         injection: str = 'none', sign: float = 1.0):
@@ -5175,6 +5223,12 @@ class IQLJAX:
                         backup = backup + jnp.where(index == 0, sign * delta, 0.)
                     elif injection == 'sustained':
                         backup = backup + sign * delta
+                    elif injection == 'equal_l1_constant':
+                        backup = backup + sign * budget_delta_step
+                    elif injection == 'equal_l1_centered_td':
+                        # The frozen shape has within-batch mean zero and
+                        # per-batch RMS 1 (unless the frozen TD is degenerate).
+                        backup = backup + sign * budget_delta_step * frozen_shapes[index]
 
                     def v_loss(p):
                         u = target_q - v_apply({'params': p}, obs)
@@ -5216,6 +5270,11 @@ class IQLJAX:
                 impulse_minus = rollout(False, False, 'impulse', -1.0)
                 sustained_plus = rollout(False, False, 'sustained', 1.0)
                 sustained_minus = rollout(False, False, 'sustained', -1.0)
+            if enable_forcing_controls:
+                equal_constant_plus = rollout(False, False, 'equal_l1_constant', 1.0)
+                equal_constant_minus = rollout(False, False, 'equal_l1_constant', -1.0)
+                equal_td_plus = rollout(False, False, 'equal_l1_centered_td', 1.0)
+                equal_td_minus = rollout(False, False, 'equal_l1_centered_td', -1.0)
             out = {
                 'diag_multihorizon/horizon': jnp.asarray(steps, dtype=jnp.float32),
                 'diag_multihorizon/checkpoint_q_rms': srms(initial[0]),
@@ -5303,6 +5362,84 @@ class IQLJAX:
                         (ig > 1e-6).astype(jnp.float32))
                 # Ratios are ill-conditioned when the impulse response is zero:
                 # the accompanying validity flag must be checked first.
+            if enable_forcing_controls:
+                # These are controlled matched-input tests, NOT measurements of
+                # endogenous model approximation error or true system stability.
+                pfx = 'diag_forcing_control/'
+                out[pfx + 'full_horizon'] = jnp.asarray(steps, jnp.float32)
+                out[pfx + 'impulse_total_rms_l1_budget'] = delta
+                out[pfx + 'equal_l1_per_step_delta'] = budget_delta_step
+                out[pfx + 'equal_l1_full_budget'] = budget_delta_step * steps
+                out[pfx + 'centered_proxy_average_source_rms'] = jnp.mean(shape_rms_per_step)
+                out[pfx + 'centered_proxy_nonzero_batch_fraction'] = jnp.mean(
+                    (shape_rms_per_step > 0.5).astype(jnp.float32))
+                out[pfx + 'centered_proxy_mean_abs'] = jnp.mean(jnp.abs(
+                    jnp.mean(frozen_shapes, axis=-1)))
+                out[pfx + 'centered_proxy_max_abs'] = jnp.max(jnp.abs(frozen_shapes))
+                out[pfx + 'centered_proxy_finite_fraction'] = jnp.mean(
+                    jnp.isfinite(frozen_shapes).astype(jnp.float32))
+                # The two equal-budget sustained interventions are normalized
+                # by the actual total budget received by each milestone.
+                for idx, suffix in ((19, 'h20'), (49, 'h50'), (steps - 1, 'hfull')):
+                    bq, bv, by, _, _ = (x[idx] for x in base)
+                    actual_steps = idx + 1
+                    actual_budget = budget_delta_step * actual_steps
+                    out[pfx + 'observed_budget_over_impulse_' + suffix] = (
+                        actual_budget / jnp.maximum(delta, 1e-30))
+                    for name, plus, minus in (
+                            ('matched_constant', equal_constant_plus, equal_constant_minus),
+                            ('matched_centered_td', equal_td_plus, equal_td_minus)):
+                        pq, pv, py, _, _ = (x[idx] for x in plus)
+                        mq, mv, my, _, _ = (x[idx] for x in minus)
+                        dp, dm = pq - bq, mq - bq
+                        odd = 0.5 * (dp - dm)
+                        even = 0.5 * (dp + dm)
+                        odd_per_budget = odd / jnp.maximum(actual_budget, 1e-30)
+                        prefix = pfx + name + '_'
+                        out[prefix + 'q_gain_per_budget_' + suffix] = srms(odd_per_budget)
+                        out[prefix + 'q_gain_centered_per_budget_' + suffix] = srms(
+                            odd_per_budget - jnp.mean(odd_per_budget))
+                        out[prefix + 'q_gain_mean_per_budget_' + suffix] = jnp.mean(odd_per_budget)
+                        out[prefix + 'q_odd_delta_over_base_' + suffix] = (
+                            srms(odd) / jnp.maximum(srms(bq), 1e-30))
+                        out[prefix + 'q_even_over_odd_' + suffix] = (
+                            srms(even) / jnp.maximum(srms(odd), 1e-30))
+                        out[prefix + 'v_gain_per_budget_' + suffix] = (
+                            srms(0.5 * ((pv - bv) - (mv - bv)))
+                            / jnp.maximum(actual_budget, 1e-30))
+                        out[prefix + 'bellman_gain_per_budget_' + suffix] = (
+                            srms(0.5 * ((py - by) - (my - by)))
+                            / jnp.maximum(actual_budget, 1e-30))
+                        out[prefix + 'q_odd_float32_resolution_fraction_' + suffix] = (
+                            jnp.mean((jnp.abs(odd) > 32. * jnp.finfo(jnp.float32).eps
+                                      * jnp.maximum(1.0, jnp.abs(bq))).astype(jnp.float32)))
+                        out[prefix + 'q_finite_fraction_' + suffix] = (
+                            jnp.mean(jnp.isfinite(odd_per_budget).astype(jnp.float32)))
+                    # Compared at the SAME observed total input budget, NOT at
+                    # the same per-step amplitude. Large ratios are NOT an
+                    # unstable Jacobian unless the direction is validated.
+                    ig = out['diag_source_response/impulse_q_sensitivity_rms_' + suffix]
+                    mg = out[pfx + 'matched_constant_q_gain_per_budget_' + suffix]
+                    tg = out[pfx + 'matched_centered_td_q_gain_per_budget_' + suffix]
+                    out[pfx + 'matched_constant_over_impulse_' + suffix] = (
+                        mg / jnp.maximum(ig, 1e-12))
+                    out[pfx + 'centered_td_over_constant_' + suffix] = (
+                        tg / jnp.maximum(mg, 1e-12))
+                    # The following is a directional finite-amplitude
+                    # scale-consistency check: for an exactly linear response,
+                    # odd_full ~ (full_horizon/observed_steps)*odd_matched.
+                    full_plus = sustained_plus[0][idx]
+                    full_minus = sustained_minus[0][idx]
+                    matched_plus = equal_constant_plus[0][idx]
+                    matched_minus = equal_constant_minus[0][idx]
+                    odd_full = 0.5 * ((full_plus - bq) - (full_minus - bq))
+                    odd_matched = 0.5 * ((matched_plus - bq) - (matched_minus - bq))
+                    expected_full = (steps * 1.0) * odd_matched
+                    out[pfx + 'constant_amplitude_linearity_relerr_' + suffix] = (
+                        srms(odd_full - expected_full)
+                        / jnp.maximum(srms(odd_full), 1e-30))
+                    out[pfx + 'constant_amplitude_linearity_signal_' + suffix] = (
+                        srms(odd_full) / jnp.maximum(srms(bq), 1e-30))
             return out
 
         return diagnostic
@@ -6375,6 +6512,8 @@ def _train_impl(config: TrainConfig):
         diag_extended_horizon_steps=config.diag_extended_horizon_steps,
         diag_enable_source_response=config.diag_enable_source_response,
         diag_source_response_relative_scale=config.diag_source_response_relative_scale,
+        diag_enable_forcing_controls=config.diag_enable_forcing_controls,
+        diag_forcing_control_clip=config.diag_forcing_control_clip,
         diag_target_tau_fast_multiplier=config.diag_target_tau_fast_multiplier,
         diag_target_tau_very_fast_multiplier=config.diag_target_tau_very_fast_multiplier,
         diag_actual_source_cap_fraction=config.diag_actual_source_cap_fraction,
