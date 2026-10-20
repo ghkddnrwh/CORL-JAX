@@ -111,8 +111,8 @@ from algorithms.uk_offline.common.checkpointing import (
 TensorBatch = Dict[str, jnp.ndarray]
 
 
-ALGORITHM_NAME = "IQL-PD-V15"
-ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics v15 (V14 + input-budget and centered forcing controls)"
+ALGORITHM_NAME = "IQL-PD-V16"
+ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics v16 (V14 + input-budget and centered forcing controls)"
 
 
 EXP_ADV_MAX = 100.0
@@ -231,6 +231,14 @@ class TrainConfig:
     # Frozen residual is a source SHAPE PROXY, never ground-truth value error.
     diag_enable_forcing_controls: bool = True
     diag_forcing_control_clip: float = 5.0
+    # V16: LOCAL amplitude ladder on the identical H-step equal-budget constant
+    # forcing schedule; compares 0.5x, 1x and 2x. V15's other amplitude is 100x,
+    # which by itself does NOT establish the behavior of the local derivative.
+    # Adds four virtual +/- rollouts at sparse diag_extended_every checkpoints.
+    # False disables these extra scans and adds no diag_amplitude/ keys.
+    diag_enable_local_amplitude_ladder: bool = True
+    diag_local_amplitude_low: float = 0.5
+    diag_local_amplitude_high: float = 2.0
     diag_target_tau_fast_multiplier: float = 5.0
     diag_target_tau_very_fast_multiplier: float = 20.0
 
@@ -447,6 +455,12 @@ def validate_config(config: TrainConfig) -> None:
                 assert 0.0 < config.diag_source_response_relative_scale <= 0.1
             if config.diag_enable_forcing_controls:
                 assert config.diag_forcing_control_clip >= 1.0
+            if config.diag_enable_local_amplitude_ladder:
+                assert config.diag_enable_source_response and config.diag_enable_forcing_controls, (
+                    'Local amplitude ladder requires source response and forcing controls'
+                )
+                assert 0.0 < config.diag_local_amplitude_low < 1.0
+                assert config.diag_local_amplitude_high > 1.0
         assert config.diag_actual_source_cap_fraction > 0.0
         assert config.diag_horizon_every > 0
         assert config.diag_horizon_short_steps >= 1
@@ -1238,6 +1252,9 @@ class IQLJAX:
         diag_source_response_relative_scale: float = 1e-2,
         diag_enable_forcing_controls: bool = True,
         diag_forcing_control_clip: float = 5.0,
+        diag_enable_local_amplitude_ladder: bool = True,
+        diag_local_amplitude_low: float = 0.5,
+        diag_local_amplitude_high: float = 2.0,
         diag_target_tau_fast_multiplier: float = 5.0,
         diag_target_tau_very_fast_multiplier: float = 20.0,
         diag_actual_source_cap_fraction: float = 0.05,
@@ -1303,6 +1320,9 @@ class IQLJAX:
         self.diag_source_response_relative_scale = float(diag_source_response_relative_scale)
         self.diag_enable_forcing_controls = bool(diag_enable_forcing_controls)
         self.diag_forcing_control_clip = float(diag_forcing_control_clip)
+        self.diag_enable_local_amplitude_ladder = bool(diag_enable_local_amplitude_ladder)
+        self.diag_local_amplitude_low = float(diag_local_amplitude_low)
+        self.diag_local_amplitude_high = float(diag_local_amplitude_high)
         self.diag_target_tau_fast_multiplier = float(diag_target_tau_fast_multiplier)
         self.diag_target_tau_very_fast_multiplier = float(diag_target_tau_very_fast_multiplier)
         self.diag_actual_source_cap_fraction = float(diag_actual_source_cap_fraction)
@@ -5122,6 +5142,10 @@ class IQLJAX:
         enable_forcing_controls = (self.diag_enable_source_response
                                    and self.diag_enable_forcing_controls)
         control_clip = self.diag_forcing_control_clip
+        enable_local_ladder = (enable_forcing_controls
+                               and self.diag_enable_local_amplitude_ladder)
+        amplitude_low = self.diag_local_amplitude_low
+        amplitude_high = self.diag_local_amplitude_high
 
         def srms(x):
             x = jnp.asarray(x, dtype=jnp.float32)
@@ -5204,7 +5228,8 @@ class IQLJAX:
                 shape_rms_per_step = jax.vmap(srms)(frozen_shapes)
 
             def rollout(cut_q_input: bool, cut_backup_input: bool,
-                        injection: str = 'none', sign: float = 1.0):
+                        injection: str = 'none', sign: float = 1.0,
+                        amplitude_multiplier: float = 1.0):
                 def one(carry, data):
                     index, obs, act, rew, nxt, done = data
                     qp, qtp, qo, vp, vo = carry
@@ -5224,7 +5249,7 @@ class IQLJAX:
                     elif injection == 'sustained':
                         backup = backup + sign * delta
                     elif injection == 'equal_l1_constant':
-                        backup = backup + sign * budget_delta_step
+                        backup = backup + sign * budget_delta_step * amplitude_multiplier
                     elif injection == 'equal_l1_centered_td':
                         # The frozen shape has within-batch mean zero and
                         # per-batch RMS 1 (unless the frozen TD is degenerate).
@@ -5275,6 +5300,18 @@ class IQLJAX:
                 equal_constant_minus = rollout(False, False, 'equal_l1_constant', -1.0)
                 equal_td_plus = rollout(False, False, 'equal_l1_centered_td', 1.0)
                 equal_td_minus = rollout(False, False, 'equal_l1_centered_td', -1.0)
+            if enable_local_ladder:
+                # Same initial state, same future minibatches, same injection
+                # schedule; ONLY input amplitude changes. Reference 1x branches
+                # already exist as equal_constant_plus/minus, avoiding re-rollouts.
+                local_low_plus = rollout(False, False, 'equal_l1_constant', 1.0,
+                                         amplitude_low)
+                local_low_minus = rollout(False, False, 'equal_l1_constant', -1.0,
+                                          amplitude_low)
+                local_high_plus = rollout(False, False, 'equal_l1_constant', 1.0,
+                                          amplitude_high)
+                local_high_minus = rollout(False, False, 'equal_l1_constant', -1.0,
+                                           amplitude_high)
             out = {
                 'diag_multihorizon/horizon': jnp.asarray(steps, dtype=jnp.float32),
                 'diag_multihorizon/checkpoint_q_rms': srms(initial[0]),
@@ -5440,6 +5477,87 @@ class IQLJAX:
                         / jnp.maximum(srms(odd_full), 1e-30))
                     out[pfx + 'constant_amplitude_linearity_signal_' + suffix] = (
                         srms(odd_full) / jnp.maximum(srms(bq), 1e-30))
+
+            if enable_local_ladder:
+                # Finite-amplitude, *local* consistency; not a certified
+                # Jacobian. All scales share the same injection direction and
+                # the same step schedule. Normalized per ACTUAL total budget
+                # at each milestone; record response detectability separately.
+                p = 'diag_amplitude/'
+                out[p + 'low_multiplier'] = jnp.asarray(amplitude_low, jnp.float32)
+                out[p + 'reference_multiplier'] = jnp.asarray(1.0, jnp.float32)
+                out[p + 'high_multiplier'] = jnp.asarray(amplitude_high, jnp.float32)
+                out[p + 'full_horizon'] = jnp.asarray(steps, jnp.float32)
+
+                def stable_cos(a, b):
+                    scale = jnp.maximum(jnp.maximum(jnp.max(jnp.abs(a)),
+                                                    jnp.max(jnp.abs(b))), 1e-30)
+                    aa, bb = a / scale, b / scale
+                    return (jnp.mean(aa * bb) /
+                            jnp.maximum(jnp.sqrt(jnp.mean(aa * aa) * jnp.mean(bb * bb)),
+                                        1e-30))
+
+                for idx, suffix in ((19, 'h20'), (49, 'h50'), (steps - 1, 'hfull')):
+                    bq, bv, by, _, _ = (x[idx] for x in base)
+                    budget = budget_delta_step * (idx + 1)
+                    triplets = (
+                        ('low', amplitude_low, local_low_plus, local_low_minus),
+                        ('reference', 1.0, equal_constant_plus, equal_constant_minus),
+                        ('high', amplitude_high, local_high_plus, local_high_minus),
+                    )
+                    responses = {}
+                    for tag, multiplier, plus, minus in triplets:
+                        pq, pv, py, _, _ = (x[idx] for x in plus)
+                        mq, mv, my, _, _ = (x[idx] for x in minus)
+                        odd = 0.5 * ((pq - bq) - (mq - bq))
+                        even = 0.5 * ((pq - bq) + (mq - bq))
+                        # Per unit of each branch's own injected L1-RMS budget.
+                        actual_budget = budget * multiplier
+                        response = odd / jnp.maximum(actual_budget, 1e-30)
+                        responses[tag] = response
+                        pref = p + tag + '_'
+                        out[pref + 'q_gain_per_budget_' + suffix] = srms(response)
+                        out[pref + 'q_centered_gain_per_budget_' + suffix] = srms(
+                            response - jnp.mean(response))
+                        out[pref + 'q_gain_mean_' + suffix] = jnp.mean(response)
+                        out[pref + 'q_even_over_odd_' + suffix] = (
+                            srms(even) / jnp.maximum(srms(odd), 1e-30))
+                        out[pref + 'q_odd_over_base_' + suffix] = (
+                            srms(odd) / jnp.maximum(srms(bq), 1e-30))
+                        # Diagnostics of signal-to-float32-ulp, NOT certification.
+                        out[pref + 'q_32eps_detectable_fraction_' + suffix] = jnp.mean(
+                            (jnp.abs(odd) > 32. * jnp.finfo(jnp.float32).eps
+                             * jnp.maximum(1.0, jnp.abs(bq))).astype(jnp.float32))
+                        out[pref + 'q_response_finite_fraction_' + suffix] = jnp.mean(
+                            jnp.isfinite(response).astype(jnp.float32))
+                        out[pref + 'v_gain_per_budget_' + suffix] = (
+                            srms(0.5 * ((pv - bv) - (mv - bv))) /
+                            jnp.maximum(actual_budget, 1e-30))
+                        out[pref + 'backup_gain_per_budget_' + suffix] = (
+                            srms(0.5 * ((py - by) - (my - by))) /
+                            jnp.maximum(actual_budget, 1e-30))
+                    ref = responses['reference']
+                    low = responses['low']
+                    high = responses['high']
+                    # When the function is linear over [low, high], all three
+                    # budget-normalized response functions agree, not merely norms.
+                    out[p + 'low_vs_reference_relerr_' + suffix] = (
+                        srms(low - ref) / jnp.maximum(srms(ref), 1e-30))
+                    out[p + 'high_vs_reference_relerr_' + suffix] = (
+                        srms(high - ref) / jnp.maximum(srms(ref), 1e-30))
+                    out[p + 'high_vs_low_relerr_' + suffix] = (
+                        srms(high - low) / jnp.maximum(srms(ref), 1e-30))
+                    out[p + 'low_vs_reference_cos_' + suffix] = stable_cos(low, ref)
+                    out[p + 'high_vs_reference_cos_' + suffix] = stable_cos(high, ref)
+                    out[p + 'response_amplitude_exponent_' + suffix] = (
+                        jnp.log(jnp.maximum(srms(high * amplitude_high), 1e-30)
+                                / jnp.maximum(srms(low * amplitude_low), 1e-30)) /
+                        jnp.log(jnp.asarray(amplitude_high / amplitude_low, jnp.float32)))
+                    out[p + 'reference_gain_above_1e-5_' + suffix] = (
+                        (srms(ref) > 1e-5).astype(jnp.float32))
+                    out[p + 'low_high_both_32eps_fraction_' + suffix] = jnp.minimum(
+                        out[p + 'low_q_32eps_detectable_fraction_' + suffix],
+                        out[p + 'high_q_32eps_detectable_fraction_' + suffix])
             return out
 
         return diagnostic
@@ -6514,6 +6632,9 @@ def _train_impl(config: TrainConfig):
         diag_source_response_relative_scale=config.diag_source_response_relative_scale,
         diag_enable_forcing_controls=config.diag_enable_forcing_controls,
         diag_forcing_control_clip=config.diag_forcing_control_clip,
+        diag_enable_local_amplitude_ladder=config.diag_enable_local_amplitude_ladder,
+        diag_local_amplitude_low=config.diag_local_amplitude_low,
+        diag_local_amplitude_high=config.diag_local_amplitude_high,
         diag_target_tau_fast_multiplier=config.diag_target_tau_fast_multiplier,
         diag_target_tau_very_fast_multiplier=config.diag_target_tau_very_fast_multiplier,
         diag_actual_source_cap_fraction=config.diag_actual_source_cap_fraction,
