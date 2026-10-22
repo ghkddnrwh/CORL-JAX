@@ -1,3 +1,12 @@
+"""Tabular GridWorld: two noise modes + generalized N-member Double Q.
+
+Modes:
+    shared_target  : one per-step noisy Q view (shared by behavior and TD target)
+    table_additive : permanently perturb every online Q-table cell after TD
+
+The full experiment configuration is near section 5 at the bottom.
+"""
+
 import os
 import csv
 import numpy as np
@@ -114,14 +123,83 @@ def get_optimal_q(
 # ============================================================
 
 def choose_action(q_values, epsilon, rng):
+    """Epsilon-greedy over the 4 REAL actions.
+
+    Accept either [4] (one value per action) or [4, K] (virtual noisy
+    candidates per action).  When given [4, K], choose the best (action, k)
+    candidate and return only its REAL action index (0..3).
+    Random exploration remains uniform over just the 4 real actions.
+    """
+    q_values = np.asarray(q_values)
+    if q_values.ndim == 1:
+        if q_values.shape != (4,):
+            raise ValueError("1D behavior values must have shape (4,)")
+        action_scores = q_values
+    elif q_values.ndim == 2:
+        if q_values.shape[0] != 4 or q_values.shape[1] < 1:
+            raise ValueError("2D behavior candidates must have shape (4, K), K>=1")
+        action_scores = np.max(q_values, axis=1)
+    else:
+        raise ValueError("behavior values must be shape (4,) or (4,K)")
+
     if rng.random() < epsilon:
-        return rng.integers(4)
-    return np.argmax(q_values)
+        return int(rng.integers(4))
+    return int(np.argmax(action_scores))
 
 
 # ============================================================
-# 4. Training
+# 4. Noise models / Training
 # ============================================================
+
+NOISE_MODES = ("shared_target", "table_additive")
+
+
+class StepQView:
+    """Q-value view fixed within one environment update.
+
+    shared_target:
+      For each estimator i and queried state s, sample ONE (4, K) array:
+          noisy_Q[i, s, a, k] = Q[i, s, a] + eps[i, s, a, k]
+      Reuse the SAME array for behavior (all K by default) AND bootstrap. Different
+      states/estimators/candidates have independent Gaussian errors.  Instead
+      of allocating the entire [N,H,W,4,K] tensor at each step, create only
+      queried state slices and cache them for the duration of the step.
+
+    table_additive:
+      The table already contains all previously injected errors.  Return its
+      current real-action values with a singleton candidate axis (K=1).
+      No read-time noise is added.
+
+    IMPORTANT: Create a new StepQView before every training update.  All
+    accesses to this view occur BEFORE that update changes the Q parameters.
+    """
+
+    def __init__(self, tables, noise_mode, noise_sigma, num_candidates, rng):
+        self.tables = tables  # shape [N, H, W, 4]
+        self.noise_mode = noise_mode
+        self.noise_sigma = noise_sigma
+        self.num_candidates = num_candidates if noise_mode == "shared_target" else 1
+        self.rng = rng
+        self._cache = {}
+
+    def at(self, state):
+        state = tuple(state)
+        if state not in self._cache:
+            r, c = state
+            base = self.tables[:, r, c, :, None]
+            if self.noise_mode == "shared_target":
+                # All members get independent noise; same sampled noise is
+                # reused whenever the same state is queried in this step.
+                eps = self.rng.normal(
+                    0.0, self.noise_sigma,
+                    size=(self.tables.shape[0], 4, self.num_candidates),
+                )
+                self._cache[state] = base + eps
+            else:
+                # Freeze pre-update values for this one step.
+                self._cache[state] = base.copy()
+        return self._cache[state]
+
 
 def train(
     method,
@@ -131,65 +209,87 @@ def train(
     alpha=0.1,
     gamma=0.99,
     epsilon=0.1,
-    behavior_sigma=0.1,
-    bootstrap_sigma=0.1,
+    noise_mode="shared_target",
+    noise_sigma=10.0,
     wall_reward=-1.0,
     step_reward=0.0,
     goal_reward=1.0,
     max_dim_multiplier=1,
+    behavior_use_all_k=True,
+    double_num_q=2,
     dd_num_q=2,
     dd_delay_steps=1,
     log_every=500,
     seed=0,
 ):
+    """Train one tabular algorithm with one of two noise mechanisms.
+
+    noise_mode='shared_target':
+      Per step, create *logically* one noisy view of each CURRENT online
+      Q table. Behavior uses all K by default (or only k=0 if
+      behavior_use_all_k=False); bootstrap always uses all K.
+      The exact SAME noisy value is reused for the same (i,s,a,k) within the
+      step (not independently resampled for behavior and target).
+      DD-Q delayed selector tables get separate per-step noisy views.
+      The noisy views are discarded after the TD update.
+
+    noise_mode='table_additive':
+      Behavior and TD targets directly read the stored Q tables (NO read-time
+      noise).  After EVERY TD update, independently sample N(0,sigma^2) for
+      EVERY stored [estimator,state,real_action] entry and add it in-place.
+      Delayed DD-Q tables are snapshots, not separately perturbed each step.
+      In this mode max_dim_multiplier is ignored: there are 4 real actions.
+
+    Generalized Double Q when N>2:
+      Q_i chooses argmax using its own view; estimator (i+shift)%N evaluates
+      the chosen candidate, where shift cycles over 1..N-1 every step.
+      All N members update from the same transition.  At N=2 this reduces
+      exactly to the prior cross-evaluation/update rule.
+
+    Generalized Clipped Double Q when N>2:
+      For each candidate, take the MIN over all N estimators; then MAX over
+      candidates; apply that shared target to each of the N estimators.
+    """
+    if noise_mode not in NOISE_MODES:
+        raise ValueError(f"noise_mode must be one of {NOISE_MODES}")
+    if noise_sigma < 0:
+        raise ValueError("noise_sigma must be >= 0")
     if max_dim_multiplier < 1:
         raise ValueError("max_dim_multiplier must be >= 1")
+    if num_updates < 1 or log_every < 1:
+        raise ValueError("num_updates and log_every must be >= 1")
+    if method in ("double_q", "clipped_double_q") and double_num_q < 2:
+        raise ValueError("Double/Clipped Double Q require double_num_q >= 2")
+    if method == "dd_q" and (dd_num_q < 2 or dd_delay_steps < 1):
+        raise ValueError("DD-Q requires dd_num_q >= 2 and dd_delay_steps >= 1")
 
-    if method == "dd_q":
-        if dd_num_q < 2:
-            raise ValueError("DD-Q requires dd_num_q >= 2")
-        if dd_delay_steps < 1:
-            raise ValueError("DD-Q requires dd_delay_steps >= 1")
+    if method == "q_learning":
+        n = 1
+    elif method in ("double_q", "clipped_double_q"):
+        n = double_num_q
+    elif method == "dd_q":
+        n = dd_num_q
+    else:
+        raise ValueError(f"Unknown method: {method}")
 
     rng = np.random.default_rng(seed)
-
     start = (grid_height - 1, 0)
     goal = (0, grid_width - 1)
-
     Q_star, V_star = get_optimal_q(
-        grid_height,
-        grid_width,
-        gamma,
+        grid_height, grid_width, gamma,
         wall_reward=wall_reward,
         step_reward=step_reward,
         goal_reward=goal_reward,
     )
 
-    q_shape = (grid_height, grid_width, 4)
+    # All trainable estimators have uniform shape [N, H, W, 4].
+    Qs = np.zeros((n, grid_height, grid_width, 4), dtype=float)
 
-    # --------------------------------------------------------
-    # Q tables
-    # --------------------------------------------------------
-    if method == "q_learning":
-        Q = np.zeros(q_shape)
-
-    elif method in ("double_q", "clipped_double_q"):
-        Q1 = np.zeros(q_shape)
-        Q2 = np.zeros(q_shape)
-
-    elif method == "dd_q":
-        # online Q ensemble: [N, H, W, 4]
-        Qs = np.zeros((dd_num_q, *q_shape))
-
-        # delayed snapshot used only for selection
+    if method == "dd_q":
+        # Only online tables are learned/perturbed; snapshots are periodically
+        # copied AFTER the online TD update and table noise (if selected).
         Q_delayed = Qs.copy()
-
-        # For a D-step block, member i uses member (i + shift) % N.
-        # shift cycles 1, 2, ..., N-1, 1, ...
         peer_shift = 1
-
-    else:
-        raise ValueError("Unknown method")
 
     history = {
         "step": [],
@@ -200,268 +300,127 @@ def train(
         "initial_v_error": [],
         "initial_v_squared_error": [],
     }
-
     mask = np.ones((grid_height, grid_width), dtype=bool)
     mask[goal] = False
-
     state = start
 
-    # ========================================================
-    # Main learning loop
-    # ========================================================
     for t in range(1, num_updates + 1):
+        # Construct the shared view BEFORE acting/updating.  Lazy sampling
+        # gives the same independent per-cell distribution as constructing
+        # a full [N,H,W,4,K] tensor once per update, much more efficiently.
+        online_view = StepQView(
+            Qs, noise_mode, noise_sigma, max_dim_multiplier, rng
+        )
 
-        # ====================================================
-        # Q-learning
-        # ====================================================
-        if method == "q_learning":
-            # Only the current state's behavior values need noise.
-            Q_behavior_noisy = Q[state] + rng.normal(
-                0, behavior_sigma, size=4
-            )
-            action = choose_action(Q_behavior_noisy, epsilon, rng)
+        # The online noisy view is shared with the subsequent TD target.
+        # Default: average estimators per (real action, virtual candidate),
+        # then choose the best candidate over all 4*K positions; execute
+        # ONLY the associated real action.  Optional k=0 behavior supports
+        # apples-to-apples ablations against the previous implementation.
+        current_candidates = online_view.at(state)  # [N,4,K]
+        if behavior_use_all_k:
+            Q_behavior = np.mean(current_candidates, axis=0)  # [4,K]
+        else:
+            Q_behavior = np.mean(current_candidates[:, :, 0], axis=0)  # [4]
+        action = choose_action(Q_behavior, epsilon, rng)
 
-            next_state, reward, done = env_step(
-                state,
-                action,
-                grid_height,
-                grid_width,
-                wall_reward=wall_reward,
-                step_reward=step_reward,
-                goal_reward=goal_reward,
-            )
+        next_state, reward, done = env_step(
+            state, action, grid_height, grid_width,
+            wall_reward=wall_reward,
+            step_reward=step_reward,
+            goal_reward=goal_reward,
+        )
 
-            if done:
-                target = reward
-            else:
-                # Only next-state bootstrap candidates are required: shape (4, K).
-                Q_boot_noisy = Q[next_state][:, None] + rng.normal(
-                    0,
-                    bootstrap_sigma,
-                    size=(4, max_dim_multiplier),
-                )
-                target = reward + gamma * np.max(Q_boot_noisy)
+        if done:
+            # No bootstrap/noise on terminal targets.
+            targets = np.full(n, reward, dtype=float)
+        else:
+            online_next = online_view.at(next_state)  # [N, 4, K] or [N,4,1]
 
-            Q[state][action] += alpha * (target - Q[state][action])
+            if method == "q_learning":
+                targets = np.array([reward + gamma * np.max(online_next[0])])
 
-        # ====================================================
-        # Double Q-learning
-        # ====================================================
-        elif method == "double_q":
-            Q1_behavior_noisy = Q1[state] + rng.normal(
-                0, behavior_sigma, size=4
-            )
-            Q2_behavior_noisy = Q2[state] + rng.normal(
-                0, behavior_sigma, size=4
-            )
-
-            Q_behavior = (Q1_behavior_noisy + Q2_behavior_noisy) / 2
-            action = choose_action(Q_behavior, epsilon, rng)
-
-            next_state, reward, done = env_step(
-                state,
-                action,
-                grid_height,
-                grid_width,
-                wall_reward=wall_reward,
-                step_reward=step_reward,
-                goal_reward=goal_reward,
-            )
-
-            if done:
-                target1 = reward
-                target2 = reward
-            else:
-                # Independent next-state noisy candidates only: shape (4, K).
-                Q1_boot_noisy = Q1[next_state][:, None] + rng.normal(
-                    0, bootstrap_sigma, size=(4, max_dim_multiplier)
-                )
-                Q2_boot_noisy = Q2[next_state][:, None] + rng.normal(
-                    0, bootstrap_sigma, size=(4, max_dim_multiplier)
-                )
-
-                index1 = np.unravel_index(
-                    np.argmax(Q1_boot_noisy), Q1_boot_noisy.shape
-                )
-                target1 = reward + gamma * Q2_boot_noisy[index1]
-
-                index2 = np.unravel_index(
-                    np.argmax(Q2_boot_noisy), Q2_boot_noisy.shape
-                )
-                target2 = reward + gamma * Q1_boot_noisy[index2]
-
-            Q1[state][action] += alpha * (target1 - Q1[state][action])
-            Q2[state][action] += alpha * (target2 - Q2[state][action])
-
-        # ====================================================
-        # Clipped Double Q-learning
-        # ====================================================
-        elif method == "clipped_double_q":
-            Q1_behavior_noisy = Q1[state] + rng.normal(
-                0, behavior_sigma, size=4
-            )
-            Q2_behavior_noisy = Q2[state] + rng.normal(
-                0, behavior_sigma, size=4
-            )
-
-            Q_behavior = (Q1_behavior_noisy + Q2_behavior_noisy) / 2
-            action = choose_action(Q_behavior, epsilon, rng)
-
-            next_state, reward, done = env_step(
-                state,
-                action,
-                grid_height,
-                grid_width,
-                wall_reward=wall_reward,
-                step_reward=step_reward,
-                goal_reward=goal_reward,
-            )
-
-            if done:
-                target = reward
-            else:
-                Q1_boot_noisy = Q1[next_state][:, None] + rng.normal(
-                    0, bootstrap_sigma, size=(4, max_dim_multiplier)
-                )
-                Q2_boot_noisy = Q2[next_state][:, None] + rng.normal(
-                    0, bootstrap_sigma, size=(4, max_dim_multiplier)
-                )
-
-                clipped_candidates = np.minimum(
-                    Q1_boot_noisy,
-                    Q2_boot_noisy,
-                )
-                target = reward + gamma * np.max(clipped_candidates)
-
-            Q1[state][action] += alpha * (target - Q1[state][action])
-            Q2[state][action] += alpha * (target - Q2[state][action])
-
-        # ====================================================
-        # DD-Q-learning
-        # ====================================================
-        elif method == "dd_q":
-            # Behavior policy uses only the current state from each online estimator.
-            r, c = state
-            Q_behavior_noisy = Qs[:, r, c, :] + rng.normal(
-                0, behavior_sigma, size=(dd_num_q, 4)
-            )
-            Q_behavior = np.mean(Q_behavior_noisy, axis=0)
-            action = choose_action(Q_behavior, epsilon, rng)
-
-            next_state, reward, done = env_step(
-                state,
-                action,
-                grid_height,
-                grid_width,
-                wall_reward=wall_reward,
-                step_reward=step_reward,
-                goal_reward=goal_reward,
-            )
-
-            if done:
-                targets = np.full(dd_num_q, reward, dtype=float)
-            else:
-                # Only next-state candidates are generated: shape (N, 4, K).
-                nr, nc = next_state
-                Q_delayed_boot_noisy = Q_delayed[:, nr, nc, :, None] + rng.normal(
-                    0,
-                    bootstrap_sigma,
-                    size=(dd_num_q, 4, max_dim_multiplier),
-                )
-
-                Q_online_boot_noisy = Qs[:, nr, nc, :, None] + rng.normal(
-                    0,
-                    bootstrap_sigma,
-                    size=(dd_num_q, 4, max_dim_multiplier),
-                )
-
-                peer_indices = (
-                    np.arange(dd_num_q) + peer_shift
-                ) % dd_num_q
-
-                targets = np.empty(dd_num_q, dtype=float)
-
-                for i, j in enumerate(peer_indices):
-                    selector_candidates = Q_delayed_boot_noisy[j]
-                    selected_index = np.unravel_index(
-                        np.argmax(selector_candidates),
-                        selector_candidates.shape,
+            elif method == "double_q":
+                # Every Q_i selects using itself, and is evaluated by one
+                # DIFFERENT Q_j. Cycle peers so N>2 uses all other members.
+                shift = 1 + ((t - 1) % (n - 1))
+                targets = np.empty(n, dtype=float)
+                for i in range(n):
+                    j = (i + shift) % n
+                    selected = np.unravel_index(
+                        np.argmax(online_next[i]), online_next[i].shape
                     )
+                    targets[i] = reward + gamma * online_next[j][selected]
 
-                    own_value = Q_online_boot_noisy[i][selected_index]
-                    targets[i] = reward + gamma * own_value
+            elif method == "clipped_double_q":
+                # N=2 is exactly the original pairwise minimum.
+                clipped_candidates = np.min(online_next, axis=0)
+                common_target = reward + gamma * np.max(clipped_candidates)
+                targets = np.full(n, common_target, dtype=float)
 
-            # Every Q_i is updated from the same environment transition.
-            r, c = state
-            Qs[:, r, c, action] += alpha * (
-                targets - Qs[:, r, c, action]
-            )
+            else:  # DD-Q
+                # For shared_target, selector uses a separate noisy view of
+                # the frozen delayed Q parameters.  For table_additive, the
+                # delayed table is read as-is (past noisy online snapshot).
+                delayed_view = StepQView(
+                    Q_delayed, noise_mode, noise_sigma, max_dim_multiplier, rng
+                )
+                delayed_next = delayed_view.at(next_state)
+                targets = np.empty(n, dtype=float)
+                for i in range(n):
+                    j = (i + peer_shift) % n
+                    selected = np.unravel_index(
+                        np.argmax(delayed_next[j]), delayed_next[j].shape
+                    )
+                    # Own CURRENT online member evaluates the peer's choice.
+                    targets[i] = reward + gamma * online_next[i][selected]
 
-            # Refresh delayed tables at each D-step boundary.
-            # The refreshed snapshot is used from the NEXT step onward.
-            if t % dd_delay_steps == 0:
-                Q_delayed = Qs.copy()
+        # All Q_i updated on the SAME actual transition (s,a,r,s').
+        r, c = state
+        Qs[:, r, c, action] += alpha * (targets - Qs[:, r, c, action])
 
-                if dd_num_q > 2:
-                    peer_shift += 1
-                    if peer_shift >= dd_num_q:
-                        peer_shift = 1
-                else:
-                    peer_shift = 1
+        # Mode 2: after learning, perturb EVERY trainable table entry with
+        # independent fresh noise.  No extra noise on behavior/TD reads.
+        if noise_mode == "table_additive":
+            Qs += rng.normal(0.0, noise_sigma, size=Qs.shape)
 
-        # ====================================================
-        # State transition
-        # ====================================================
+        # Delayed snapshots are refreshed only on D-step boundaries.
+        # In table_additive mode the snapshot includes noise already written
+        # to the online table, and is NOT separately noised on other steps.
+        if method == "dd_q" and t % dd_delay_steps == 0:
+            Q_delayed = Qs.copy()
+            peer_shift = (peer_shift % (n - 1)) + 1 if n > 2 else 1
+
         state = start if done else next_state
 
-        # ====================================================
-        # Logging
-        # ====================================================
         if t % log_every == 0:
-            if method == "q_learning":
-                Q_est = Q.copy()
-            elif method in ("double_q", "clipped_double_q"):
-                Q_est = (Q1 + Q2) / 2
-            else:
-                Q_est = np.mean(Qs, axis=0)
-
-            # Evaluation uses only the 4 real actions.
+            Q_est = Qs[0].copy() if n == 1 else np.mean(Qs, axis=0)
             V_est = np.max(Q_est, axis=2)
             V_est[goal] = 0.0
-
-            q_rmse = np.sqrt(np.mean((Q_est[mask] - Q_star[mask]) ** 2))
-            v_rmse = np.sqrt(np.mean((V_est[mask] - V_star[mask]) ** 2))
-            v_bias = np.mean(V_est[mask] - V_star[mask])
-
-            initial_v_error = V_est[start] - V_star[start]
-            initial_v_squared_error = initial_v_error ** 2
-
             history["step"].append(t)
             history["V"].append(V_est.copy())
-            history["q_rmse"].append(q_rmse)
-            history["v_rmse"].append(v_rmse)
-            history["v_bias"].append(v_bias)
-            history["initial_v_error"].append(initial_v_error)
-            history["initial_v_squared_error"].append(initial_v_squared_error)
+            history["q_rmse"].append(
+                np.sqrt(np.mean((Q_est[mask] - Q_star[mask]) ** 2))
+            )
+            history["v_rmse"].append(
+                np.sqrt(np.mean((V_est[mask] - V_star[mask]) ** 2))
+            )
+            history["v_bias"].append(np.mean(V_est[mask] - V_star[mask]))
+            initial_error = V_est[start] - V_star[start]
+            history["initial_v_error"].append(initial_error)
+            history["initial_v_squared_error"].append(initial_error ** 2)
 
     for key in history:
         history[key] = np.array(history[key])
 
-    # --------------------------------------------------------
-    # Final Q tables
-    # --------------------------------------------------------
-    if method == "q_learning":
-        history["Q_final"] = Q.copy()
-
-    elif method in ("double_q", "clipped_double_q"):
-        history["Q1_final"] = Q1.copy()
-        history["Q2_final"] = Q2.copy()
-        history["Q_final"] = (Q1 + Q2) / 2
-
-    else:
+    history["Q_final"] = Qs[0].copy() if n == 1 else np.mean(Qs, axis=0)
+    if n > 1:
         history["Q_ensemble_final"] = Qs.copy()
+        # Backward-compatible convenience outputs for first two estimators.
+        history["Q1_final"] = Qs[0].copy()
+        history["Q2_final"] = Qs[1].copy()
+    if method == "dd_q":
         history["Q_delayed_final"] = Q_delayed.copy()
-        history["Q_final"] = np.mean(Qs, axis=0)
 
     return history
 
@@ -481,11 +440,13 @@ ALPHA = 0.1
 GAMMA = 0.9999
 EPSILON = 0.1
 
-# Separate behavior noise from bootstrap noise.
-# Small behavior noise keeps exploration/learning stable, while large bootstrap
-# noise amplifies max/selection bias without increasing computational cost.
-BEHAVIOR_SIGMA = 0.1
-BOOTSTRAP_SIGMA = 10.0
+# Select ONE of the two mutually exclusive noise injection mechanisms:
+#   "shared_target": per-step shared noisy view for behavior AND bootstrap;
+#                    does NOT permanently overwrite the Q tables.
+#   "table_additive": directly add iid Gaussian noise to ALL online Q-table
+#                     entries after EACH learning update.
+NOISE_MODE = "shared_target"  # change to "table_additive" to run mode 2
+NOISE_SIGMA = 10.0           # same Gaussian std used in either mode
 
 # Reward shaping controls action gaps.
 # More negative WALL_REWARD makes wrong wall selections much more costly,
@@ -494,19 +455,24 @@ WALL_REWARD = -2.0
 STEP_REWARD = 0.0
 GOAL_REWARD = 1.0
 
-# K=1 -> max over 4 candidates
-# K=3 -> max over 12 candidates
-# Noise is generated only for the next state, so large K is much cheaper now.
+# Virtual noisy candidates for shared_target only.
+# By default BOTH behavior and bootstrap consider all 4*K candidate values.
+# Behavior maps the best (real action, virtual candidate) to its real action.
+# Set to False to reproduce the old behavior policy (only candidate k=0).
+# In table_additive mode K is ignored and only 4 real actions are compared.
 MAX_DIM_MULTIPLIER = 100
+BEHAVIOR_USE_ALL_K = True
+
+# Generalized Double / Clipped Double ensemble sizes.
+# N=2 preserves the original Double Q update rule.
+DOUBLE_Q_CONFIGS = [2, 3]
+CLIPPED_DOUBLE_Q_CONFIGS = [2, 3]
 
 # DD-Q configurations
 # Each tuple is (N, D):
 #   N = number of online/delayed Q tables
 #   D = delayed refresh / peer-cycle period
 #
-# Example below runs two separate DD-Q experiments:
-#   DD-Q (N=2, D=1)
-#   DD-Q (N=2, D=10)
 DD_Q_CONFIGS = [
     (2, 1),
     (2, 10),
@@ -538,7 +504,14 @@ RUN_METHODS = [
 # 6. Save paths
 # ============================================================
 
-SAVE_DIR = "./logs/iclr2027_dd_iql/tabular"
+# Keep both modes and sigma/K settings in separate output directories.
+SAVE_DIR = os.path.join(
+    "./logs/iclr2027_dd_iql/tabular_dual_noise",
+    NOISE_MODE,
+    f"sigma{NOISE_SIGMA:g}",
+    (f"K{MAX_DIM_MULTIPLIER}_behavior_" + ("allK" if BEHAVIOR_USE_ALL_K else "k0"))
+    if NOISE_MODE == "shared_target" else "real_actions_only",
+)
 
 FIGURE_DIR = os.path.join(SAVE_DIR, "figures")
 TABLE_DIR = os.path.join(SAVE_DIR, "tables")
@@ -601,7 +574,7 @@ def aggregate_seed_histories(seed_histories, seeds, std_ddof=1):
     aggregated["V_mean"] = np.mean(v_values, axis=0)
     aggregated["V_std"] = np.std(v_values, axis=0, ddof=effective_ddof)
 
-    # Final clean-Q estimates across seeds.
+    # Final stored Q estimates across seeds (perturbed in table_additive mode).
     q_final_values = np.stack([history["Q_final"] for history in seed_histories], axis=0)
     aggregated["Q_final_mean"] = np.mean(q_final_values, axis=0)
     aggregated["Q_final_std"] = np.std(q_final_values, axis=0, ddof=effective_ddof)
@@ -770,31 +743,24 @@ def run_method_over_seeds(
     method,
     common_args,
     seeds,
+    double_num_q=None,
     dd_num_q=None,
     dd_delay_steps=None,
 ):
     seed_histories = []
     total = len(seeds)
-
     for seed_idx, seed in enumerate(seeds, start=1):
-        print(
-            f"Training: {result_name} | "
-            f"seed={seed} ({seed_idx}/{total})"
-        )
-
+        print(f"Training: {result_name} | seed={seed} ({seed_idx}/{total})")
         args = dict(common_args)
         args["seed"] = int(seed)
-
+        if method in ("double_q", "clipped_double_q"):
+            args["double_num_q"] = int(double_num_q)
         if method == "dd_q":
             args["dd_num_q"] = int(dd_num_q)
             args["dd_delay_steps"] = int(dd_delay_steps)
-
         seed_histories.append(train(method, **args))
-
     return aggregate_seed_histories(
-        seed_histories,
-        seeds=seeds,
-        std_ddof=STD_DDOF,
+        seed_histories, seeds=seeds, std_ddof=STD_DDOF,
     )
 
 
@@ -817,55 +783,46 @@ def main():
         alpha=ALPHA,
         gamma=GAMMA,
         epsilon=EPSILON,
-        behavior_sigma=BEHAVIOR_SIGMA,
-        bootstrap_sigma=BOOTSTRAP_SIGMA,
+        noise_mode=NOISE_MODE,
+        noise_sigma=NOISE_SIGMA,
         wall_reward=WALL_REWARD,
         step_reward=STEP_REWARD,
         goal_reward=GOAL_REWARD,
         max_dim_multiplier=MAX_DIM_MULTIPLIER,
+        behavior_use_all_k=BEHAVIOR_USE_ALL_K,
         log_every=LOG_EVERY,
     )
 
-    methods = {
-        "Q-learning": "q_learning",
-        "Double Q": "double_q",
-        "Clipped Double Q": "clipped_double_q",
-    }
-
     results = {}
-
     for name in RUN_METHODS:
-        if name == "DD-Q-learning":
-            for dd_num_q, dd_delay_steps in DD_Q_CONFIGS:
-                if dd_num_q < 2:
-                    raise ValueError(
-                        f"Invalid DD-Q config {(dd_num_q, dd_delay_steps)}: N must be >= 2"
-                    )
-                if dd_delay_steps < 1:
-                    raise ValueError(
-                        f"Invalid DD-Q config {(dd_num_q, dd_delay_steps)}: D must be >= 1"
-                    )
-
-                result_name = f"DD-Q (N={dd_num_q}, D={dd_delay_steps})"
+        if name == "Q-learning":
+            results[name] = run_method_over_seeds(
+                result_name=name, method="q_learning",
+                common_args=common_args, seeds=SEEDS,
+            )
+        elif name in ("Double Q", "Clipped Double Q"):
+            method = "double_q" if name == "Double Q" else "clipped_double_q"
+            configs = (
+                DOUBLE_Q_CONFIGS if name == "Double Q"
+                else CLIPPED_DOUBLE_Q_CONFIGS
+            )
+            for n in configs:
+                result_name = f"{name} (N={n})"
                 results[result_name] = run_method_over_seeds(
-                    result_name=result_name,
-                    method="dd_q",
-                    common_args=common_args,
-                    seeds=SEEDS,
-                    dd_num_q=dd_num_q,
-                    dd_delay_steps=dd_delay_steps,
+                    result_name=result_name, method=method,
+                    common_args=common_args, seeds=SEEDS,
+                    double_num_q=n,
                 )
-            continue
-
-        if name not in methods:
+        elif name == "DD-Q-learning":
+            for n, delay in DD_Q_CONFIGS:
+                result_name = f"DD-Q (N={n}, D={delay})"
+                results[result_name] = run_method_over_seeds(
+                    result_name=result_name, method="dd_q",
+                    common_args=common_args, seeds=SEEDS,
+                    dd_num_q=n, dd_delay_steps=delay,
+                )
+        else:
             raise ValueError(f"Unknown method in RUN_METHODS: {name}")
-
-        results[name] = run_method_over_seeds(
-            result_name=name,
-            method=methods[name],
-            common_args=common_args,
-            seeds=SEEDS,
-        )
 
     Q_star, V_star = get_optimal_q(
         GRID_HEIGHT,
@@ -894,15 +851,14 @@ def main():
             numpy_dir=NUMPY_DIR,
         )
 
+    actual_k = MAX_DIM_MULTIPLIER if NOISE_MODE == "shared_target" else 1
     suffix = (
         f"H{GRID_HEIGHT}_W{GRID_WIDTH}"
-        f"_K{MAX_DIM_MULTIPLIER}"
-        f"_bs{BEHAVIOR_SIGMA}"
-        f"_boot{BOOTSTRAP_SIGMA}"
+        f"_mode{NOISE_MODE}_sigma{NOISE_SIGMA:g}"
+        f"_K{actual_k}_behavior{'allK' if BEHAVIOR_USE_ALL_K else 'k0'}"
         f"_seeds{len(SEEDS)}"
     )
-
-    candidates = 4 * MAX_DIM_MULTIPLIER
+    candidates = 4 * actual_k
     band_label = f"mean +/- 1 SD over {len(SEEDS)} seeds"
 
     save_plot(
@@ -964,8 +920,10 @@ def main():
     print("Real actions             :", 4)
     print("Max dimension multiplier :", MAX_DIM_MULTIPLIER)
     print("Bootstrap candidates     :", candidates)
-    print("Behavior sigma           :", BEHAVIOR_SIGMA)
-    print("Bootstrap sigma          :", BOOTSTRAP_SIGMA)
+    print("Noise mode               :", NOISE_MODE)
+    print("Noise sigma              :", NOISE_SIGMA)
+    print("Effective target K       :", actual_k)
+    print("Double Q N configs       :", DOUBLE_Q_CONFIGS)
     print("Wall reward              :", WALL_REWARD)
     print("Step reward              :", STEP_REWARD)
     print("Goal reward              :", GOAL_REWARD)
