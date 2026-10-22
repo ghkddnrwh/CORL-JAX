@@ -11,6 +11,8 @@
 #   - No backward-compatibility aliases for old refit_* keys.
 
 
+
+
 import copy
 import json
 import os
@@ -23,6 +25,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 
+
+
 import gym
 import jax
 import jax.numpy as jnp
@@ -31,8 +35,12 @@ from jax.flatten_util import ravel_pytree
 from jax.scipy.sparse.linalg import cg as jax_cg
 
 
+
+
 try:
     import scipy.linalg as scipy_linalg
+
+
 
 
     if not hasattr(scipy_linalg, "tril"):
@@ -43,9 +51,13 @@ except ImportError:
     pass
 
 
+
+
 import optax
 import pyrallis
 import yaml
+
+
 
 
 try:
@@ -55,6 +67,8 @@ except ImportError:
         run = None
 
 
+
+
         def init(self, *args, **kwargs):
             raise ImportError(
                 "wandb is unavailable in this environment; run with --log_wandb False "
@@ -62,28 +76,44 @@ except ImportError:
             )
 
 
+
+
         def save(self, *args, **kwargs):
             return None
+
+
 
 
         def log(self, *args, **kwargs):
             return None
 
 
+
+
     wandb = _UnavailableWandb()
+
+
 
 
 from flax import linen as nn
 from flax import serialization, struct
 
 
+
+
 d4rl = None
+
+
 
 
 try:
     import ogbench
 except ImportError:
     ogbench = None
+
+
+
+
 
 
 
@@ -97,6 +127,8 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 
+
+
 from algorithms.uk_offline.common.checkpointing import (
     DEFAULT_IDENTITY_IGNORED_FIELDS,
     TrainingCheckpointManager,
@@ -108,16 +140,26 @@ from algorithms.uk_offline.common.checkpointing import (
 )
 
 
+
+
 TensorBatch = Dict[str, jnp.ndarray]
 
 
-ALGORITHM_NAME = "IQL-PD-V16"
-ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics v16 (V14 + input-budget and centered forcing controls)"
+
+
+ALGORITHM_NAME = "IQL-PD-V16-CAUSAL"
+ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics V16 with integrated causal branching"
+
+
 
 
 EXP_ADV_MAX = 100.0
 LOG_STD_MIN = -20.0
 LOG_STD_MAX = 2.0
+
+
+
+
 
 
 
@@ -130,6 +172,8 @@ class TrainConfig:
     seed: int = 0
 
 
+
+
     # Shared by both modes:
     #   mode="train": evaluate pi every eval_freq joint Q/V/pi training steps.
     #   mode="refit": evaluate pi every eval_freq actor-only refit steps.
@@ -137,10 +181,14 @@ class TrainConfig:
     n_episodes: int = 10
 
 
+
+
     # Shared by both modes:
     #   mode="train": number of joint Q/V/pi training steps.
     #   mode="refit": number of actor-only refit steps using frozen loaded Q/V.
     max_timesteps: int = int(1e6)
+
+
 
 
     checkpoints_path: Optional[str] = None
@@ -150,8 +198,12 @@ class TrainConfig:
     use_hyperparams: bool = True
 
 
+
+
     # Dataset
     buffer_size: int = 2_000_000
+
+
 
 
     # Shared by both modes:
@@ -160,8 +212,12 @@ class TrainConfig:
     batch_size: int = 256
 
 
+
+
     normalize: bool = True
     normalize_reward: bool = False
+
+
 
 
     # IQL
@@ -179,6 +235,8 @@ class TrainConfig:
     num_critics: int = 2
 
 
+
+
     # Stage-1 propagation diagnostics. These do not change Q/V/pi updates.
     enable_propagation_diagnostics: bool = True
     diag_every: int = 1000
@@ -188,12 +246,16 @@ class TrainConfig:
     diag_kappa_floor: float = 1e-3
 
 
+
+
     # V8 lightweight value-system divergence endpoint.  This uses the fixed probe only
     # (forward passes, no virtual optimizer rollout), so it can run more frequently than
     # the expensive propagation diagnostics.  It tracks online/target Q, V, Bellman
     # targets, critic disagreement, tails, finite fractions, and one-step radial growth.
     diag_enable_value_divergence: bool = True
     diag_divergence_every: int = 250
+
+
 
 
     # V9 common-mode and target-network causality diagnostics.  V8 showed that twin
@@ -243,6 +305,8 @@ class TrainConfig:
     diag_target_tau_very_fast_multiplier: float = 20.0
 
 
+
+
     # Finite-difference B diagnostics. diag_fd_epsilon is interpreted as a relative
     # perturbation scale when diag_fd_relative_scale=True:
     #   delta = diag_fd_epsilon * max(1, RMS(Bellman target)).
@@ -255,6 +319,8 @@ class TrainConfig:
     diag_num_basis_directions: int = 4
 
 
+
+
     # Conditional-head calibration and frozen-Q V-solver correctability diagnostics.
     # The multi-step V updates are virtual: they are evaluated but never committed.
     diag_num_calibration_bins: int = 8
@@ -263,10 +329,14 @@ class TrainConfig:
     diag_v_correctability_long_steps: int = 20
 
 
+
+
     # Independent non-parametric conditional references.  These use nearby probe states
     # rather than the learned diagnostic head, so they are useful for detecting head failure.
     # They remain approximate references (state-neighborhood smoothing), not exact expectiles.
     diag_knn_k: int = 16
+
+
 
 
     # Kernel conditional-moment diagnostics.  These test the expectile FOC
@@ -279,12 +349,16 @@ class TrainConfig:
     diag_kernel_min_bandwidth: float = 1e-3
 
 
+
+
     # V5 local-kernel calibration.  V4's median-distance bandwidth often averaged
     # almost the whole probe batch.  The adaptive bandwidth below is chosen to
     # target a specified effective-neighbor count so localized conditional moments
     # are not silently washed out by global smoothing.
     diag_kernel_target_neff: float = 32.0
     diag_kernel_bandwidth_search_iters: int = 24
+
+
 
 
     # Ground-truth virtual residual-injection calibration.  This does not modify
@@ -297,11 +371,15 @@ class TrainConfig:
     diag_residual_injection_large_multiplier: float = 4.0
 
 
+
+
     # V7 conditioning-aware residual diagnostics.  Raw FOC moments shrink with kappa,
     # so high-expectile residuals can be hard to detect even when the implied value
     # displacement -G/kappa is material.  These diagnostics studentize the local
     # displacement and add a cross-fitted kappa-normalized moment-energy estimate.
     diag_enable_conditioned_residual: bool = True
+
+
 
 
     # V7 local-action empirical expectile reference.  A larger fixed reference bank is
@@ -311,6 +389,8 @@ class TrainConfig:
     diag_action_ref_batch_size: int = 2048
     diag_action_ref_k: int = 32
     diag_action_ref_bisection_iters: int = 24
+
+
 
 
     # Full Bellman-loop propagation diagnostic.  Unlike B^(H), which repeatedly
@@ -326,6 +406,8 @@ class TrainConfig:
     diag_enable_forced_loop: bool = True
 
 
+
+
     # V7 actual-amplitude forced response.  V6 normalized every source direction to unit
     # RMS, which removes the source-growth effect that dominated natural collapse.  V7
     # replays the baseline source sequence with its original per-step amplitude, using a
@@ -333,9 +415,13 @@ class TrainConfig:
     diag_enable_actual_source_forcing: bool = True
 
 
+
+
     # Finite-amplitude source diagnostics: evaluate the real Adam response at 25%, 50%,
     # and 100% of a safely clipped current source amplitude.
     diag_actual_source_cap_fraction: float = 0.05
+
+
 
 
     # Expensive finite-horizon critic-fitting response.  It repeats virtual Adam critic
@@ -344,6 +430,8 @@ class TrainConfig:
     diag_horizon_every: int = 5000
     diag_horizon_short_steps: int = 5
     diag_horizon_long_steps: int = 20
+
+
 
 
     # Expensive local full-fit approximation
@@ -356,12 +444,30 @@ class TrainConfig:
     diag_ridge_cg_tol: float = 1e-5
 
 
+
+
     # Standalone actor refit output directory.
     # Refit reuses the shared training schedule fields above:
     #   max_timesteps -> actor-only refit steps
     #   batch_size    -> actor-only refit batch size
     #   eval_freq     -> actor-only refit evaluation interval
     actor_refit_dir_name: str = "actor_refit"
+
+
+
+
+    # Integrated causal branches: one train command, shared real minibatches.
+    # The original baseline IQL and all V16 diagnostics remain unchanged.
+    causal_branch_enabled: bool = True
+    causal_branch_start_steps: Tuple[int, ...] = (100000,)
+    causal_branch_horizon: int = 100000
+    causal_intervention_steps: int = 10000
+    causal_branch_types: Tuple[str, ...] = (
+        "shadow_baseline", "cut_target_q_input", "cut_v_backup_input", "target_tau_fast"
+    )
+    causal_branch_log_every: int = 1000
+    causal_branch_eval_every: int = 25000
+    causal_target_tau_multiplier: float = 5.0
 
 
     # Logging
@@ -373,8 +479,12 @@ class TrainConfig:
     save_final_model: bool = False
 
 
+
+
     checkpoint_freq: int = int(25e3)
     wandb_entity: Optional[str] = None
+
+
 
 
     def __post_init__(self):
@@ -384,10 +494,18 @@ class TrainConfig:
 
 
 
+
+
+
+
 def refresh_algorithm_names(config: TrainConfig) -> None:
     config.project = "ORL-SMOOTH"
     config.group = f"{ALGORITHM_NAME}-JAX"
     config.name = f"{ALGORITHM_NAME}-JAX-{config.env}"
+
+
+
+
 
 
 
@@ -469,9 +587,25 @@ def validate_config(config: TrainConfig) -> None:
         assert config.diag_ridge_lambda > 0.0
         assert config.diag_ridge_cg_iters > 0
         assert config.diag_ridge_cg_tol > 0.0
+    if config.causal_branch_enabled and config.mode == "train":
+        assert config.enable_propagation_diagnostics, "causal branches require a fixed diagnostic probe"
+        assert config.causal_branch_horizon > 0
+        assert 0 < config.causal_intervention_steps <= config.causal_branch_horizon
+        assert config.causal_branch_log_every > 0
+        assert config.causal_branch_eval_every > 0
+        assert config.causal_target_tau_multiplier > 0
+        assert all(int(t) >= 0 for t in config.causal_branch_start_steps)
+        legal = {"shadow_baseline", "cut_target_q_input", "cut_v_backup_input", "target_tau_fast"}
+        assert len(config.causal_branch_types) > 0
+        assert set(config.causal_branch_types).issubset(legal)
+        assert len(config.causal_branch_types) == len(set(config.causal_branch_types))
     assert config.actor_refit_dir_name != ""
     if config.mode == "refit":
         assert config.load_model != "", "mode='refit' requires --load_model"
+
+
+
+
 
 
 
@@ -490,6 +624,10 @@ def _cli_overridden_fields(argv: Optional[List[str]] = None) -> set:
 
 
 
+
+
+
+
 def _coerce_hparam_value(value: Any) -> Any:
     # YAML often loads !!float 1e6 as float, but step counts should be ints in this script.
     if isinstance(value, float) and value.is_integer():
@@ -499,12 +637,20 @@ def _coerce_hparam_value(value: Any) -> Any:
 
 
 
+
+
+
+
 def apply_env_hyperparams(config: TrainConfig) -> TrainConfig:
     """Load env-specific hyperparameters and merge them into config.
 
 
+
+
     Priority is:
         dataclass defaults < hyperparams YAML < explicit CLI flags
+
+
 
 
     Hyperparameter YAML keys must exactly match TrainConfig field names.
@@ -515,13 +661,19 @@ def apply_env_hyperparams(config: TrainConfig) -> TrainConfig:
         return config
 
 
+
+
     hparam_path = Path(config.hyperparams_path)
     if not hparam_path.exists():
         raise FileNotFoundError(f"Hyperparameter file not found: {hparam_path}.")
 
 
+
+
     with open(hparam_path, "r") as f:
         all_hyperparams = yaml.safe_load(f) or {}
+
+
 
 
     if config.env not in all_hyperparams:
@@ -531,12 +683,16 @@ def apply_env_hyperparams(config: TrainConfig) -> TrainConfig:
         return config
 
 
+
+
     env_hyperparams = all_hyperparams[config.env] or {}
     cli_overrides = _cli_overridden_fields()
     aliases = {"n_timesteps": "max_timesteps"}
     config_fields = set(TrainConfig.__dataclass_fields__.keys())
     applied, skipped_unknown, skipped_cli = [], [], []
     applied_fields = set()
+
+
 
 
     for raw_key, raw_value in env_hyperparams.items():
@@ -554,8 +710,12 @@ def apply_env_hyperparams(config: TrainConfig) -> TrainConfig:
         applied_fields.add(key)
 
 
+
+
     refresh_algorithm_names(config)
     validate_config(config)
+
+
 
 
     if applied:
@@ -569,10 +729,18 @@ def apply_env_hyperparams(config: TrainConfig) -> TrainConfig:
 
 
 
+
+
+
+
 def finalize_checkpoint_path(config: TrainConfig) -> TrainConfig:
     if config.checkpoints_path is not None:
         config.checkpoints_path = os.path.join(config.checkpoints_path, config.name, str(config.seed))
     return config
+
+
+
+
 
 
 
@@ -592,8 +760,16 @@ def select_jax_device(device: str):
 
 
 
+
+
+
+
 def tree_to_device(tree, device):
     return jax.device_put(tree, device)
+
+
+
+
 
 
 
@@ -602,8 +778,11 @@ def soft_update(params, target_params, tau: float):
     return optax.incremental_update(params, target_params, tau)
 
 
+
+
 def stable_tree_log10_l2(tree):
     """Log10 Euclidean norm without squaring unscaled float32 tensors.
+
 
     For an identically zero tree return -inf; NaN/Inf leaves remain diagnosable
     with the separately logged finite fractions.  Does not modify parameters.
@@ -623,6 +802,10 @@ def stable_tree_log10_l2(tree):
 
 
 
+
+
+
+
 def compute_mean_std(states: np.ndarray, eps: float) -> Tuple[np.ndarray, np.ndarray]:
     mean = states.mean(0)
     std = states.std(0) + eps
@@ -631,8 +814,16 @@ def compute_mean_std(states: np.ndarray, eps: float) -> Tuple[np.ndarray, np.nda
 
 
 
+
+
+
+
 def normalize_states(states: np.ndarray, mean: Union[np.ndarray, float], std: Union[np.ndarray, float]):
     return (states - mean) / std
+
+
+
+
 
 
 
@@ -653,16 +844,24 @@ class TransformEnv:
         self.action_space = env.action_space
 
 
+
+
     def __getattr__(self, name: str):
         return getattr(self.env, name)
+
+
 
 
     def _normalize_state(self, state):
         return (state - self.state_mean) / self.state_std
 
 
+
+
     def _scale_reward(self, reward):
         return self.reward_scale * reward
+
+
 
 
     def reset(self, *args, **kwargs):
@@ -671,6 +870,8 @@ class TransformEnv:
             state, info = reset_out
             return self._normalize_state(state), info
         return self._normalize_state(reset_out)
+
+
 
 
     def step(self, action):
@@ -682,10 +883,16 @@ class TransformEnv:
         return self._normalize_state(state), self._scale_reward(reward), done, info
 
 
+
+
     def seed(self, seed: int):
         if hasattr(self.env, "seed"):
             return self.env.seed(seed)
         return self.env.reset(seed=seed)
+
+
+
+
 
 
 
@@ -701,8 +908,16 @@ def wrap_env(
 
 
 
+
+
+
+
 def is_ogbench_env(env_name: str) -> bool:
     return "singletask" in env_name or "oraclerep" in env_name
+
+
+
+
 
 
 
@@ -715,6 +930,8 @@ def load_env_and_dataset(env_name: str) -> Tuple[gym.Env, Dict[str, np.ndarray],
             )
         env, train_dataset, _ = ogbench.make_env_and_datasets(env_name)
         return env, train_dataset, "ogbench"
+
+
 
 
     global d4rl
@@ -732,6 +949,10 @@ def load_env_and_dataset(env_name: str) -> Tuple[gym.Env, Dict[str, np.ndarray],
 
 
 
+
+
+
+
 def reset_env(env: gym.Env, seed: Optional[int] = None):
     if seed is not None:
         try:
@@ -744,9 +965,15 @@ def reset_env(env: gym.Env, seed: Optional[int] = None):
         reset_out = env.reset()
 
 
+
+
     if isinstance(reset_out, tuple) and len(reset_out) == 2:
         return reset_out[0]
     return reset_out
+
+
+
+
 
 
 
@@ -758,6 +985,10 @@ def step_env(env: gym.Env, action: np.ndarray):
         return next_state, reward, bool(terminated or truncated), info
     next_state, reward, done, info = step_out
     return next_state, reward, bool(done), info
+
+
+
+
 
 
 
@@ -781,12 +1012,16 @@ class ReplayBuffer:
         self._device = device
 
 
+
+
     def load_d4rl_dataset(self, data: Dict[str, np.ndarray]):
         if self._size != 0:
             raise ValueError("Trying to load data into non-empty replay buffer")
         n_transitions = data["observations"].shape[0]
         if n_transitions > self._buffer_size:
             raise ValueError("Replay buffer is smaller than the dataset you are trying to load!")
+
+
 
 
         self._states[:n_transitions] = data["observations"].astype(np.float32)
@@ -800,13 +1035,19 @@ class ReplayBuffer:
         print(f"Dataset size: {n_transitions}")
 
 
+
+
     def sample(self, batch_size: int) -> TensorBatch:
         indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
         return self._batch_from_indices(indices)
 
 
+
+
     def sample_with_rng(self, batch_size: int, rng: np.random.Generator) -> TensorBatch:
         """Sample without consuming the global NumPy RNG used by training.
+
+
 
 
         Stage-1 diagnostics must not silently alter the future training minibatch
@@ -814,6 +1055,8 @@ class ReplayBuffer:
         """
         indices = rng.integers(0, min(self._size, self._pointer), size=batch_size)
         return self._batch_from_indices(indices)
+
+
 
 
     def _batch_from_indices(self, indices: np.ndarray) -> TensorBatch:
@@ -825,6 +1068,10 @@ class ReplayBuffer:
             "dones": self._dones[indices],
         }
         return tree_to_device({k: jnp.asarray(v) for k, v in batch.items()}, self._device)
+
+
+
+
 
 
 
@@ -845,6 +1092,10 @@ def set_seed(seed: int, env: Optional[gym.Env] = None):
 
 
 
+
+
+
+
 def wandb_init(config: dict) -> None:
     run = wandb.init(
         config=config,
@@ -854,6 +1105,10 @@ def wandb_init(config: dict) -> None:
         id=str(uuid.uuid4()),
     )
     run.log_code(".")
+
+
+
+
 
 
 
@@ -868,6 +1123,10 @@ def is_scalar_value(value: Any) -> bool:
 
 
 
+
+
+
+
 def to_python_scalar(value: Any) -> Union[int, float, bool]:
     if isinstance(value, np.ndarray):
         return value.item()
@@ -876,6 +1135,10 @@ def to_python_scalar(value: Any) -> Union[int, float, bool]:
     if isinstance(value, jnp.ndarray) and value.ndim == 0:
         return float(value)
     return value
+
+
+
+
 
 
 
@@ -896,8 +1159,14 @@ def save_logs_npz(logs: List[Dict[str, Any]], path: str) -> None:
 
 
 
+
+
+
+
 def sanitize_diagnostic_jsonl(path: Union[str, Path], max_timestep: int) -> None:
     """Deduplicate/prune diagnostic records when resuming from an older safe checkpoint.
+
+
 
 
     Diagnostics are written more frequently than checkpoints.  Without pruning, a resumed
@@ -928,6 +1197,10 @@ def sanitize_diagnostic_jsonl(path: Union[str, Path], max_timestep: int) -> None
 
 
 
+
+
+
+
 def save_and_upload_eval_logs(
     eval_logs: List[Dict[str, Any]],
     checkpoints_path: Optional[str],
@@ -937,6 +1210,10 @@ def save_and_upload_eval_logs(
         return
     eval_logs_path = os.path.join(checkpoints_path, "eval_logs.npz")
     save_logs_npz(eval_logs, eval_logs_path)
+
+
+
+
 
 
 
@@ -952,12 +1229,20 @@ def normalize_episode_scores(env: gym.Env, eval_scores: np.ndarray) -> np.ndarra
 
 
 
+
+
+
+
 def mean_std_or_nan(values: np.ndarray) -> Tuple[float, float]:
     values = np.asarray(values, dtype=np.float32)
     finite_values = values[np.isfinite(values)]
     if finite_values.size == 0:
         return np.nan, np.nan
     return float(np.mean(finite_values)), float(np.std(finite_values))
+
+
+
+
 
 
 
@@ -969,6 +1254,10 @@ def extract_success(info: Any) -> float:
     if success.size == 0:
         return np.nan
     return float(success.reshape(-1)[0])
+
+
+
+
 
 
 
@@ -990,6 +1279,10 @@ def return_reward_range(dataset, max_episode_steps):
 
 
 
+
+
+
+
 def modify_reward(dataset, env_name, max_episode_steps=1000):
     # Preserves the reward preprocessing from the provided PyTorch IQL code.
     if any(s in env_name for s in ("halfcheetah", "hopper", "walker2d")):
@@ -1002,11 +1295,17 @@ def modify_reward(dataset, env_name, max_episode_steps=1000):
 
 
 
+
+
+
+
 class PolicyMLP(nn.Module):
     action_dim: int
     hidden_dim: int = 256
     n_hidden: int = 2
     dropout: Optional[float] = None
+
+
 
 
     @nn.compact
@@ -1023,11 +1322,17 @@ class PolicyMLP(nn.Module):
 
 
 
+
+
+
+
 class GaussianPolicy(nn.Module):
     action_dim: int
     hidden_dim: int = 256
     n_hidden: int = 2
     dropout: Optional[float] = None
+
+
 
 
     @nn.compact
@@ -1045,11 +1350,17 @@ class GaussianPolicy(nn.Module):
 
 
 
+
+
+
+
 class DeterministicPolicy(nn.Module):
     action_dim: int
     hidden_dim: int = 256
     n_hidden: int = 2
     dropout: Optional[float] = None
+
+
 
 
     @nn.compact
@@ -1064,9 +1375,15 @@ class DeterministicPolicy(nn.Module):
 
 
 
+
+
+
+
 class QFunction(nn.Module):
     hidden_dim: int = 256
     n_hidden: int = 2
+
+
 
 
     @nn.compact
@@ -1081,8 +1398,14 @@ class QFunction(nn.Module):
 
 
 
+
+
+
+
 class TwinQ(nn.Module):
     """Configurable ensemble of independent Q-functions.
+
+
 
 
     The class name is kept as ``TwinQ`` for minimal disruption to the existing
@@ -1091,9 +1414,13 @@ class TwinQ(nn.Module):
     """
 
 
+
+
     hidden_dim: int = 256
     n_hidden: int = 2
     num_critics: int = 2
+
+
 
 
     @nn.compact
@@ -1112,9 +1439,15 @@ class TwinQ(nn.Module):
 
 
 
+
+
+
+
 class ValueFunction(nn.Module):
     hidden_dim: int = 256
     n_hidden: int = 2
+
+
 
 
     @nn.compact
@@ -1129,8 +1462,14 @@ class ValueFunction(nn.Module):
 
 
 
+
+
+
+
 class ExpectileDiagnosticHead(nn.Module):
     """Auxiliary state-conditional estimators used only for diagnostics.
+
+
 
 
     Outputs:
@@ -1139,14 +1478,20 @@ class ExpectileDiagnosticHead(nn.Module):
       raw[..., 2] -> C_Q_hat(s) ~= E[w_tau(A) * eps_lag(s,a) | s]
 
 
+
+
     The second output is mapped to the valid expectile-weight interval before use.
     This network is deliberately detached from the IQL losses: it diagnoses the
     current algorithm but does not change Q/V/pi in Stage 1.
     """
 
 
+
+
     hidden_dim: int = 128
     n_hidden: int = 2
+
+
 
 
     @nn.compact
@@ -1156,6 +1501,10 @@ class ExpectileDiagnosticHead(nn.Module):
             x = nn.Dense(self.hidden_dim)(x)
             x = nn.relu(x)
         return nn.Dense(3)(x)
+
+
+
+
 
 
 
@@ -1177,6 +1526,10 @@ class IQLState:
 
 
 
+
+
+
+
 @struct.dataclass
 class ActorState:
     params: Any
@@ -1186,13 +1539,21 @@ class ActorState:
 
 
 
+
+
+
+
 class IQLJAX:
     """Implicit Q-Learning in JAX/Flax.
+
+
 
 
     The value, Q, and actor update equations mirror the provided PyTorch IQL code.
     Experiment-management code follows the CDAF_JAX file style.
     """
+
+
 
 
     def __init__(
@@ -1255,6 +1616,7 @@ class IQLJAX:
         diag_enable_local_amplitude_ladder: bool = True,
         diag_local_amplitude_low: float = 0.5,
         diag_local_amplitude_high: float = 2.0,
+        causal_target_tau_multiplier: float = 5.0,
         diag_target_tau_fast_multiplier: float = 5.0,
         diag_target_tau_very_fast_multiplier: float = 20.0,
         diag_actual_source_cap_fraction: float = 0.05,
@@ -1323,6 +1685,7 @@ class IQLJAX:
         self.diag_enable_local_amplitude_ladder = bool(diag_enable_local_amplitude_ladder)
         self.diag_local_amplitude_low = float(diag_local_amplitude_low)
         self.diag_local_amplitude_high = float(diag_local_amplitude_high)
+        self.causal_target_tau_multiplier = float(causal_target_tau_multiplier)
         self.diag_target_tau_fast_multiplier = float(diag_target_tau_fast_multiplier)
         self.diag_target_tau_very_fast_multiplier = float(diag_target_tau_very_fast_multiplier)
         self.diag_actual_source_cap_fraction = float(diag_actual_source_cap_fraction)
@@ -1335,6 +1698,8 @@ class IQLJAX:
         self.device = device if device is not None else jax.devices()[0]
 
 
+
+
         if self.hidden_dim <= 0:
             raise ValueError("hidden_dim must be > 0")
         if self.n_hidden <= 0:
@@ -1345,6 +1710,8 @@ class IQLJAX:
             raise ValueError("diag_hidden_dim must be > 0")
         if self.diag_kappa_floor <= 0.0:
             raise ValueError("diag_kappa_floor must be > 0")
+
+
 
 
         if iql_deterministic:
@@ -1370,6 +1737,8 @@ class IQLJAX:
         self.diag_def = ExpectileDiagnosticHead(hidden_dim=self.diag_hidden_dim, n_hidden=2)
 
 
+
+
         self.q_tx = optax.adam(qf_lr)
         self.v_tx = optax.adam(vf_lr)
         self.diag_tx = optax.adam(self.diag_head_lr)
@@ -1381,10 +1750,14 @@ class IQLJAX:
         self.actor_tx = optax.adam(actor_lr_schedule)
 
 
+
+
         key = jax.random.PRNGKey(seed)
         key_actor, key_q, key_v, key_diag, actor_key = jax.random.split(key, 5)
         dummy_state = jnp.zeros((1, state_dim), dtype=jnp.float32)
         dummy_action = jnp.zeros((1, action_dim), dtype=jnp.float32)
+
+
 
 
         actor_params = self.actor_def.init(key_actor, dummy_state, training=False)["params"]
@@ -1393,9 +1766,13 @@ class IQLJAX:
         diag_params = self.diag_def.init(key_diag, dummy_state)["params"]
 
 
+
+
         self.initial_actor_params = copy.deepcopy(actor_params)
         self.initial_actor_opt_state = self.actor_tx.init(actor_params)
         self.initial_actor_key = actor_key
+
+
 
 
         self.state = IQLState(
@@ -1413,11 +1790,17 @@ class IQLJAX:
         )
 
 
+
+
         self.state = tree_to_device(self.state, self.device)
         self.initial_actor_params = tree_to_device(self.initial_actor_params, self.device)
         self.initial_actor_opt_state = tree_to_device(self.initial_actor_opt_state, self.device)
         self.initial_actor_key = tree_to_device(self.initial_actor_key, self.device)
         self._train_step = self._build_train_step()
+        self._causal_branch_train_steps = {
+            mode: self._build_causal_branch_train_step(mode)
+            for mode in ("cut_target_q_input", "cut_v_backup_input", "target_tau_fast")
+        }
         self._value_divergence_diagnostic_step = self._build_value_divergence_diagnostic_step()
         self._propagation_diagnostic_step = self._build_propagation_diagnostic_step()
         self._residual_calibration_step = self._build_residual_calibration_step()
@@ -1426,6 +1809,8 @@ class IQLJAX:
         self._extended_pathway_diagnostic_step = self._build_extended_pathway_diagnostic_step()
         self._ridge_diagnostic_step = self._build_ridge_diagnostic_step()
         self._actor_refit_step = self._build_actor_refit_step()
+
+
 
 
     def _apply_actor(self, actor_params: Any, observations: jnp.ndarray, training: bool, rng: Optional[jnp.ndarray] = None):
@@ -1437,6 +1822,8 @@ class IQLJAX:
                 rngs={"dropout": rng},
             )
         return self.actor_def.apply({"params": actor_params}, observations, training=training)
+
+
 
 
     def _build_train_step(self):
@@ -1459,8 +1846,12 @@ class IQLJAX:
         actor_apply_fn = self.actor_def.apply
 
 
+
+
         kappa_low = min(float(iql_tau), float(1.0 - iql_tau))
         kappa_high = max(float(iql_tau), float(1.0 - iql_tau))
+
+
 
 
         def apply_actor(actor_params: Any, observations: jnp.ndarray, training: bool, rng: Optional[jnp.ndarray] = None):
@@ -1474,6 +1865,8 @@ class IQLJAX:
             return actor_apply_fn({"params": actor_params}, observations, training=training)
 
 
+
+
         def unpack_diag(raw: jnp.ndarray):
             g_hat = raw[..., 0]
             if abs(kappa_high - kappa_low) < 1e-12:
@@ -1483,6 +1876,8 @@ class IQLJAX:
             kappa_hat = jnp.maximum(kappa_hat, diag_kappa_floor)
             q_num_hat = raw[..., 2]
             return g_hat, kappa_hat, q_num_hat
+
+
 
 
         @jax.jit
@@ -1495,6 +1890,8 @@ class IQLJAX:
             dones = jnp.squeeze(batch["dones"], axis=-1)
 
 
+
+
             # Values used by multiple losses are computed from the old state, matching
             # the sequencing of the provided PyTorch implementation.
             next_v = v_apply({"params": state.v_params}, next_observations)
@@ -1504,6 +1901,8 @@ class IQLJAX:
             old_v = v_apply({"params": state.v_params}, observations)
             adv = target_q_for_v - old_v
             exp_adv = jnp.minimum(jnp.exp(beta * jax.lax.stop_gradient(adv)), EXP_ADV_MAX)
+
+
 
 
             # Auxiliary diagnostic head. It estimates conditional quantities that are
@@ -1525,6 +1924,8 @@ class IQLJAX:
             q_lag_rms = jnp.asarray(jnp.nan, dtype=jnp.float32)
 
 
+
+
             if enable_diag:
                 online_qs_diag = q_apply({"params": state.q_params}, observations, actions)
                 online_q_min_diag = jnp.min(online_qs_diag, axis=0)
@@ -1535,6 +1936,8 @@ class IQLJAX:
                 diag_q_num = diag_weight * eps_lag
 
 
+
+
                 def diag_loss_fn(params):
                     raw = diag_apply({"params": params}, observations)
                     g_hat, kappa_hat, q_num_hat = unpack_diag(raw)
@@ -1543,6 +1946,8 @@ class IQLJAX:
                     qnum_loss = jnp.mean((q_num_hat - diag_q_num) ** 2)
                     loss = g_loss + kappa_loss + qnum_loss
                     return loss, (g_loss, kappa_loss, qnum_loss)
+
+
 
 
                 (diag_loss, (diag_g_loss, diag_kappa_loss, diag_qnum_loss)), diag_grads = jax.value_and_grad(
@@ -1560,6 +1965,8 @@ class IQLJAX:
                 q_lag_rms = jnp.sqrt(jnp.mean(eps_lag ** 2) + 1e-12)
 
 
+
+
             def v_loss_fn(v_params):
                 v = v_apply({"params": v_params}, observations)
                 value_adv = jax.lax.stop_gradient(target_q_for_v) - v
@@ -1568,9 +1975,13 @@ class IQLJAX:
                 return value_loss, v
 
 
+
+
             (value_loss, v), v_grads = jax.value_and_grad(v_loss_fn, has_aux=True)(state.v_params)
             v_updates, v_opt_state = v_tx.update(v_grads, state.v_opt_state, state.v_params)
             v_params = optax.apply_updates(state.v_params, v_updates)
+
+
 
 
             def q_loss_fn(q_params):
@@ -1583,13 +1994,19 @@ class IQLJAX:
                 return q_loss, qs
 
 
+
+
             (q_loss, qs), q_grads = jax.value_and_grad(q_loss_fn, has_aux=True)(state.q_params)
             q_updates, q_opt_state = q_tx.update(q_grads, state.q_opt_state, state.q_params)
             q_params = optax.apply_updates(state.q_params, q_updates)
             q_target_params = soft_update(q_params, state.q_target_params, tau)
 
 
+
+
             actor_key, dropout_key = jax.random.split(state.actor_key)
+
+
 
 
             def actor_loss_fn(actor_params):
@@ -1609,6 +2026,8 @@ class IQLJAX:
                 return actor_loss, (bc_losses, policy_mean, log_std_mean)
 
 
+
+
             (actor_loss, (bc_losses, policy_mean, log_std_mean)), actor_grads = jax.value_and_grad(
                 actor_loss_fn, has_aux=True
             )(state.actor_params)
@@ -1618,6 +2037,8 @@ class IQLJAX:
                 state.actor_params,
             )
             actor_params = optax.apply_updates(state.actor_params, actor_updates)
+
+
 
 
             new_state = IQLState(
@@ -1633,6 +2054,8 @@ class IQLJAX:
                 diag_params=diag_params,
                 diag_opt_state=diag_opt_state,
             )
+
+
 
 
             log_dict = {
@@ -1668,11 +2091,300 @@ class IQLJAX:
             return new_state, log_dict
 
 
+
+
         return train_step
+
+
+
+
+    def _build_causal_branch_train_step(self, variant: str):
+        q_apply = self.q_def.apply
+        v_apply = self.v_def.apply
+        diag_apply = self.diag_def.apply
+        q_tx = self.q_tx
+        v_tx = self.v_tx
+        diag_tx = self.diag_tx
+        actor_tx = self.actor_tx
+        discount = self.discount
+        tau = self.tau
+        causal_multiplier = self.causal_target_tau_multiplier
+        beta = self.beta
+        iql_tau = self.iql_tau
+        iql_deterministic = self.iql_deterministic
+        num_critics = self.num_critics
+        enable_diag = self.enable_propagation_diagnostics
+        diag_kappa_floor = self.diag_kappa_floor
+        use_dropout = self.actor_dropout is not None
+        actor_apply_fn = self.actor_def.apply
+
+
+
+
+        kappa_low = min(float(iql_tau), float(1.0 - iql_tau))
+        kappa_high = max(float(iql_tau), float(1.0 - iql_tau))
+
+
+
+
+        def apply_actor(actor_params: Any, observations: jnp.ndarray, training: bool, rng: Optional[jnp.ndarray] = None):
+            if use_dropout and training:
+                return actor_apply_fn(
+                    {"params": actor_params},
+                    observations,
+                    training=training,
+                    rngs={"dropout": rng},
+                )
+            return actor_apply_fn({"params": actor_params}, observations, training=training)
+
+
+
+
+        def unpack_diag(raw: jnp.ndarray):
+            g_hat = raw[..., 0]
+            if abs(kappa_high - kappa_low) < 1e-12:
+                kappa_hat = jnp.full_like(g_hat, kappa_low)
+            else:
+                kappa_hat = kappa_low + (kappa_high - kappa_low) * jax.nn.sigmoid(raw[..., 1])
+            kappa_hat = jnp.maximum(kappa_hat, diag_kappa_floor)
+            q_num_hat = raw[..., 2]
+            return g_hat, kappa_hat, q_num_hat
+
+
+
+
+        @jax.jit
+        def train_step(state: IQLState, batch: TensorBatch, frozen_q_target_params: Any, frozen_v_params: Any):
+            total_it = state.total_it + jnp.asarray(1, dtype=jnp.int32)
+            observations = batch["observations"]
+            actions = batch["actions"]
+            rewards = jnp.squeeze(batch["rewards"], axis=-1)
+            next_observations = batch["next_observations"]
+            dones = jnp.squeeze(batch["dones"], axis=-1)
+
+
+
+
+            # Values used by multiple losses are computed from the old state, matching
+            # the sequencing of the provided PyTorch implementation.
+            next_v = v_apply({"params": state.v_params}, next_observations)
+            target_q_for_backup = rewards + (1.0 - dones) * discount * next_v
+            if variant == "cut_v_backup_input":
+                # Only freeze the V value used by the critic Bellman backup.
+                fixed_next_v = v_apply({"params": frozen_v_params}, next_observations)
+                target_q_for_backup = rewards + (1.0 - dones) * discount * fixed_next_v
+            target_qs = q_apply({"params": state.q_target_params}, observations, actions)
+            target_q_for_v = jnp.min(target_qs, axis=0)
+            # Actor advantage continues to use the live target Q.
+            v_only_target_q = target_q_for_v
+            if variant == "cut_target_q_input":
+                fixed_qs = q_apply({"params": frozen_q_target_params}, observations, actions)
+                v_only_target_q = jnp.min(fixed_qs, axis=0)
+            old_v = v_apply({"params": state.v_params}, observations)
+            adv = target_q_for_v - old_v
+            exp_adv = jnp.minimum(jnp.exp(beta * jax.lax.stop_gradient(adv)), EXP_ADV_MAX)
+
+
+
+
+            # Auxiliary diagnostic head. It estimates conditional quantities that are
+            # unavailable from a single continuous-state sample:
+            #   G(s)      = E[w_tau(A) A | s]
+            #   kappa(s)  = E[w_tau(A) | s]
+            #   C_Q(s)    = E[w_tau(A) eps_lag | s]
+            # where eps_lag = Q_online - Q_target is only a practical proxy for the
+            # theoretical critic perturbation epsilon_k.
+            diag_params = state.diag_params
+            diag_opt_state = state.diag_opt_state
+            diag_loss = jnp.asarray(jnp.nan, dtype=jnp.float32)
+            diag_g_loss = jnp.asarray(jnp.nan, dtype=jnp.float32)
+            diag_kappa_loss = jnp.asarray(jnp.nan, dtype=jnp.float32)
+            diag_qnum_loss = jnp.asarray(jnp.nan, dtype=jnp.float32)
+            raw_score_mean = jnp.asarray(jnp.nan, dtype=jnp.float32)
+            raw_score_abs_mean = jnp.asarray(jnp.nan, dtype=jnp.float32)
+            raw_kappa_mean = jnp.asarray(jnp.nan, dtype=jnp.float32)
+            q_lag_rms = jnp.asarray(jnp.nan, dtype=jnp.float32)
+
+
+
+
+            if enable_diag:
+                online_qs_diag = q_apply({"params": state.q_params}, observations, actions)
+                online_q_min_diag = jnp.min(online_qs_diag, axis=0)
+                eps_lag = jax.lax.stop_gradient(online_q_min_diag - target_q_for_v)
+                diag_adv = jax.lax.stop_gradient(target_q_for_v - old_v)
+                diag_weight = jnp.abs(iql_tau - (diag_adv < 0.0).astype(jnp.float32))
+                diag_score = diag_weight * diag_adv
+                diag_q_num = diag_weight * eps_lag
+
+
+
+
+                def diag_loss_fn(params):
+                    raw = diag_apply({"params": params}, observations)
+                    g_hat, kappa_hat, q_num_hat = unpack_diag(raw)
+                    g_loss = jnp.mean((g_hat - diag_score) ** 2)
+                    kappa_loss = jnp.mean((kappa_hat - diag_weight) ** 2)
+                    qnum_loss = jnp.mean((q_num_hat - diag_q_num) ** 2)
+                    loss = g_loss + kappa_loss + qnum_loss
+                    return loss, (g_loss, kappa_loss, qnum_loss)
+
+
+
+
+                (diag_loss, (diag_g_loss, diag_kappa_loss, diag_qnum_loss)), diag_grads = jax.value_and_grad(
+                    diag_loss_fn, has_aux=True
+                )(state.diag_params)
+                diag_updates, diag_opt_state = diag_tx.update(
+                    diag_grads,
+                    state.diag_opt_state,
+                    state.diag_params,
+                )
+                diag_params = optax.apply_updates(state.diag_params, diag_updates)
+                raw_score_mean = jnp.mean(diag_score)
+                raw_score_abs_mean = jnp.mean(jnp.abs(diag_score))
+                raw_kappa_mean = jnp.mean(diag_weight)
+                q_lag_rms = jnp.sqrt(jnp.mean(eps_lag ** 2) + 1e-12)
+
+
+
+
+            def v_loss_fn(v_params):
+                v = v_apply({"params": v_params}, observations)
+                value_adv = jax.lax.stop_gradient(v_only_target_q) - v
+                value_weight = jnp.abs(iql_tau - (value_adv < 0.0).astype(jnp.float32))
+                value_loss = jnp.mean(value_weight * value_adv ** 2)
+                return value_loss, v
+
+
+
+
+            (value_loss, v), v_grads = jax.value_and_grad(v_loss_fn, has_aux=True)(state.v_params)
+            v_updates, v_opt_state = v_tx.update(v_grads, state.v_opt_state, state.v_params)
+            v_params = optax.apply_updates(state.v_params, v_updates)
+
+
+
+
+            def q_loss_fn(q_params):
+                qs = q_apply({"params": q_params}, observations, actions)
+                target = jax.lax.stop_gradient(target_q_for_backup)
+                # Average the squared TD error over both critic and batch axes.
+                # For num_critics=2, this has the same scaling as the original
+                # 0.5 * (MSE(q1) + MSE(q2)) formulation.
+                q_loss = jnp.mean((qs - target[None, :]) ** 2)
+                return q_loss, qs
+
+
+
+
+            (q_loss, qs), q_grads = jax.value_and_grad(q_loss_fn, has_aux=True)(state.q_params)
+            q_updates, q_opt_state = q_tx.update(q_grads, state.q_opt_state, state.q_params)
+            q_params = optax.apply_updates(state.q_params, q_updates)
+            effective_tau = min(1.0, tau * causal_multiplier) if variant == "target_tau_fast" else tau
+            q_target_params = soft_update(q_params, state.q_target_params, effective_tau)
+
+
+
+
+            actor_key, dropout_key = jax.random.split(state.actor_key)
+
+
+
+
+            def actor_loss_fn(actor_params):
+                policy_out = apply_actor(actor_params, observations, training=True, rng=dropout_key)
+                if iql_deterministic:
+                    bc_losses = jnp.sum((policy_out - actions) ** 2, axis=-1)
+                    policy_mean = policy_out
+                    log_std_mean = jnp.asarray(np.nan, dtype=jnp.float32)
+                else:
+                    mean, log_std = policy_out
+                    std = jnp.exp(log_std)
+                    log_prob = -0.5 * (((actions - mean) / std) ** 2 + 2.0 * log_std + jnp.log(2.0 * jnp.pi))
+                    bc_losses = -jnp.sum(log_prob, axis=-1)
+                    policy_mean = mean
+                    log_std_mean = jnp.mean(log_std)
+                actor_loss = jnp.mean(jax.lax.stop_gradient(exp_adv) * bc_losses)
+                return actor_loss, (bc_losses, policy_mean, log_std_mean)
+
+
+
+
+            (actor_loss, (bc_losses, policy_mean, log_std_mean)), actor_grads = jax.value_and_grad(
+                actor_loss_fn, has_aux=True
+            )(state.actor_params)
+            actor_updates, actor_opt_state = actor_tx.update(
+                actor_grads,
+                state.actor_opt_state,
+                state.actor_params,
+            )
+            actor_params = optax.apply_updates(state.actor_params, actor_updates)
+
+
+
+
+            new_state = IQLState(
+                total_it=total_it,
+                q_params=q_params,
+                q_target_params=q_target_params,
+                q_opt_state=q_opt_state,
+                v_params=v_params,
+                v_opt_state=v_opt_state,
+                actor_params=actor_params,
+                actor_opt_state=actor_opt_state,
+                actor_key=actor_key,
+                diag_params=diag_params,
+                diag_opt_state=diag_opt_state,
+            )
+
+
+
+
+            log_dict = {
+                "q_loss": q_loss,
+                "q_mean": jnp.mean(qs),
+                "q_min_mean": jnp.mean(jnp.min(qs, axis=0)),
+                "q_max_mean": jnp.mean(jnp.max(qs, axis=0)),
+                "target_q_mean": jnp.mean(target_q_for_backup),
+                "value_loss": value_loss,
+                "v_mean": jnp.mean(v),
+                "adv_mean": jnp.mean(adv),
+                "adv_min": jnp.min(adv),
+                "adv_max": jnp.max(adv),
+                "exp_adv_mean": jnp.mean(exp_adv),
+                "actor_loss": actor_loss,
+                "bc_loss_mean": jnp.mean(bc_losses),
+                "policy_mean": jnp.mean(policy_mean),
+                "policy_log_std_mean": log_std_mean,
+            }
+            if enable_diag:
+                log_dict.update({
+                    "diag_head/loss": diag_loss,
+                    "diag_head/g_loss": diag_g_loss,
+                    "diag_head/kappa_loss": diag_kappa_loss,
+                    "diag_head/qnum_loss": diag_qnum_loss,
+                    "diag_raw/score_mean": raw_score_mean,
+                    "diag_raw/score_abs_mean": raw_score_abs_mean,
+                    "diag_raw/kappa_mean": raw_kappa_mean,
+                    "diag_raw/q_target_lag_rms": q_lag_rms,
+                })
+            for i in range(num_critics):
+                log_dict[f"q{i + 1}_mean"] = jnp.mean(qs[i])
+            return new_state, log_dict
+
+
+
+
+        return train_step
+
+
 
 
     def _build_value_divergence_diagnostic_step(self):
         """Cheap fixed-probe outcome diagnostic for Q/V/Bellman divergence.
+
+
 
 
         V7 showed that the value subsystem can run away well before a very large TD-error
@@ -1680,6 +2392,8 @@ class IQLJAX:
         outcome rather than only a side effect of propagation diagnostics.  It intentionally
         uses only forward evaluations on the fixed probe plus old/new parameter states, so it
         can be scheduled more frequently than finite-difference or virtual-rollout diagnostics.
+
+
 
 
         No hard-coded "diverged" threshold is emitted.  Raw/tail scales and one-step growth
@@ -1693,9 +2407,13 @@ class IQLJAX:
         num_critics = self.num_critics
 
 
+
+
         def rms(x):
             x = jnp.asarray(x)
             return jnp.sqrt(jnp.mean(x ** 2) + 1e-12)
+
+
 
 
         def cosine(a, b):
@@ -1704,12 +2422,18 @@ class IQLJAX:
             return jnp.sum(a * b) / (jnp.linalg.norm(a) * jnp.linalg.norm(b) + 1e-12)
 
 
+
+
         def abs_quantile(x, q):
             return jnp.quantile(jnp.abs(jnp.asarray(x)), q)
 
 
+
+
         def finite_fraction(x):
             return jnp.mean(jnp.isfinite(jnp.asarray(x)).astype(jnp.float32))
+
+
 
 
         def tree_l2(tree):
@@ -1717,8 +2441,12 @@ class IQLJAX:
             return jnp.sqrt(sum(jnp.sum(jnp.asarray(x, dtype=jnp.float32) ** 2) for x in leaves) + 1e-12)
 
 
+
+
         def tree_delta_l2(a, b):
             return tree_l2(jax.tree_util.tree_map(lambda x, y: x - y, a, b))
+
+
 
 
         def tree_finite_fraction(tree):
@@ -1726,6 +2454,8 @@ class IQLJAX:
             finite = sum(jnp.sum(jnp.isfinite(jnp.asarray(x)).astype(jnp.float32)) for x in leaves)
             count = sum(jnp.asarray(x).size for x in leaves)
             return finite / jnp.maximum(float(count), 1.0)
+
+
 
 
         def distribution_stats(prefix, x):
@@ -1743,20 +2473,27 @@ class IQLJAX:
             }
 
 
+
+
         def common_energy_fraction(common, full):
             return jnp.mean(jnp.asarray(common) ** 2) / (jnp.mean(jnp.asarray(full) ** 2) + 1e-12)
+
+
 
 
         def positive_energy_fraction(x):
             x = jnp.asarray(x)
             return jnp.mean(jnp.maximum(x, 0.0) ** 2) / (jnp.mean(x ** 2) + 1e-12)
 
+
         def centered(x):
             """Remove each critic's state-independent bias over the fixed probe."""
             return jnp.asarray(x) - jnp.mean(jnp.asarray(x), axis=-1, keepdims=True)
 
+
         def signed_energy_accounting(error_pre, online_change, target_change):
             """Exact fixed-probe energy identity e' = e + dq - dy, scale-normalized.
+
 
             Signed q work = 2 <e,dq>/||e||^2; signed target work =
             -2 <e,dy>/||e||^2. The quadratic correction is always nonnegative.
@@ -1775,6 +2512,8 @@ class IQLJAX:
             return q_work, target_work, quadratic, delta_energy, (q_work + target_work + quadratic - delta_energy)
 
 
+
+
         def pairwise_critic_cos(x):
             if num_critics < 2:
                 return jnp.asarray(jnp.nan, dtype=jnp.float32)
@@ -1783,6 +2522,8 @@ class IQLJAX:
                 for j in range(i + 1, num_critics):
                     vals.append(cosine(x[i], x[j]))
             return jnp.mean(jnp.stack(vals))
+
+
 
 
         def growth_stats(prefix, pre, post):
@@ -1801,6 +2542,8 @@ class IQLJAX:
             }
 
 
+
+
         @jax.jit
         def divergence_step(old_state: IQLState, new_state: IQLState, probe_batch: TensorBatch):
             obs = probe_batch["observations"]
@@ -1810,10 +2553,14 @@ class IQLJAX:
             done = jnp.squeeze(probe_batch["dones"], axis=-1)
 
 
+
+
             q_online_pre_all = q_apply({"params": old_state.q_params}, obs, act)
             q_online_post_all = q_apply({"params": new_state.q_params}, obs, act)
             q_target_pre_all = q_apply({"params": old_state.q_target_params}, obs, act)
             q_target_post_all = q_apply({"params": new_state.q_target_params}, obs, act)
+
+
 
 
             q_online_min_pre = jnp.min(q_online_pre_all, axis=0)
@@ -1823,6 +2570,8 @@ class IQLJAX:
             q_target_min_pre = jnp.min(q_target_pre_all, axis=0)
             q_target_min_post = jnp.min(q_target_post_all, axis=0)
             q_target_mean_post = jnp.mean(q_target_post_all, axis=0)
+
+
 
 
             v_pre = v_apply({"params": old_state.v_params}, obs)
@@ -1835,10 +2584,14 @@ class IQLJAX:
             bellman_post = rew + bootstrap_post
 
 
+
+
             q_online_spread_post = jnp.max(q_online_post_all, axis=0) - jnp.min(q_online_post_all, axis=0)
             q_target_spread_post = jnp.max(q_target_post_all, axis=0) - jnp.min(q_target_post_all, axis=0)
             q_online_std_post = jnp.std(q_online_post_all, axis=0)
             q_target_std_post = jnp.std(q_target_post_all, axis=0)
+
+
 
 
             # V9 ensemble-mode decomposition.  The common component is shared by all
@@ -1863,6 +2616,7 @@ class IQLJAX:
             td_common_post = jnp.mean(td_all_post, axis=0)
             td_disagreement_post = td_all_post - td_common_post[None, :]
 
+
             # V10: distinguish state-independent offset growth from a changing
             # state-dependent common-mode pattern.  Each critic is centered over
             # probe samples before common/disagreement energy is compared.
@@ -1874,6 +2628,7 @@ class IQLJAX:
             q_common_delta = q_online_common_post - q_online_common_pre
             q_target_common_delta = q_target_common_post - q_target_common_pre
             bellman_delta = bellman_post - bellman_pre
+
 
             # V11: exact, observed *sampled-probe* expectile-loss accounting.
             # L(Q_target_min, V) = E[w_tau(Q_target_min - V) * (Q_target_min - V)^2].
@@ -1913,6 +2668,7 @@ class IQLJAX:
                  != jnp.argmin(q_target_post_all, axis=0)).astype(jnp.float32)
             )
 
+
             # This captures co-directionality of ACTUAL observed function steps;
             # it does not purport to identify a causal Jacobian or true V error.
             chain_scale = jnp.maximum(rms(q_online_common_pre), 1e-8)
@@ -1936,11 +2692,15 @@ class IQLJAX:
             )
 
 
+
+
             reward_reference_scale = jnp.maximum(
                 jnp.maximum(rms(rew), abs_quantile(rew, 0.99)),
                 1e-8,
             )
             nominal_return_scale = reward_reference_scale / jnp.maximum(1.0 - discount, 1e-6)
+
+
 
 
             out = {}
@@ -1952,6 +2712,8 @@ class IQLJAX:
             out.update(distribution_stats("q_target_common", q_target_common_post))
             out.update(distribution_stats("q_online_disagreement", q_online_disagreement_post))
             out.update(distribution_stats("q_target_disagreement", q_target_disagreement_post))
+
+
 
 
             # V9 common-mode collapse diagnostics.  Values near one for common-energy
@@ -1997,6 +2759,8 @@ class IQLJAX:
             })
 
 
+
+
             # V10 diagnostics: offset-corrected mode structure and *signed* energy
             # accounting for observed Q/V/target changes on the same fixed probe.
             # These must not be mistaken for a full Jacobian or a causal ablation.
@@ -2036,6 +2800,7 @@ class IQLJAX:
                 "diag_feedback/lag_q_delta_with_pre_lag_cos": cosine(q_common_delta, q_common_lag_pre),
                 "diag_feedback/lag_target_delta_with_pre_lag_cos": cosine(q_target_common_delta, q_common_lag_pre),
             })
+
 
             # New V11 signals: separates an expectile V-fitting step from the
             # simultaneous movement of its clipped target Q; reports the weight
@@ -2083,6 +2848,7 @@ class IQLJAX:
                 ),
             })
 
+
             # Aggregate and per-critic scales.  Per-critic tails distinguish a shared
             # bootstrapping runaway from one critic failing first.
             out.update({
@@ -2114,6 +2880,8 @@ class IQLJAX:
             })
 
 
+
+
             for i in range(num_critics):
                 qi_post = q_online_post_all[i]
                 qti_post = q_target_post_all[i]
@@ -2133,6 +2901,8 @@ class IQLJAX:
                 })
 
 
+
+
             # One committed training step: does the learned function move radially outward?
             # Positive delta/pre cosine plus positive relative energy change is a direct local
             # signature of function-scale growth, independent of an arbitrary divergence threshold.
@@ -2146,6 +2916,8 @@ class IQLJAX:
             out.update(growth_stats(
                 "q_online_disagreement", q_online_disagreement_pre, q_online_disagreement_post
             ))
+
+
 
 
             # Parameter/optimizer health distinguishes output runaway driven by bootstrapped
@@ -2189,13 +2961,21 @@ class IQLJAX:
             return out
 
 
+
+
         return divergence_step
+
+
+
+
 
 
 
 
     def _build_propagation_diagnostic_step(self):
         """Build the expensive Stage-1 diagnostic pass.
+
+
 
 
         This pass intentionally does not modify the committed IQL update.  It diagnoses:
@@ -2205,6 +2985,8 @@ class IQLJAX:
           * source-direction-specific gain/alignment rather than only a global/random gain,
           * target-network lag growth,
           * calibration and correctability of the expectile-residual estimator.
+
+
 
 
         The principal local channels are
@@ -2246,8 +3028,12 @@ class IQLJAX:
         kappa_floor = self.diag_kappa_floor
 
 
+
+
         kappa_low = min(float(iql_tau), float(1.0 - iql_tau))
         kappa_high = max(float(iql_tau), float(1.0 - iql_tau))
+
+
 
 
         def unpack_diag(raw: jnp.ndarray):
@@ -2261,9 +3047,13 @@ class IQLJAX:
             return g_hat, kappa_hat, q_num_hat
 
 
+
+
         def rms(x):
             x = jnp.asarray(x)
             return jnp.sqrt(jnp.mean(x ** 2) + 1e-12)
+
+
 
 
         def tree_l2(tree):
@@ -2271,10 +3061,14 @@ class IQLJAX:
             return jnp.sqrt(sum(jnp.sum(jnp.asarray(x, dtype=jnp.float32) ** 2) for x in leaves) + 1e-12)
 
 
+
+
         def cosine(a, b):
             a = jnp.ravel(a)
             b = jnp.ravel(b)
             return jnp.sum(a * b) / (jnp.linalg.norm(a) * jnp.linalg.norm(b) + 1e-12)
+
+
 
 
         def corr(a, b):
@@ -2285,12 +3079,18 @@ class IQLJAX:
             return jnp.sum(ac * bc) / (jnp.linalg.norm(ac) * jnp.linalg.norm(bc) + 1e-12)
 
 
+
+
         def finite_fraction(x):
             return jnp.mean(jnp.isfinite(jnp.asarray(x)).astype(jnp.float32))
 
 
+
+
         def abs_quantile(x, q):
             return jnp.quantile(jnp.abs(jnp.asarray(x)), q)
+
+
 
 
         def normalized_direction(h):
@@ -2299,8 +3099,12 @@ class IQLJAX:
             return h_unit, source_rms
 
 
+
+
         def binned_calibration(pred, target):
             """Low-variance calibration check for conditional-mean heads.
+
+
 
 
             Raw sample correlation can be small even for a good E[target|s] estimator because
@@ -2318,6 +3122,8 @@ class IQLJAX:
             return corr(pred_bins, target_bins), mse, sign_agreement
 
 
+
+
         def binned_residual_stats(score, weight, sort_key):
             order = jnp.argsort(sort_key)
             score_sorted = score[order]
@@ -2328,8 +3134,12 @@ class IQLJAX:
             return rms(d_bins), jnp.mean(jnp.abs(d_bins)), jnp.max(jnp.abs(d_bins))
 
 
+
+
         def knn_conditional(query_states, ref_states, ref_values, exclude_diagonal=False):
             """Local non-parametric conditional mean and uncertainty proxy.
+
+
 
 
             This is deliberately independent of ExpectileDiagnosticHead.  State vectors are
@@ -2351,6 +3161,8 @@ class IQLJAX:
             return mean_val, se_val, radius
 
 
+
+
         def kernel_bandwidth(states):
             """Median-distance RBF bandwidth on already-normalized states."""
             diff = states[:, None, :] - states[None, :, :]
@@ -2365,8 +3177,12 @@ class IQLJAX:
             return sigma2
 
 
+
+
         def kernel_bandwidth_target_neff(states):
             """Choose a global RBF bandwidth whose mean leave-one-out N_eff hits a target.
+
+
 
 
             This directly addresses the V4 failure mode where the median-distance bandwidth
@@ -2379,6 +3195,8 @@ class IQLJAX:
             offdiag = 1.0 - eye
 
 
+
+
             masked_min = jnp.where(offdiag > 0.0, jnp.maximum(dist2, 1e-12), jnp.inf)
             min_d = jnp.min(masked_min)
             max_d = jnp.max(jnp.where(offdiag > 0.0, dist2, 0.0))
@@ -2387,11 +3205,15 @@ class IQLJAX:
             target_neff = jnp.minimum(kernel_target_neff, float(max(n - 1, 1)))
 
 
+
+
             def mean_neff(sigma2):
                 w = jnp.exp(-0.5 * dist2 / jnp.maximum(sigma2, 1e-12)) * offdiag
                 wsum = jnp.sum(w, axis=1) + 1e-12
                 neff = (wsum ** 2) / (jnp.sum(w ** 2, axis=1) + 1e-12)
                 return jnp.mean(neff)
+
+
 
 
             def body(_, bounds):
@@ -2404,9 +3226,13 @@ class IQLJAX:
                 return lo_new, hi_new
 
 
+
+
             lo, hi = jax.lax.fori_loop(0, kernel_search_iters, body, (lo, hi))
             sigma2 = jnp.sqrt(jnp.maximum(lo * hi, 1e-24))
             return sigma2, mean_neff(sigma2)
+
+
 
 
         def kernel_conditional(query_states, ref_states, ref_values, sigma2, exclude_diagonal=False):
@@ -2425,8 +3251,12 @@ class IQLJAX:
             return mean_val, se_val, neff
 
 
+
+
         def kernel_moment_stats(states, score, sigma2):
             """Maximum-moment-style conditional-residual score using an RBF kernel.
+
+
 
 
             The diagonal is removed so the score does not reduce to E[m^2], which would
@@ -2442,6 +3272,8 @@ class IQLJAX:
             kernel_norm = jnp.sum(pair) / (jnp.sum(kernel) + 1e-12)
             score_norm = kernel_norm / (jnp.mean(score ** 2) + 1e-12)
             return raw_u, kernel_norm, score_norm, jnp.sqrt(jnp.maximum(kernel_norm, 0.0))
+
+
 
 
         def crossfit_kernel_moment(states, score, sigma2):
@@ -2463,8 +3295,12 @@ class IQLJAX:
             return energy, norm, sign_agree
 
 
+
+
         def crossfit_displacement_energy(states, score, weight, sigma2):
             """Cross-fitted conditioning-aware residual-displacement energy.
+
+
 
 
             For each fold, estimate G(s) and kappa(s) from the opposite fold, then use
@@ -2481,10 +3317,14 @@ class IQLJAX:
             w_a, w_b = weight[:split], weight[split:]
 
 
+
+
             g_a_to_b, _, _ = kernel_conditional(s_b, s_a, m_a, sigma2, exclude_diagonal=False)
             k_a_to_b, _, _ = kernel_conditional(s_b, s_a, w_a, sigma2, exclude_diagonal=False)
             g_b_to_a, _, _ = kernel_conditional(s_a, s_b, m_b, sigma2, exclude_diagonal=False)
             k_b_to_a, _, _ = kernel_conditional(s_a, s_b, w_b, sigma2, exclude_diagonal=False)
+
+
 
 
             k_a_to_b = jnp.maximum(k_a_to_b, kappa_floor)
@@ -2493,6 +3333,8 @@ class IQLJAX:
             d_b_to_a = -g_b_to_a / k_b_to_a
             y_b = -m_b / k_a_to_b
             y_a = -m_a / k_b_to_a
+
+
 
 
             e_ab = jnp.mean(d_a_to_b * y_b)
@@ -2507,6 +3349,8 @@ class IQLJAX:
             return energy, jnp.sqrt(jnp.maximum(energy, 0.0)), normalized, sign_agree
 
 
+
+
         def displacement_se(g, g_se, kappa, kappa_se):
             """Delta-method SE for d=-G/kappa, ignoring G-kappa covariance."""
             k = jnp.maximum(kappa, kappa_floor)
@@ -2515,6 +3359,8 @@ class IQLJAX:
                 + ((g * kappa_se) / (k ** 2)) ** 2
                 + 1e-12
             )
+
+
 
 
         def response_mode_stats(x):
@@ -2532,6 +3378,8 @@ class IQLJAX:
             )
 
 
+
+
         def reinforcement_stats(delta, error):
             """Signed contribution of a propagated Q change to an existing error energy."""
             delta = jnp.ravel(delta)
@@ -2544,6 +3392,8 @@ class IQLJAX:
             return coeff, rel_energy_change, harm
 
 
+
+
         @jax.jit
         def diagnostic_step(old_state: IQLState, new_state: IQLState, batch: TensorBatch, probe_batch: TensorBatch):
             observations = batch["observations"]
@@ -2553,11 +3403,15 @@ class IQLJAX:
             dones = jnp.squeeze(batch["dones"], axis=-1)
 
 
+
+
             probe_observations = probe_batch["observations"]
             probe_actions = probe_batch["actions"]
             probe_rewards = jnp.squeeze(probe_batch["rewards"], axis=-1)
             probe_next_observations = probe_batch["next_observations"]
             probe_dones = jnp.squeeze(probe_batch["dones"], axis=-1)
+
+
 
 
             # Exact Bellman target used by the Q update in the committed training step.
@@ -2569,9 +3423,13 @@ class IQLJAX:
             fd_large_delta = fd_base_delta * fd_large_multiplier
 
 
+
+
             def q_loss_given_target(q_params, target_arg):
                 qs_local = q_apply({"params": q_params}, observations, actions)
                 return jnp.mean((qs_local - target_arg[None, :]) ** 2)
+
+
 
 
             def actual_adam_step(target_arg):
@@ -2581,22 +3439,32 @@ class IQLJAX:
                 return q_params_plus, q_grads, q_updates
 
 
+
+
             def actual_adam_output_for(target_arg, out_obs, out_actions):
                 q_params_plus, _, _ = actual_adam_step(target_arg)
                 return q_apply({"params": q_params_plus}, out_obs, out_actions)
+
+
 
 
             def actual_probe_output(target_arg):
                 return actual_adam_output_for(target_arg, probe_observations, probe_actions)
 
 
+
+
             def actual_train_output(target_arg):
                 return actual_adam_output_for(target_arg, observations, actions)
+
+
 
 
             def q_loss_given_target_matrix(q_params, target_matrix):
                 qs_local = q_apply({"params": q_params}, observations, actions)
                 return jnp.mean((qs_local - target_matrix) ** 2)
+
+
 
 
             def actual_probe_output_matrix(target_matrix):
@@ -2606,9 +3474,13 @@ class IQLJAX:
                 return q_apply({"params": q_params_plus}, probe_observations, probe_actions)
 
 
+
+
             base_q_params_plus, base_q_grads, base_q_updates = actual_adam_step(target)
             base_probe = q_apply({"params": base_q_params_plus}, probe_observations, probe_actions)
             base_train = q_apply({"params": base_q_params_plus}, observations, actions)
+
+
 
 
             # Old-parameter NTK / one-step-SGD linearization with the exact q_loss scaling.
@@ -2617,8 +3489,12 @@ class IQLJAX:
                     return q_apply({"params": params}, observations, actions)
 
 
+
+
                 def out_q_fn(params):
                     return q_apply({"params": params}, out_obs, out_actions)
+
+
 
 
                 q_train, pullback = jax.vjp(train_q_fn, old_state.q_params)
@@ -2628,6 +3504,8 @@ class IQLJAX:
                 param_direction = jax.tree_util.tree_map(lambda x: scale * x, param_pullback)
                 _, out_tangent = jax.jvp(out_q_fn, (old_state.q_params,), (param_direction,))
                 return out_tangent
+
+
 
 
             # ----- Residual-head validation on an independent probe batch. -----
@@ -2640,12 +3518,16 @@ class IQLJAX:
             probe_v_post = v_apply({"params": new_state.v_params}, probe_observations)
 
 
+
+
             def score_terms(v_values):
                 u = jax.lax.stop_gradient(probe_q_target) - v_values
                 w = jnp.abs(iql_tau - (u < 0.0).astype(jnp.float32))
                 score = w * u
                 loss = jnp.mean(w * u ** 2)
                 return score, w, loss
+
+
 
 
             score_pre, weight_pre, probe_v_loss_pre = score_terms(probe_v_pre)
@@ -2660,8 +3542,12 @@ class IQLJAX:
             q_num_target_probe = weight_pre * eps_lag_probe
 
 
+
+
             raw_probe = diag_apply({"params": new_state.diag_params}, probe_observations)
             g_hat_probe, kappa_hat_probe, q_num_hat_probe = unpack_diag(raw_probe)
+
+
 
 
             g_global_pre = jnp.mean(score_pre)
@@ -2670,6 +3556,8 @@ class IQLJAX:
             g_global_post = jnp.mean(score_post)
             kappa_global_post = jnp.maximum(jnp.mean(weight_post), kappa_floor)
             d_global_post = -g_global_post / kappa_global_post
+
+
 
 
             # Conditional-head quality: raw-label fit plus binned calibration and normalized baselines.
@@ -2682,6 +3570,8 @@ class IQLJAX:
             g_cal_corr, g_cal_mse, g_cal_sign = binned_calibration(g_hat_probe, score_pre)
             kappa_cal_corr, kappa_cal_mse, _ = binned_calibration(kappa_hat_probe, weight_pre)
             qnum_cal_corr, qnum_cal_mse, qnum_cal_sign = binned_calibration(q_num_hat_probe, q_num_target_probe)
+
+
 
 
             # The kappa head can be reinterpreted as a classifier for P(Q-V >= 0 | s):
@@ -2698,6 +3588,8 @@ class IQLJAX:
             d_bin_post_rms, d_bin_post_abs, d_bin_post_max = binned_residual_stats(score_post, weight_post, g_hat_probe)
 
 
+
+
             # Independent kNN reference on the probe batch.  Leave-one-out prevents a
             # sample from trivially explaining its own noisy action-conditioned label.
             g_knn_probe, g_knn_se_probe, knn_probe_radius = knn_conditional(
@@ -2710,6 +3602,8 @@ class IQLJAX:
                 probe_observations, probe_observations, q_num_target_probe, exclude_diagonal=True
             )
             d_knn_probe = -g_knn_probe / jnp.maximum(kappa_knn_probe, kappa_floor)
+
+
 
 
             # Kernel conditional-moment diagnostics.  Unlike pointwise regression, these
@@ -2730,12 +3624,16 @@ class IQLJAX:
             ppos_cal_corr, ppos_cal_mse, _ = binned_calibration(ppos_hat_probe, pos_indicator_probe)
 
 
+
+
             # Direct finite-difference validation of dG/dV = -kappa at the population/batch level.
             foc_shift = 1e-3 * jnp.maximum(rms(probe_q_target), 1.0)
             score_plus_shift, _, _ = score_terms(probe_v_pre + foc_shift)
             score_minus_shift, _, _ = score_terms(probe_v_pre - foc_shift)
             foc_dg_dv_fd = (jnp.mean(score_plus_shift) - jnp.mean(score_minus_shift)) / (2.0 * foc_shift)
             foc_slope_over_kappa = -foc_dg_dv_fd / (kappa_global_pre + 1e-12)
+
+
 
 
             if enable_kernel_residual:
@@ -2771,6 +3669,8 @@ class IQLJAX:
                 )
 
 
+
+
                 # Adaptive local kernel with controlled effective support.
                 kernel_local_sigma2, kernel_local_neff_target_achieved = kernel_bandwidth_target_neff(
                     probe_observations
@@ -2800,6 +3700,8 @@ class IQLJAX:
                 balance_kernel_local_probe = (pos_kernel_local_probe - neg_kernel_local_probe) / (
                     pos_kernel_local_probe + neg_kernel_local_probe + 1e-12
                 )
+
+
 
 
                 # V7 conditioning-aware residual diagnostics.  Raw G shrinks with kappa,
@@ -2842,6 +3744,8 @@ class IQLJAX:
                     d_kernel_local_noise_corrected_rms = jnp.asarray(jnp.nan, dtype=jnp.float32)
                     conditioned_crossfit_energy = conditioned_crossfit_root = jnp.asarray(jnp.nan, dtype=jnp.float32)
                     conditioned_crossfit_norm = conditioned_crossfit_sign = jnp.asarray(jnp.nan, dtype=jnp.float32)
+
+
 
 
                 # Multi-scale scalar moment sensitivity around the original median bandwidth.
@@ -2898,6 +3802,8 @@ class IQLJAX:
                 kernel_ms_neff = jnp.full((5,), jnp.nan, dtype=jnp.float32)
 
 
+
+
             def probe_v_loss_fn(v_params):
                 probe_v = v_apply({"params": v_params}, probe_observations)
                 u = jax.lax.stop_gradient(probe_q_target) - probe_v
@@ -2905,8 +3811,12 @@ class IQLJAX:
                 return jnp.mean(w * u ** 2)
 
 
+
+
             v_grad_pre = jax.grad(probe_v_loss_fn)(old_state.v_params)
             v_grad_post = jax.grad(probe_v_loss_fn)(new_state.v_params)
+
+
 
 
             # Frozen-Q, virtual multi-step V refinement.  This tests whether a large residual
@@ -2916,8 +3826,12 @@ class IQLJAX:
                 train_q_target = jax.lax.stop_gradient(jnp.min(train_q_target_all, axis=0))
 
 
+
+
                 def virtual_v_one(carry):
                     v_params_local, v_opt_state_local = carry
+
+
 
 
                     def local_v_loss(params):
@@ -2927,10 +3841,14 @@ class IQLJAX:
                         return jnp.mean(ww * uu ** 2)
 
 
+
+
                     grads = jax.grad(local_v_loss)(v_params_local)
                     updates, opt_state_new = v_tx.update(grads, v_opt_state_local, v_params_local)
                     params_new = optax.apply_updates(v_params_local, updates)
                     return params_new, opt_state_new
+
+
 
 
                 def run_virtual_v_steps(n_steps):
@@ -2942,6 +3860,8 @@ class IQLJAX:
                         body,
                         (old_state.v_params, old_state.v_opt_state),
                     )[0]
+
+
 
 
                 v_params_short = run_virtual_v_steps(v_short_steps)
@@ -2967,6 +3887,8 @@ class IQLJAX:
                 d_bin_long_rms = jnp.asarray(jnp.nan, dtype=jnp.float32)
 
 
+
+
             # ----- State-conditional h_V and h_Q^lag on the actual Q-fitting batch. -----
             raw_next = diag_apply({"params": new_state.diag_params}, next_observations)
             g_hat_next, kappa_hat_next, q_num_hat_next = unpack_diag(raw_next)
@@ -2975,6 +3897,8 @@ class IQLJAX:
             critic_value_error_lag_hat = q_num_hat_next / kappa_hat_next
             h_q_lag = (1.0 - dones) * discount * critic_value_error_lag_hat
             h_total_proxy = h_v + h_q_lag
+
+
 
 
             # Independent state-neighborhood source proxy evaluated at the actual next states.
@@ -2993,6 +3917,8 @@ class IQLJAX:
             h_q_knn = (1.0 - dones) * discount * d_q_knn_next
 
 
+
+
             if enable_kernel_residual:
                 g_kernel_next, g_kernel_se_next, kernel_neff_next = kernel_conditional(
                     next_observations, probe_observations, score_pre, kernel_sigma2, exclude_diagonal=False
@@ -3007,6 +3933,8 @@ class IQLJAX:
                 d_q_kernel_next = qnum_kernel_next / jnp.maximum(kappa_kernel_next, kappa_floor)
                 h_v_kernel = (1.0 - dones) * discount * d_v_kernel_next
                 h_q_kernel = (1.0 - dones) * discount * d_q_kernel_next
+
+
 
 
                 g_kernel_local_next, g_kernel_local_se_next, kernel_local_neff_next = kernel_conditional(
@@ -3047,6 +3975,8 @@ class IQLJAX:
                 h_q_kernel_local = jnp.full_like(h_q_knn, jnp.nan)
 
 
+
+
             if enable_conditioned_residual:
                 d_v_kernel_local_se_next = displacement_se(
                     g_kernel_local_next,
@@ -3062,16 +3992,22 @@ class IQLJAX:
                 d_v_kernel_local_snr_next = jnp.full_like(h_v_knn, jnp.nan)
 
 
+
+
             # Deterministic random direction so the optional ridge diagnostic can reproduce it.
             base_key = jax.random.fold_in(jax.random.PRNGKey(diag_seed), old_state.total_it + 1)
             rand_key, basis_key = jax.random.split(base_key)
             h_random = jax.random.rademacher(rand_key, shape=target.shape, dtype=jnp.float32)
 
 
+
+
             def central_fd(h_unit, delta):
                 plus = actual_probe_output(target + delta * h_unit)
                 minus = actual_probe_output(target - delta * h_unit)
                 return (plus - minus) / (2.0 * delta), plus
+
+
 
 
             def direction_outputs(h):
@@ -3083,10 +4019,14 @@ class IQLJAX:
                 return h_unit, source_rms, fd_probe, fd_forward, adam_jvp_probe, ntk_probe
 
 
+
+
             random_unit, random_source_rms, random_fd, random_fd_forward, random_adam_jvp, random_ntk = direction_outputs(h_random)
             h_v_unit, h_v_source_rms, h_v_fd, h_v_fd_forward, h_v_adam_jvp, h_v_ntk = direction_outputs(h_v)
             h_q_unit, h_q_source_rms, h_q_fd, h_q_fd_forward, h_q_adam_jvp, h_q_ntk = direction_outputs(h_q_lag)
             h_total_unit, h_total_source_rms, h_total_fd, _, _, h_total_ntk = direction_outputs(h_total_proxy)
+
+
 
 
             # kNN alternatives intentionally use only the robust finite-difference reference.
@@ -3096,16 +4036,22 @@ class IQLJAX:
             h_q_knn_fd, _ = central_fd(h_q_knn_unit, fd_base_delta)
 
 
+
+
             h_v_kernel_unit, h_v_kernel_source_rms = normalized_direction(h_v_kernel)
             h_q_kernel_unit, h_q_kernel_source_rms = normalized_direction(h_q_kernel)
             h_v_kernel_fd, _ = central_fd(h_v_kernel_unit, fd_base_delta)
             h_q_kernel_fd, _ = central_fd(h_q_kernel_unit, fd_base_delta)
 
 
+
+
             h_v_kernel_local_unit, h_v_kernel_local_source_rms = normalized_direction(h_v_kernel_local)
             h_q_kernel_local_unit, h_q_kernel_local_source_rms = normalized_direction(h_q_kernel_local)
             h_v_kernel_local_fd, _ = central_fd(h_v_kernel_local_unit, fd_base_delta)
             h_q_kernel_local_fd, _ = central_fd(h_q_kernel_local_unit, fd_base_delta)
+
+
 
 
             # V9 source-conditioned ensemble modes.  The existing shared target response
@@ -3126,6 +4072,8 @@ class IQLJAX:
             ) = response_mode_stats(random_fd)
 
 
+
+
             if num_critics > 1:
                 critic_contrast = (
                     jnp.arange(num_critics, dtype=jnp.float32)
@@ -3136,6 +4084,8 @@ class IQLJAX:
                 )
             else:
                 critic_contrast = jnp.ones((num_critics,), dtype=jnp.float32)
+
+
 
 
             target_matrix = jnp.broadcast_to(target[None, :], (num_critics, target.shape[0]))
@@ -3155,8 +4105,12 @@ class IQLJAX:
             ) = response_mode_stats(h_q_contrast_fd)
 
 
+
+
             random_fd_small, _ = central_fd(random_unit, fd_small_delta)
             random_fd_large, _ = central_fd(random_unit, fd_large_delta)
+
+
 
 
             # Finite-amplitude response at 25/50/100% of a safely clipped source scale.
@@ -3164,6 +4118,8 @@ class IQLJAX:
             def finite_amplitude_curve(h, source_rms, local_fd):
                 max_rms = actual_source_cap_fraction * jnp.maximum(target_rms, 1.0)
                 base_alpha = jnp.minimum(1.0, max_rms / (source_rms + 1e-12))
+
+
 
 
                 def one(frac):
@@ -3178,13 +4134,19 @@ class IQLJAX:
                     )
 
 
+
+
                 return one(0.25), one(0.50), one(1.00)
+
+
 
 
             h_v_amp25, h_v_amp50, h_v_amp100 = finite_amplitude_curve(h_v, h_v_source_rms, h_v_fd)
             h_q_amp25, h_q_amp50, h_q_amp100 = finite_amplitude_curve(h_q_lag, h_q_source_rms, h_q_fd)
             h_v_actual_alpha, h_v_actual_gain, h_v_actual_cos, h_v_actual_relerr = h_v_amp100
             h_q_actual_alpha, h_q_actual_gain, h_q_actual_cos, h_q_actual_relerr = h_q_amp100
+
+
 
 
             # Cross-sample spillover: finite-difference actual Adam is the robust reference;
@@ -3194,10 +4156,14 @@ class IQLJAX:
             basis = jax.nn.one_hot(basis_indices, batch_size, dtype=target.dtype)
 
 
+
+
             def one_basis_fd(h_basis):
                 plus = actual_train_output(target + fd_base_delta * h_basis)
                 minus = actual_train_output(target - fd_base_delta * h_basis)
                 return (plus - minus) / (2.0 * fd_base_delta)
+
+
 
 
             def one_basis_adam_jvp(h_basis):
@@ -3205,13 +4171,19 @@ class IQLJAX:
                 return out
 
 
+
+
             def one_basis_ntk(h_basis):
                 return ntk_output(h_basis, observations, actions)
+
+
 
 
             basis_fd = jax.vmap(one_basis_fd)(basis)
             basis_adam_jvp = jax.vmap(one_basis_adam_jvp)(basis)
             basis_ntk = jax.vmap(one_basis_ntk)(basis)
+
+
 
 
             def spillover_stats(outputs):
@@ -3231,9 +4203,13 @@ class IQLJAX:
                 )
 
 
+
+
             fd_self, fd_spill, fd_spill_ratio, fd_spill_rms_coord, fd_spill_coord_ratio = spillover_stats(basis_fd)
             adam_jvp_self, adam_jvp_spill, adam_jvp_spill_ratio, adam_jvp_spill_rms_coord, adam_jvp_spill_coord_ratio = spillover_stats(basis_adam_jvp)
             ntk_self, ntk_spill, ntk_spill_ratio, ntk_spill_rms_coord, ntk_spill_coord_ratio = spillover_stats(basis_ntk)
+
+
 
 
             # ----- Target-network lag dynamics and actual Q-update geometry. -----
@@ -3249,6 +4225,8 @@ class IQLJAX:
             lag_recurrence_error = lag_post - (lag_pre + online_delta - target_delta)
 
 
+
+
             probe_next_v_old = v_apply({"params": old_state.v_params}, probe_next_observations)
             probe_backup_target = probe_rewards + (1.0 - probe_dones) * discount * probe_next_v_old
             td_error_probe = probe_q_online_mean - probe_backup_target
@@ -3256,8 +4234,12 @@ class IQLJAX:
             committed_q_probe = q_apply({"params": new_state.q_params}, probe_observations, probe_actions)
 
 
+
+
             ensemble_std_probe = jnp.mean(jnp.std(probe_q_online_all, axis=0))
             td_error_old = jnp.mean(q_apply({"params": old_state.q_params}, observations, actions), axis=0) - target
+
+
 
 
             # Scaled propagated outputs.  Since local derivatives are measured on unit-RMS source
@@ -3270,9 +4252,13 @@ class IQLJAX:
             linear_sum_fd = h_v_fd_scaled + h_q_fd_scaled
 
 
+
+
             h_v_fd_mean = jnp.mean(h_v_fd_scaled, axis=0)
             h_q_fd_mean = jnp.mean(h_q_fd_scaled, axis=0)
             h_total_fd_mean = jnp.mean(h_total_fd_scaled, axis=0)
+
+
 
 
             h_v_knn_fd_scaled = h_v_knn_fd * h_v_knn_source_rms
@@ -3281,16 +4267,22 @@ class IQLJAX:
             h_q_knn_fd_mean = jnp.mean(h_q_knn_fd_scaled, axis=0)
 
 
+
+
             h_v_kernel_fd_scaled = h_v_kernel_fd * h_v_kernel_source_rms
             h_q_kernel_fd_scaled = h_q_kernel_fd * h_q_kernel_source_rms
             h_v_kernel_fd_mean = jnp.mean(h_v_kernel_fd_scaled, axis=0)
             h_q_kernel_fd_mean = jnp.mean(h_q_kernel_fd_scaled, axis=0)
 
 
+
+
             h_v_kernel_local_fd_scaled = h_v_kernel_local_fd * h_v_kernel_local_source_rms
             h_q_kernel_local_fd_scaled = h_q_kernel_local_fd * h_q_kernel_local_source_rms
             h_v_kernel_local_fd_mean = jnp.mean(h_v_kernel_local_fd_scaled, axis=0)
             h_q_kernel_local_fd_mean = jnp.mean(h_q_kernel_local_fd_scaled, axis=0)
+
+
 
 
             hq_lag_coeff, hq_lag_energy, hq_lag_harm = reinforcement_stats(h_q_fd_mean, eps_lag_probe)
@@ -3309,6 +4301,8 @@ class IQLJAX:
             )
 
 
+
+
             # V10: unlike cosine alone, the signed projection reports how large
             # the *amplitude-scaled* common response is relative to pre-update
             # common online-target lag.  Head/kNN/kernel are separate proxies,
@@ -3322,12 +4316,14 @@ class IQLJAX:
                 quadratic = jnp.mean(r * r) / denom
                 return projection, 2.0 * projection + quadratic, rms(response) / scale
 
+
             head_signed = signed_common_response(h_q_fd_mean, probe_common_lag)
             knn_signed = signed_common_response(h_q_knn_fd_mean, probe_common_lag)
             kernel_signed = signed_common_response(h_q_kernel_fd_mean, probe_common_lag)
             local_signed = signed_common_response(h_q_kernel_local_fd_mean, probe_common_lag)
             v_head_signed = signed_common_response(h_v_fd_mean, probe_common_lag)
             random_signed = signed_common_response(jnp.mean(random_fd, axis=0), probe_common_lag)
+
 
             # End-to-end closed-loop proxies.  Unlike diag_gain/* (which measures only B
             # along a target-error direction), these compare the propagated critic change to
@@ -3340,10 +4336,14 @@ class IQLJAX:
             m_proxy_kernel_local = rms(h_q_kernel_local_fd_mean) / (lag_rms_probe + 1e-12)
 
 
+
+
             # Scale-normalized sources distinguish genuine relative error growth from the
             # trivial increase caused by Q/V magnitudes exploding together.
             q_value_scale = jnp.maximum(rms(probe_q_target), 1e-8)
             bellman_scale = jnp.maximum(target_rms, 1e-8)
+
+
 
 
             # V6 policy-bridge diagnostics.  Value instability matters for control only when
@@ -3363,14 +4363,20 @@ class IQLJAX:
             )
 
 
+
+
             def actor_mean(params):
                 out = actor_apply_fn({"params": params}, probe_observations, training=False)
                 return out if iql_deterministic else out[0]
 
 
+
+
             actor_mean_old = actor_mean(old_state.actor_params)
             actor_mean_new = actor_mean(new_state.actor_params)
             actor_mean_delta = actor_mean_new - actor_mean_old
+
+
 
 
             def weight_mass_top_decile(signal):
@@ -3379,9 +4385,13 @@ class IQLJAX:
                 return jnp.sum(policy_weight_probe * mask) / policy_weight_sum
 
 
+
+
             abs_lag_probe = jnp.abs(eps_lag_probe)
             abs_td_probe = jnp.abs(td_error_probe)
             abs_residual_local_probe = jnp.abs(d_kernel_local_probe)
+
+
 
 
             log_dict = {
@@ -3417,6 +4427,8 @@ class IQLJAX:
                 "diag_residual/head_qnum_binned_sign_agree_probe": qnum_cal_sign,
 
 
+
+
                 # Independent kNN conditional reference: useful when the learned head has
                 # near-zero skill.  Radius/SE indicate when the non-parametric reference is weak.
                 "diag_knn/probe_neighbor_radius_mean": jnp.mean(knn_probe_radius),
@@ -3435,6 +4447,8 @@ class IQLJAX:
                 "diag_residual/head_vs_knn_kappa_corr_probe": corr(kappa_hat_probe, kappa_knn_probe),
                 "diag_residual/head_vs_knn_qnum_corr_probe": corr(q_num_hat_probe, qnum_knn_probe),
                 "diag_residual/head_vs_knn_d_corr_probe": corr(-g_hat_probe / kappa_hat_probe, d_knn_probe),
+
+
 
 
                 # Kernel conditional-moment diagnostics: direct tests of E[psi_tau(Q-V)|s]=0
@@ -3463,6 +4477,8 @@ class IQLJAX:
                 "diag_kernel/kappa_from_ppos_sanity_rms": rms(kappa_kernel_probe - kappa_from_ppos_probe),
 
 
+
+
                 # Adaptive local kernel: same conditional-moment idea, but bandwidth is
                 # calibrated to a fixed effective support instead of median distance.
                 "diag_kernel_local/bandwidth_sigma2": kernel_local_sigma2,
@@ -3482,6 +4498,8 @@ class IQLJAX:
                 "diag_kernel_local/broad_vs_d_corr_probe": corr(d_kernel_probe, d_kernel_local_probe),
                 "diag_kernel_local/balance_abs_mean_probe": jnp.mean(jnp.abs(balance_kernel_local_probe)),
                 "diag_kernel_local/balance_abs_p90_probe": abs_quantile(balance_kernel_local_probe, 0.90),
+
+
 
 
                 # V7 conditioning-aware displacement diagnostics.  The delta-method SE is
@@ -3517,6 +4535,8 @@ class IQLJAX:
                 ),
 
 
+
+
                 # Multi-scale sensitivity.  A real conditional violation should not exist
                 # only at the single over-smoothed bandwidth used in V4.
                 "diag_kernel_ms/mmr_score_s0125": kernel_ms_score[0],
@@ -3538,6 +4558,8 @@ class IQLJAX:
                 "diag_kernel_ms/max_abs_mmr_score": jnp.max(jnp.abs(kernel_ms_score)),
 
 
+
+
                 # Kappa-head-as-classifier calibration.
                 "diag_kappa_cls/p_pos_hat_mean": jnp.mean(ppos_hat_probe),
                 "diag_kappa_cls/p_pos_hat_std": jnp.std(ppos_hat_probe),
@@ -3547,6 +4569,8 @@ class IQLJAX:
                 "diag_kappa_cls/logloss": ppos_logloss,
                 "diag_kappa_cls/binned_cal_corr": ppos_cal_corr,
                 "diag_kappa_cls/binned_cal_mse": ppos_cal_mse,
+
+
 
 
                 # Expectile balance decomposition: exact FOC means positive and negative
@@ -3564,6 +4588,8 @@ class IQLJAX:
                 "diag_balance/p_pos_mean_probe": jnp.mean(pos_indicator_probe),
 
 
+
+
                 # Direct theory calibration for dG/dV = -kappa.
                 "diag_conditioning/foc_shift": foc_shift,
                 "diag_conditioning/foc_dG_dV_fd": foc_dg_dv_fd,
@@ -3572,6 +4598,8 @@ class IQLJAX:
                 "diag_conditioning/inv_kappa_head_p90": jnp.quantile(1.0 / jnp.maximum(kappa_hat_probe, kappa_floor), 0.90),
                 "diag_conditioning/inv_kappa_kernel_p50": jnp.quantile(1.0 / jnp.maximum(kappa_kernel_probe, kappa_floor), 0.50),
                 "diag_conditioning/inv_kappa_kernel_p90": jnp.quantile(1.0 / jnp.maximum(kappa_kernel_probe, kappa_floor), 0.90),
+
+
 
 
                 # ---- Correctability / under-training diagnostics ----
@@ -3604,6 +4632,8 @@ class IQLJAX:
                 f"diag_residual/binned_d_rms_virtual_{v_long_steps}_over_pre": d_bin_long_rms / (d_bin_pre_rms + 1e-12),
 
 
+
+
                 # ---- Observable source proxies ----
                 "diag_source/h_v_rms": h_v_source_rms,
                 "diag_source/h_v_abs_p90": abs_quantile(h_v, 0.90),
@@ -3631,6 +4661,8 @@ class IQLJAX:
                 "diag_source/td_error_rms_probe": rms(td_error_probe),
 
 
+
+
                 # ---- Scale-normalized source/propagation diagnostics ----
                 "diag_scale/probe_q_target_rms": q_value_scale,
                 "diag_scale/bellman_target_rms": bellman_scale,
@@ -3653,6 +4685,8 @@ class IQLJAX:
                 "diag_scale/prop_h_q_kernel_local_over_target": rms(h_q_kernel_local_fd_scaled) / bellman_scale,
 
 
+
+
                 # ---- Policy bridge: does critic/value pathology reach AWBC extraction? ----
                 "diag_policy/adv_rms_probe": rms(policy_adv_probe),
                 "diag_policy/exp_adv_mean_probe": jnp.mean(policy_weight_probe),
@@ -3671,6 +4705,8 @@ class IQLJAX:
                 "diag_policy/actor_mean_rms_probe": rms(actor_mean_old),
                 "diag_policy/actor_mean_delta_rms_probe": rms(actor_mean_delta),
                 "diag_policy/actor_mean_delta_over_mean_rms": rms(actor_mean_delta) / (rms(actor_mean_old) + 1e-12),
+
+
 
 
                 # ---- B finite-difference numerical validity ----
@@ -3697,6 +4733,8 @@ class IQLJAX:
                 "diag_B/fd_vs_jvp_adam_cos_random": cosine(random_fd, random_adam_jvp),
                 "diag_B/fd_vs_ntk_cos_random": cosine(random_fd, random_ntk),
                 "diag_B/ntk_over_fd_gain_random": rms(random_ntk) / (rms(random_fd) + 1e-12),
+
+
 
 
                 # ---- Directional source-specific gain and realized propagation ----
@@ -3750,6 +4788,8 @@ class IQLJAX:
                 "diag_prop/h_q_kernel_local_vs_knn_output_cos": cosine(h_q_kernel_local_fd_scaled, h_q_knn_fd_scaled),
 
 
+
+
                 # ---- V9 common/disagreement-mode transmission ----
                 "diag_common_B/h_q_shared_common_gain": h_q_fd_common_gain,
                 "diag_common_B/h_q_shared_disagreement_gain": h_q_fd_disagreement_gain,
@@ -3778,6 +4818,8 @@ class IQLJAX:
                 "diag_common_B/contrast_vs_shared_disagreement_gain_ratio": h_q_contrast_disagreement_gain / (
                     h_q_fd_disagreement_gain + 1e-12
                 ),
+
+
 
 
                 # V10 source-amplitude-aware signed common-mode propagation.
@@ -3818,6 +4860,7 @@ class IQLJAX:
                     jnp.sign(knn_signed[0]) == jnp.sign(local_signed[0])
                 ).astype(jnp.float32),
 
+
                 # End-to-end critic-error recursion proxies.  Values > 1 mean that the
                 # propagated component alone is larger than the current observable lag proxy.
                 "diag_closed_loop/h_q_head_M_proxy_gain": m_proxy_head,
@@ -3834,6 +4877,8 @@ class IQLJAX:
                 "diag_closed_loop/h_q_kernel_local_M_proxy_expansive": (m_proxy_kernel_local > 1.0).astype(jnp.float32),
 
 
+
+
                 # Alignment: positive cosine with current lag/TD error means the propagated
                 # perturbation points in the same direction as the existing error proxy.
                 "diag_alignment/h_q_prop_with_lag_cos": cosine(h_q_fd_mean, eps_lag_probe),
@@ -3841,6 +4886,8 @@ class IQLJAX:
                 "diag_alignment/h_q_prop_with_td_error_cos": cosine(h_q_fd_mean, td_error_probe),
                 "diag_alignment/h_v_prop_with_td_error_cos": cosine(h_v_fd_mean, td_error_probe),
                 "diag_alignment/actual_q_update_with_negative_td_cos": cosine(q_update_probe_mean, -td_error_probe),
+
+
 
 
                 # Signed reinforcement / predicted error-energy change.  Positive values mean
@@ -3875,6 +4922,8 @@ class IQLJAX:
                 "diag_harm/h_v_kernel_local_with_td_signed_injection": hv_kernel_local_td_coeff,
                 "diag_harm/h_v_kernel_local_with_td_pred_rel_energy_change": hv_kernel_local_td_energy,
                 "diag_harm/h_v_kernel_local_with_td_positive_risk": hv_kernel_local_td_harm,
+
+
 
 
                 # Actual-scale locality check: whether the linearized B remains predictive at
@@ -3913,6 +4962,8 @@ class IQLJAX:
                 "diag_amplitude/h_q_relerr100": h_q_amp100[3],
 
 
+
+
                 # ---- Per-target spillover / cross-sample coupling ----
                 "diag_B/basis_fd_adam_self_abs_mean": fd_self,
                 "diag_B/basis_fd_adam_spillover_l2_mean": fd_spill,
@@ -3930,6 +4981,8 @@ class IQLJAX:
                 "diag_B/basis_ntk_spillover_ratio_mean": ntk_spill_ratio,
                 "diag_B/basis_ntk_spillover_rms_per_coord_mean": ntk_spill_rms_coord,
                 "diag_B/basis_ntk_spillover_per_coord_ratio_mean": ntk_spill_coord_ratio,
+
+
 
 
                 # ---- Optimizer and target-network dynamics ----
@@ -3961,11 +5014,17 @@ class IQLJAX:
             return log_dict
 
 
+
+
         return diagnostic_step
+
+
 
 
     def _build_residual_calibration_step(self):
         """Controlled calibration of residual estimators across amplitude and structure.
+
+
 
 
         V5 showed that the local-kernel estimator can recover the *direction* of a smooth
@@ -3992,13 +5051,19 @@ class IQLJAX:
         diag_seed = self.diag_seed
 
 
+
+
         def rms(x):
             return jnp.sqrt(jnp.mean(jnp.asarray(x) ** 2) + 1e-12)
+
+
 
 
         def cosine(a, b):
             a = jnp.ravel(a); b = jnp.ravel(b)
             return jnp.sum(a * b) / (jnp.linalg.norm(a) * jnp.linalg.norm(b) + 1e-12)
+
+
 
 
         def corr(a, b):
@@ -4007,11 +5072,15 @@ class IQLJAX:
             return jnp.sum(aa * bb) / (jnp.linalg.norm(aa) * jnp.linalg.norm(bb) + 1e-12)
 
 
+
+
         def knn_conditional(states, values):
             diff = states[:, None, :] - states[None, :, :]
             dist2 = jnp.mean(diff ** 2, axis=-1) + jnp.eye(states.shape[0]) * 1e9
             _, idx = jax.lax.top_k(-dist2, knn_k)
             return jnp.mean(values[idx], axis=1)
+
+
 
 
         def local_sigma2(states):
@@ -4027,10 +5096,14 @@ class IQLJAX:
             target = jnp.minimum(kernel_target_neff, float(max(n - 1, 1)))
 
 
+
+
             def neff(s2):
                 w = jnp.exp(-0.5 * dist2 / jnp.maximum(s2, 1e-12)) * off
                 ws = jnp.sum(w, axis=1) + 1e-12
                 return jnp.mean((ws ** 2) / (jnp.sum(w ** 2, axis=1) + 1e-12))
+
+
 
 
             def body(_, bounds):
@@ -4040,9 +5113,13 @@ class IQLJAX:
                 return (jnp.where(e < target, m, l), jnp.where(e < target, h, m))
 
 
+
+
             lo2, hi2 = jax.lax.fori_loop(0, kernel_search_iters, body, (lo, hi))
             s2 = jnp.sqrt(jnp.maximum(lo2 * hi2, 1e-24))
             return s2, neff(s2)
+
+
 
 
         def kernel_weights(states, sigma2):
@@ -4052,10 +5129,14 @@ class IQLJAX:
             return w * (1.0 - jnp.eye(states.shape[0], dtype=w.dtype))
 
 
+
+
         def kernel_conditional(states, values, sigma2):
             w = kernel_weights(states, sigma2)
             ws = jnp.sum(w, axis=1) + 1e-12
             return jnp.sum(w * values[None, :], axis=1) / ws
+
+
 
 
         def kernel_moment_energy(states, score, sigma2):
@@ -4064,11 +5145,15 @@ class IQLJAX:
             return jnp.sum(pair) / (jnp.sum(w) + 1e-12)
 
 
+
+
         def crossfit_energy(states, score, sigma2):
             n = states.shape[0]
             split = n // 2
             sa, sb = states[:split], states[split:]
             ma, mb = score[:split], score[split:]
+
+
 
 
             def cross_cond(query, ref, values):
@@ -4079,9 +5164,13 @@ class IQLJAX:
                 return jnp.sum(w * values[None, :], axis=1) / ws
 
 
+
+
             ga = cross_cond(sb, sa, ma)
             gb = cross_cond(sa, sb, mb)
             return 0.5 * (jnp.mean(ga * mb) + jnp.mean(gb * ma))
+
+
 
 
         def conditioned_crossfit_energy(states, score, weight, sigma2):
@@ -4093,12 +5182,16 @@ class IQLJAX:
             wa, wb = weight[:split], weight[split:]
 
 
+
+
             def cross_cond(query, ref, values):
                 diff = query[:, None, :] - ref[None, :, :]
                 d2 = jnp.mean(diff ** 2, axis=-1)
                 w = jnp.exp(-0.5 * d2 / jnp.maximum(sigma2, 1e-12))
                 ws = jnp.sum(w, axis=1) + 1e-12
                 return jnp.sum(w * values[None, :], axis=1) / ws
+
+
 
 
             ga = cross_cond(sb, sa, ma)
@@ -4112,10 +5205,14 @@ class IQLJAX:
             return 0.5 * (jnp.mean(da * yb) + jnp.mean(db * ya))
 
 
+
+
         def empirical_expectile(q_values):
             """Vectorized exact empirical expectile by monotone bisection over actions."""
             lo = jnp.min(q_values, axis=1)
             hi = jnp.max(q_values, axis=1)
+
+
 
 
             def body(_, bounds):
@@ -4128,6 +5225,8 @@ class IQLJAX:
                 return jnp.where(foc > 0.0, mid, l), jnp.where(foc > 0.0, h, mid)
 
 
+
+
             lo, hi = jax.lax.fori_loop(
                 0,
                 action_ref_bisection_iters,
@@ -4137,6 +5236,8 @@ class IQLJAX:
             return 0.5 * (lo + hi)
 
 
+
+
         @jax.jit
         def calibration_step(state: IQLState, probe_batch: TensorBatch, action_ref_batch: TensorBatch):
             s = probe_batch["observations"]
@@ -4144,6 +5245,8 @@ class IQLJAX:
             q_target = jnp.min(q_apply({"params": state.q_target_params}, s, a), axis=0)
             v = v_apply({"params": state.v_params}, s)
             base_amp = injection_fraction * jnp.maximum(rms(q_target), 1.0)
+
+
 
 
             key = jax.random.fold_in(jax.random.PRNGKey(diag_seed + 404), state.total_it + 1)
@@ -4156,10 +5259,14 @@ class IQLJAX:
             sigma2, achieved_neff = local_sigma2(s)
 
 
+
+
             def score_weight(vv):
                 u = jax.lax.stop_gradient(q_target) - vv
                 w = jnp.abs(iql_tau - (u < 0.0).astype(jnp.float32))
                 return w * u, w
+
+
 
 
             base_score, base_weight = score_weight(v)
@@ -4168,6 +5275,8 @@ class IQLJAX:
             base_conditioned_crossfit = conditioned_crossfit_energy(
                 s, base_score, base_weight, sigma2
             ) if enable_conditioned_residual else jnp.asarray(jnp.nan, dtype=jnp.float32)
+
+
 
 
             # V7 local-action empirical expectile reference.  Neighbor actions are selected
@@ -4197,11 +5306,15 @@ class IQLJAX:
             d_q_action_ref = v_ref_online - v_ref_target
 
 
+
+
             u_action = q_target_bank - v[:, None]
             w_action = jnp.abs(iql_tau - (u_action < 0.0).astype(jnp.float32))
             g_action = jnp.mean(w_action * u_action, axis=1)
             k_action = jnp.maximum(jnp.mean(w_action, axis=1), kappa_floor)
             d_v_action_linear = -g_action / k_action
+
+
 
 
             # Compare the existing kNN/local-kernel displacement estimates to the same-state
@@ -4214,6 +5327,8 @@ class IQLJAX:
             d_local_base = -g_local_base / k_local_base
 
 
+
+
             # Critic-shift proxy on the same probe: local smooth C_Q/kappa versus the direct
             # online-vs-target empirical expectile shift under the local action bank.
             q_obs_target = jnp.min(q_apply({"params": state.q_target_params}, s, a), axis=0)
@@ -4223,9 +5338,13 @@ class IQLJAX:
             d_q_local = qnum_local / k_local_base
 
 
+
+
             def recover(direction, amp):
                 sp, wp = score_weight(v + amp * direction)
                 sm, wm = score_weight(v - amp * direction)
+
+
 
 
                 gkp = knn_conditional(s, sp); gkm = knn_conditional(s, sm)
@@ -4234,10 +5353,14 @@ class IQLJAX:
                            - (-gkm / jnp.maximum(kkm, kappa_floor))) / (2.0 * amp)
 
 
+
+
                 glp = kernel_conditional(s, sp, sigma2); glm = kernel_conditional(s, sm, sigma2)
                 klp = kernel_conditional(s, wp, sigma2); klm = kernel_conditional(s, wm, sigma2)
                 rec_local = ((-glp / jnp.maximum(klp, kappa_floor))
                              - (-glm / jnp.maximum(klm, kappa_floor))) / (2.0 * amp)
+
+
 
 
                 mmr_sym = 0.5 * (
@@ -4248,12 +5371,16 @@ class IQLJAX:
                 cf_delta = cf_sym - base_crossfit
 
 
+
+
                 if enable_conditioned_residual:
                     cfp = conditioned_crossfit_energy(s, sp, wp, sigma2)
                     cfm = conditioned_crossfit_energy(s, sm, wm, sigma2)
                     cond_delta = 0.5 * (cfp + cfm) - base_conditioned_crossfit
                 else:
                     cond_delta = jnp.asarray(jnp.nan, dtype=jnp.float32)
+
+
 
 
                 base_kappa_sq = jnp.maximum(jnp.mean(base_weight), kappa_floor) ** 2
@@ -4271,12 +5398,16 @@ class IQLJAX:
                 )
 
 
+
+
             amp_small = base_amp * small_mult
             amp_large = base_amp * large_mult
             smooth_small = recover(smooth, amp_small)
             smooth_base = recover(smooth, base_amp)
             smooth_large = recover(smooth, amp_large)
             random_base = recover(random_dir, base_amp)
+
+
 
 
             action_ref_radius = jnp.sqrt(jnp.maximum(-neg_dist_ref[:, -1], 0.0))
@@ -4289,6 +5420,8 @@ class IQLJAX:
                 "diag_rescal/base_kernel_local_moment_energy": base_mmr,
                 "diag_rescal/base_kernel_local_crossfit_energy": base_crossfit,
                 "diag_rescal/base_conditioned_crossfit_energy": base_conditioned_crossfit,
+
+
 
 
                 # V7 local-action empirical expectile reference.
@@ -4321,6 +5454,8 @@ class IQLJAX:
             }
 
 
+
+
             # Backward-compatible V5 aliases use the base amplitude.
             names = ("knn_cos", "knn_gain", "knn_relerr", "knn_corr",
                      "kernel_local_cos", "kernel_local_gain", "kernel_local_relerr", "kernel_local_corr",
@@ -4333,10 +5468,14 @@ class IQLJAX:
                 out[f"diag_rescal/random_{name}"] = value
 
 
+
+
             for tag, stats in (("small", smooth_small), ("base", smooth_base), ("large", smooth_large)):
                 for name, value in zip(names, stats):
                     out[f"diag_rescal/smooth_{name}_{tag}"] = value
             return out
+
+
 
 
         return calibration_step
@@ -4344,8 +5483,14 @@ class IQLJAX:
 
 
 
+
+
+
+
     def _build_closed_loop_diagnostic_step(self):
         """Bellman-loop impulse and persistent-forcing diagnostics.
+
+
 
 
         V5 established that one-shot impulse gains Phi^(H) can remain below one even when
@@ -4376,8 +5521,12 @@ class IQLJAX:
         diag_seed = self.diag_seed
 
 
+
+
         def rms(x):
             return jnp.sqrt(jnp.mean(jnp.asarray(x) ** 2) + 1e-12)
+
+
 
 
         def cosine(a, b):
@@ -4385,14 +5534,20 @@ class IQLJAX:
             return jnp.sum(a * b) / (jnp.linalg.norm(a) * jnp.linalg.norm(b) + 1e-12)
 
 
+
+
         def normdir(h):
             return h / jnp.maximum(rms(h), 1e-8)
+
+
 
 
         def sequence_coherence(seq, n):
             x = seq[:n]
             denom = jnp.sum(jax.vmap(rms)(x)) + 1e-12
             return rms(jnp.sum(x, axis=0)) / denom
+
+
 
 
         def consecutive_cosine(seq, n):
@@ -4405,12 +5560,16 @@ class IQLJAX:
             return jnp.mean(dot / den)
 
 
+
+
         def pair_cosine_mean(a, b, n):
             aa = a[:n]
             bb = b[:n]
             dot = jnp.sum(aa * bb, axis=1)
             den = jnp.linalg.norm(aa, axis=1) * jnp.linalg.norm(bb, axis=1) + 1e-12
             return jnp.mean(dot / den)
+
+
 
 
         @jax.jit
@@ -4426,6 +5585,8 @@ class IQLJAX:
             delta = fd_epsilon * (jnp.maximum(rms(first_target), 1.0) if fd_relative_scale else 1.0)
 
 
+
+
             probe_obs = probe_batch["observations"]
             probe_act = probe_batch["actions"]
             probe_rew = jnp.squeeze(probe_batch["rewards"], axis=-1)
@@ -4433,10 +5594,14 @@ class IQLJAX:
             probe_done = jnp.squeeze(probe_batch["dones"], axis=-1)
 
 
+
+
             carry0 = (
                 old_state.q_params, old_state.q_target_params, old_state.q_opt_state,
                 old_state.v_params, old_state.v_opt_state,
             )
+
+
 
 
             def update_once(carry, obs, act, rew, nxt, done, extra_target, tau_value,
@@ -4449,6 +5614,8 @@ class IQLJAX:
                 done = jnp.squeeze(done, axis=-1)
 
 
+
+
                 backup_v_params = (
                     v_params if fixed_backup_v_params is None else fixed_backup_v_params
                 )
@@ -4458,6 +5625,8 @@ class IQLJAX:
                 target_q_for_v = jax.lax.stop_gradient(jnp.min(target_qs, axis=0))
 
 
+
+
                 def v_loss_fn(p):
                     vv = v_apply({"params": p}, obs)
                     u = target_q_for_v - vv
@@ -4465,14 +5634,20 @@ class IQLJAX:
                     return jnp.mean(w * u ** 2)
 
 
+
+
                 v_grads = jax.grad(v_loss_fn)(v_params)
                 v_updates, v_opt_state_new = v_tx.update(v_grads, v_opt_state, v_params)
                 v_params_new = optax.apply_updates(v_params, v_updates)
 
 
+
+
                 def q_loss_fn(p):
                     qq = q_apply({"params": p}, obs, act)
                     return jnp.mean((qq - jax.lax.stop_gradient(q_backup)[None, :]) ** 2)
+
+
 
 
                 q_grads = jax.grad(q_loss_fn)(q_params)
@@ -4481,6 +5656,8 @@ class IQLJAX:
                 q_target_params_new = optax.incremental_update(q_params_new, q_target_params, tau_value)
                 new_carry = (q_params_new, q_target_params_new, q_opt_state_new, v_params_new, v_opt_state_new)
                 return new_carry
+
+
 
 
             def probe_metrics(carry):
@@ -4495,6 +5672,8 @@ class IQLJAX:
                 pbackup = probe_rew + (1.0 - probe_done) * discount * pnext_v
                 td = probe_online_mean - pbackup
                 return probe_online_min, lag, td, pbackup
+
+
 
 
             # Unperturbed baseline rollout: supplies a realistic direction at every step and
@@ -4518,6 +5697,8 @@ class IQLJAX:
                 )
 
 
+
+
             xs = (
                 batch_seq["observations"], batch_seq["actions"], batch_seq["rewards"],
                 batch_seq["next_observations"], batch_seq["dones"],
@@ -4527,6 +5708,8 @@ class IQLJAX:
                 td_dirs, lag_dirs, td_rms_seq, lag_rms_seq, target_rms_seq,
                 base_probe_q, base_probe_lag, base_probe_td, base_probe_backup,
             ) = baseline
+
+
 
 
             # V7 natural-innovation decomposition on one fixed probe.  The target-network
@@ -4544,6 +5727,8 @@ class IQLJAX:
             lag_innovation = (1.0 - target_tau) * probe_q_delta
             lag_pred = inherited_lag + lag_innovation
             lag_recurrence_resid = probe_lag_seq[1:] - lag_pred
+
+
 
 
             # V9 short-horizon target-network counterfactuals.  These are unperturbed
@@ -4568,12 +5753,15 @@ class IQLJAX:
                 )
 
 
+
+
             def rollout_target_tau(tau_value, freeze_backup_v=False):
                 # V12 pathway cuts are *input interventions*, not permanent parameter
                 # freezes: the V parameters and optimizer are still updated in every
                 # branch.  freeze_backup_v changes ONLY which V network builds Q y.
                 # tau=0 holds the target-Q input to the V loss at checkpoint values.
                 fixed_v = old_state.v_params if freeze_backup_v else None
+
 
                 def one(carry, xs_cf):
                     obs, act, rew, nxt, done = xs_cf
@@ -4586,6 +5774,8 @@ class IQLJAX:
                     ), None
                 final_carry, _ = jax.lax.scan(one, carry0, xs)
                 return cf_probe_metrics(final_carry)
+
+
 
 
             base_cf = cf_probe_metrics(baseline_final)
@@ -4610,6 +5800,7 @@ class IQLJAX:
                 )
                 fast_tau = very_fast_tau = jnp.asarray(jnp.nan, dtype=jnp.float32)
 
+
             # V12 2x2 pathway cut (same checkpoint, batches, learning rates, optimizer
             # state, probe). In the alpha=0 branch target Q never changes, so it is
             # exactly the target-Q -> V input cut. Reuse that V9 branch when present.
@@ -4625,9 +5816,13 @@ class IQLJAX:
                 )
 
 
+
+
             key = jax.random.fold_in(jax.random.PRNGKey(diag_seed + 808), old_state.total_it + 1)
             h_random = jax.random.rademacher(key, shape=first_target.shape, dtype=first_target.dtype)
             random_dirs = jnp.broadcast_to(normdir(h_random)[None, :], td_dirs.shape)
+
+
 
 
             def simulate(direction_seq, sign, persistent):
@@ -4640,6 +5835,8 @@ class IQLJAX:
                     return new_carry, (p_online, p_lag)
 
 
+
+
                 idxs = jnp.arange(steps, dtype=jnp.int32)
                 xs2 = (
                     idxs, batch_seq["observations"], batch_seq["actions"], batch_seq["rewards"],
@@ -4649,10 +5846,14 @@ class IQLJAX:
                 return outs
 
 
+
+
             def response(direction_seq, persistent=False):
                 plus_q, plus_lag = simulate(direction_seq, 1.0, persistent)
                 minus_q, minus_lag = simulate(direction_seq, -1.0, persistent)
                 return (plus_q - minus_q) / (2.0 * delta), (plus_lag - minus_lag) / (2.0 * delta)
+
+
 
 
             def actual_source_alpha(source_rms_seq):
@@ -4665,6 +5866,8 @@ class IQLJAX:
                 return jnp.minimum(1.0, jnp.min(alpha_each))
 
 
+
+
             def simulate_actual(source_seq, sign, alpha):
                 def one(carry, xs2):
                     obs, act, rew, nxt, done, source = xs2
@@ -4674,12 +5877,16 @@ class IQLJAX:
                     return new_carry, (p_online, p_lag)
 
 
+
+
                 xs2 = (
                     batch_seq["observations"], batch_seq["actions"], batch_seq["rewards"],
                     batch_seq["next_observations"], batch_seq["dones"], source_seq,
                 )
                 _, outs = jax.lax.scan(one, carry0, xs2)
                 return outs
+
+
 
 
             def actual_response(source_seq, source_rms_seq):
@@ -4693,9 +5900,13 @@ class IQLJAX:
                 )
 
 
+
+
             rq, rlag = response(random_dirs, persistent=False)
             tq, tlag = response(td_dirs, persistent=False)
             lq, llag = response(lag_dirs, persistent=False)
+
+
 
 
             if enable_forced:
@@ -4704,6 +5915,8 @@ class IQLJAX:
             else:
                 ftq = jnp.full_like(tq, jnp.nan); ftlag = jnp.full_like(tlag, jnp.nan)
                 flq = jnp.full_like(lq, jnp.nan); fllag = jnp.full_like(llag, jnp.nan)
+
+
 
 
             td_source_seq = td_dirs * td_rms_seq[:, None]
@@ -4717,9 +5930,13 @@ class IQLJAX:
                 td_actual_alpha = lag_actual_alpha = jnp.asarray(jnp.nan, dtype=jnp.float32)
 
 
+
+
             i1 = 0
             ishort = short_steps - 1
             ilong = long_steps - 1
+
+
 
 
             def pack_impulse(prefix, qresp, lagresp, source_rms):
@@ -4740,6 +5957,8 @@ class IQLJAX:
                     f"diag_loop/{prefix}_lag_gain_h{short_steps}": rms(lagresp[ishort]),
                     f"diag_loop/{prefix}_lag_gain_h{long_steps}": rms(lagresp[ilong]),
                 }
+
+
 
 
             def pack_forced(prefix, qresp, lagresp, impulse_qresp, source_rms_seq, baseline_error):
@@ -4764,6 +5983,8 @@ class IQLJAX:
                     f"diag_forced/{prefix}_natural_source_rms_max_h{long_steps}": jnp.max(source_rms_seq[:long_steps]),
                     f"diag_forced/{prefix}_natural_source_rms_h{long_steps}_over_h1": source_rms_seq[ilong] / (source_rms_seq[i1] + 1e-12),
                 }
+
+
 
 
             def pack_actual_forced(prefix, qresp, lagresp, unit_qresp, source_rms_seq, alpha, baseline_error):
@@ -4817,10 +6038,14 @@ class IQLJAX:
                 }
 
 
+
+
             out = {"diag_loop/fd_delta": delta}
             out.update(pack_impulse("random", rq, rlag, rms(h_random)))
             out.update(pack_impulse("td", tq, tlag, td_rms_seq[i1]))
             out.update(pack_impulse("lag", lq, llag, lag_rms_seq[i1]))
+
+
 
 
             # Natural unperturbed error trajectory on one *fixed probe*, so temporal
@@ -4844,6 +6069,8 @@ class IQLJAX:
                 f"diag_loopbase/probe_td_coherence_h{long_steps}": sequence_coherence(base_probe_td, long_steps),
                 f"diag_loopbase/probe_td_consecutive_cos_h{short_steps}": consecutive_cosine(base_probe_td, short_steps),
                 f"diag_loopbase/probe_td_consecutive_cos_h{long_steps}": consecutive_cosine(base_probe_td, long_steps),
+
+
 
 
                 # V7 natural innovation decomposition of target-network lag.
@@ -4904,6 +6131,8 @@ class IQLJAX:
             })
 
 
+
+
             if enable_target_tau_counterfactual:
                 def add_cf(tag, vals, tau_value):
                     (qv, vv, lagv, tdv, bv, q_common_vec, lag_common_vec,
@@ -4958,6 +6187,8 @@ class IQLJAX:
                     })
 
 
+
+
                 out.update({
                     f"diag_target_cf/base_tau": jnp.asarray(target_tau, dtype=jnp.float32),
                     f"diag_target_cf/base_q_common_rms_h{long_steps}": base_cf[0],
@@ -4971,6 +6202,7 @@ class IQLJAX:
                 add_cf("very_fast", very_fast_cf, very_fast_tau)
                 add_cf("hard", hard_cf, jnp.asarray(1.0, dtype=jnp.float32))
 
+
             if enable_pathway_counterfactual:
                 # The alpha=0 rollout is the cut of the target-Q -> V edge.
                 # Distinct from a frozen-V-parameter control, which would disable
@@ -4983,11 +6215,13 @@ class IQLJAX:
                     "cut_both": cut_both_cf,
                 }
 
+
                 # Original-scale and centered-scale comparisons. A common Q offset
                 # can dominate RMS; separating the two avoids treating a global
                 # shift as evidence of changing state-dependent dynamics.
                 def center(x):
                     return x - jnp.mean(x)
+
 
                 def rms0(x):
                     # Zero-preserving, scale-stable norm for small branch differences.
@@ -4997,6 +6231,7 @@ class IQLJAX:
                     scale = jnp.maximum(m, jnp.asarray(1e-30, dtype=x.dtype))
                     return jnp.where(m == 0.0, jnp.asarray(0.0, dtype=x.dtype),
                                      scale * jnp.sqrt(jnp.mean(jnp.square(x / scale))))
+
 
                 def compare_branch(tag, vals):
                     bq = base_cf[5]
@@ -5048,8 +6283,10 @@ class IQLJAX:
                         ),
                     })
 
+
                 for branch_tag, branch_vals in branch_cfs.items():
                     compare_branch(branch_tag, branch_vals)
+
 
                 # Exact 2x2 factorial contrast of two *input cuts* in probe
                 # function space, not an identified causal mediator decomposition.
@@ -5098,6 +6335,7 @@ class IQLJAX:
                     ) / (rms0(bq) + 1e-12),
                 })
 
+
             if enable_forced:
                 out.update(pack_forced("td", ftq, ftlag, tq, td_rms_seq, base_probe_td))
                 out.update(pack_forced("lag", flq, fllag, lq, lag_rms_seq, base_probe_lag))
@@ -5111,7 +6349,14 @@ class IQLJAX:
             return out
 
 
+
+
         return loop_step
+
+
+
+
+
 
 
 
@@ -5120,11 +6365,13 @@ class IQLJAX:
     def _build_extended_pathway_diagnostic_step(self):
         """V13: sparse multi-horizon feedback-edge controls (diagnostic only).
 
+
         The same checkpoint, optimizer states and minibatch sequence are used for
         all three branches. Target-network Polyak updates remain NORMAL in every
         branch. cut_target_q_to_v replaces only the target-Q INPUT of V fitting
         with checkpoint target Q. cut_v_to_backup replaces only the V INPUT to Q
         Bellman targets with checkpoint V. Neither freezes the V optimizer.
+
 
         Probe records are taken at H=20, H=50, and H=full sequence. This extends
         V12's 20-step susceptibility measurement; even H=100 is NOT a long-term
@@ -5147,6 +6394,7 @@ class IQLJAX:
         amplitude_low = self.diag_local_amplitude_low
         amplitude_high = self.diag_local_amplitude_high
 
+
         def srms(x):
             x = jnp.asarray(x, dtype=jnp.float32)
             maxabs = jnp.max(jnp.abs(x))
@@ -5154,11 +6402,13 @@ class IQLJAX:
             return jnp.where(maxabs == 0., 0.,
                              scale * jnp.sqrt(jnp.mean(jnp.square(x / scale))))
 
+
         def proj(delta, ref):
             scale = jnp.maximum(jnp.maximum(jnp.max(jnp.abs(delta)),
                                             jnp.max(jnp.abs(ref))), 1e-30)
             d, r = delta / scale, ref / scale
             return jnp.mean(d * r) / (jnp.mean(r * r) + 1e-30)
+
 
         @jax.jit
         def diagnostic(old_state: IQLState, batch_seq: TensorBatch, probe_batch: TensorBatch):
@@ -5174,6 +6424,7 @@ class IQLJAX:
             carry0 = (old_state.q_params, old_state.q_target_params,
                       old_state.q_opt_state, old_state.v_params, old_state.v_opt_state)
 
+
             def metrics(carry):
                 qp, qtp, _, vp, _ = carry
                 online = q_apply({'params': qp}, probe_obs, probe_act)
@@ -5185,6 +6436,7 @@ class IQLJAX:
                 backup = probe_reward + (1.0 - probe_done) * discount * next_value
                 return (common_q, value, backup, common_lag,
                         jnp.mean(target, axis=0))
+
 
             initial = metrics(carry0)
             # A known, state-independent +1 Bellman-target direction on each
@@ -5200,6 +6452,7 @@ class IQLJAX:
             # once; each matched sustained step receives delta / H. The input
             # budget at H20/H50 is only 20/H or 50/H of delta, respectively.
             budget_delta_step = delta / jnp.asarray(steps, dtype=jnp.float32)
+
 
             if enable_forcing_controls:
                 # Frozen-checkpoint TD residual as a *shape proxy*, NOT a true
@@ -5226,6 +6479,7 @@ class IQLJAX:
                     batch_seq['rewards'], batch_seq['next_observations'],
                     batch_seq['dones'])
                 shape_rms_per_step = jax.vmap(srms)(frozen_shapes)
+
 
             def rollout(cut_q_input: bool, cut_backup_input: bool,
                         injection: str = 'none', sign: float = 1.0,
@@ -5255,18 +6509,22 @@ class IQLJAX:
                         # per-batch RMS 1 (unless the frozen TD is degenerate).
                         backup = backup + sign * budget_delta_step * frozen_shapes[index]
 
+
                     def v_loss(p):
                         u = target_q - v_apply({'params': p}, obs)
                         weights = jnp.abs(expectile - (u < 0.).astype(jnp.float32))
                         return jnp.mean(weights * jnp.square(u))
 
+
                     vg = jax.grad(v_loss)(vp)
                     v_update, new_vo = v_tx.update(vg, vo, vp)
                     new_vp = optax.apply_updates(vp, v_update)
 
+
                     def q_loss(p):
                         qs = q_apply({'params': p}, obs, act)
                         return jnp.mean(jnp.square(qs - jax.lax.stop_gradient(backup)[None, :]))
+
 
                     qg = jax.grad(q_loss)(qp)
                     q_update, new_qo = q_tx.update(qg, qo, qp)
@@ -5280,12 +6538,14 @@ class IQLJAX:
                                           lambda: jax.tree_util.tree_map(jnp.zeros_like, initial))
                     return new_carry, record
 
+
                 idx = jnp.arange(steps, dtype=jnp.int32)
                 xs = (idx, batch_seq['observations'], batch_seq['actions'],
                       batch_seq['rewards'], batch_seq['next_observations'],
                       batch_seq['dones'])
                 _, recordings = jax.lax.scan(one, carry0, xs)
                 return recordings
+
 
             base = rollout(False, False)
             cut_q = rollout(True, False)
@@ -5320,6 +6580,7 @@ class IQLJAX:
                 'diag_multihorizon/normal_polyak_all_branches': jnp.asarray(1.0),
             }
 
+
             # Use distinct static suffixes so historic V12 logs remain untouched.
             for idx, suffix in ((19, 'h20'), (49, 'h50'), (steps - 1, 'hfull')):
                 bq, bv, by, blag, btarg = (x[idx] for x in base)
@@ -5347,6 +6608,7 @@ class IQLJAX:
                     out[f'diag_multihorizon/{name}_lag_rms_{suffix}'] = srms(clag)
                     out[f'diag_multihorizon/{name}_q_finite_fraction_{suffix}'] = jnp.mean(
                         jnp.isfinite(cq).astype(jnp.float32))
+
 
             # Growth of a *branch difference*, not absolute Q growth. Separate
             # numerator/denominator makes a near-zero 20-step difference visible.
@@ -5478,6 +6740,7 @@ class IQLJAX:
                     out[pfx + 'constant_amplitude_linearity_signal_' + suffix] = (
                         srms(odd_full) / jnp.maximum(srms(bq), 1e-30))
 
+
             if enable_local_ladder:
                 # Finite-amplitude, *local* consistency; not a certified
                 # Jacobian. All scales share the same injection direction and
@@ -5489,6 +6752,7 @@ class IQLJAX:
                 out[p + 'high_multiplier'] = jnp.asarray(amplitude_high, jnp.float32)
                 out[p + 'full_horizon'] = jnp.asarray(steps, jnp.float32)
 
+
                 def stable_cos(a, b):
                     scale = jnp.maximum(jnp.maximum(jnp.max(jnp.abs(a)),
                                                     jnp.max(jnp.abs(b))), 1e-30)
@@ -5496,6 +6760,7 @@ class IQLJAX:
                     return (jnp.mean(aa * bb) /
                             jnp.maximum(jnp.sqrt(jnp.mean(aa * aa) * jnp.mean(bb * bb)),
                                         1e-30))
+
 
                 for idx, suffix in ((19, 'h20'), (49, 'h50'), (steps - 1, 'hfull')):
                     bq, bv, by, _, _ = (x[idx] for x in base)
@@ -5560,11 +6825,16 @@ class IQLJAX:
                         out[p + 'high_q_32eps_detectable_fraction_' + suffix])
             return out
 
+
         return diagnostic
+
+
 
 
     def _build_horizon_diagnostic_step(self):
         """Finite-horizon critic-fitting response B^(H) under repeated virtual Adam fits.
+
+
 
 
         The one-step B diagnostic and the ridge/full-fit response were empirically very
@@ -5584,8 +6854,12 @@ class IQLJAX:
         diag_seed = self.diag_seed
 
 
+
+
         def rms(x):
             return jnp.sqrt(jnp.mean(jnp.asarray(x) ** 2) + 1e-12)
+
+
 
 
         def cosine(a, b):
@@ -5594,8 +6868,12 @@ class IQLJAX:
             return jnp.sum(a * b) / (jnp.linalg.norm(a) * jnp.linalg.norm(b) + 1e-12)
 
 
+
+
         def normalize(h):
             return h / jnp.maximum(rms(h), 1e-8)
+
+
 
 
         @jax.jit
@@ -5609,10 +6887,14 @@ class IQLJAX:
             probe_actions = probe_batch["actions"]
 
 
+
+
             next_v = v_apply({"params": old_state.v_params}, next_observations)
             target = rewards + (1.0 - dones) * discount * next_v
             target_rms = rms(target)
             delta = fd_epsilon * (jnp.maximum(target_rms, 1.0) if fd_relative_scale else 1.0)
+
+
 
 
             q_online_all = q_apply({"params": old_state.q_params}, observations, actions)
@@ -5623,7 +6905,11 @@ class IQLJAX:
             h_random = jax.random.rademacher(key, shape=target.shape, dtype=target.dtype)
 
 
+
+
             directions = (normalize(h_random), normalize(h_td), normalize(h_lag))
+
+
 
 
             def virtual_probe_output(target_arg, n_steps):
@@ -5631,9 +6917,13 @@ class IQLJAX:
                     params, opt_state = carry
 
 
+
+
                     def loss_fn(p):
                         qs = q_apply({"params": p}, observations, actions)
                         return jnp.mean((qs - target_arg[None, :]) ** 2)
+
+
 
 
                     grads = jax.grad(loss_fn)(params)
@@ -5642,16 +6932,22 @@ class IQLJAX:
                     return params_new, opt_state_new
 
 
+
+
                 params_h, _ = jax.lax.fori_loop(
                     0, n_steps, one_step, (old_state.q_params, old_state.q_opt_state)
                 )
                 return q_apply({"params": params_h}, probe_observations, probe_actions)
 
 
+
+
             def response(h_unit, n_steps):
                 plus = virtual_probe_output(target + delta * h_unit, n_steps)
                 minus = virtual_probe_output(target - delta * h_unit, n_steps)
                 return (plus - minus) / (2.0 * delta)
+
+
 
 
             def three_horizons(h_unit):
@@ -5661,9 +6957,13 @@ class IQLJAX:
                 return b1, bs, bl
 
 
+
+
             r1, rs, rl = three_horizons(directions[0])
             t1, ts, tl = three_horizons(directions[1])
             l1, ls, ll = three_horizons(directions[2])
+
+
 
 
             return {
@@ -5704,11 +7004,17 @@ class IQLJAX:
             }
 
 
+
+
         return horizon_step
+
+
 
 
     def _build_ridge_diagnostic_step(self):
         """Local fit-to-convergence B approximation using matrix-free CG.
+
+
 
 
         For W=I this estimates
@@ -5730,14 +7036,20 @@ class IQLJAX:
         fd_relative_scale = self.diag_fd_relative_scale
 
 
+
+
         def rms(x):
             return jnp.sqrt(jnp.mean(jnp.asarray(x) ** 2) + 1e-12)
+
+
 
 
         def cosine(a, b):
             a = jnp.ravel(a)
             b = jnp.ravel(b)
             return jnp.sum(a * b) / (jnp.linalg.norm(a) * jnp.linalg.norm(b) + 1e-12)
+
+
 
 
         @jax.jit
@@ -5751,8 +7063,12 @@ class IQLJAX:
             probe_actions = probe_batch["actions"]
 
 
+
+
             next_v = v_apply({"params": old_state.v_params}, next_observations)
             target = rewards + (1.0 - dones) * discount * next_v
+
+
 
 
             key = jax.random.fold_in(jax.random.PRNGKey(diag_seed), old_state.total_it + 1)
@@ -5760,7 +7076,11 @@ class IQLJAX:
             h_unit = h / jnp.maximum(rms(h), 1e-8)
 
 
+
+
             flat_params, unravel = ravel_pytree(old_state.q_params)
+
+
 
 
             def train_output_flat(flat):
@@ -5768,9 +7088,13 @@ class IQLJAX:
                 return q_apply({"params": params}, observations, actions).reshape(-1)
 
 
+
+
             def probe_output_flat(flat):
                 params = unravel(flat)
                 return q_apply({"params": params}, probe_observations, probe_actions).reshape(-1)
+
+
 
 
             train_value, pullback = jax.vjp(train_output_flat, flat_params)
@@ -5779,9 +7103,13 @@ class IQLJAX:
             rhs = pullback(h_rep)[0] / m
 
 
+
+
             def matvec(vec):
                 _, jv = jax.jvp(train_output_flat, (flat_params,), (vec,))
                 return pullback(jv)[0] / m + ridge_lambda * vec
+
+
 
 
             solution, _ = jax_cg(
@@ -5795,6 +7123,8 @@ class IQLJAX:
             relative_linear_residual = jnp.linalg.norm(matvec(solution) - rhs) / (jnp.linalg.norm(rhs) + 1e-12)
 
 
+
+
             # Same random direction through the actual one-step Adam update for comparison.
             def actual_probe_output(target_arg):
                 def q_loss_only(q_params):
@@ -5802,10 +7132,14 @@ class IQLJAX:
                     return jnp.mean((qs_local - target_arg[None, :]) ** 2)
 
 
+
+
                 q_grads = jax.grad(q_loss_only)(old_state.q_params)
                 q_updates, _ = q_tx.update(q_grads, old_state.q_opt_state, old_state.q_params)
                 q_params_plus = optax.apply_updates(old_state.q_params, q_updates)
                 return q_apply({"params": q_params_plus}, probe_observations, probe_actions)
+
+
 
 
             target_rms = rms(target)
@@ -5815,6 +7149,8 @@ class IQLJAX:
                 - actual_probe_output(target - delta * h_unit)
             ) / (2.0 * delta)
             _, adam_jvp = jax.jvp(actual_probe_output, (target,), (h_unit,))
+
+
 
 
             return {
@@ -5828,7 +7164,11 @@ class IQLJAX:
             }
 
 
+
+
         return ridge_step
+
+
 
 
     def train(
@@ -5850,10 +7190,14 @@ class IQLJAX:
         self.state, log_dict = self._train_step(self.state, batch)
 
 
+
+
         if self.enable_propagation_diagnostics and diag_batch is not None:
             if run_divergence_diagnostic:
                 div_log = self._value_divergence_diagnostic_step(old_state, self.state, diag_batch)
                 log_dict.update(div_log)
+
+
 
 
             if run_propagation_diagnostic:
@@ -5866,10 +7210,14 @@ class IQLJAX:
                 log_dict.update(diag_log)
 
 
+
+
                 if run_residual_calibration:
                     ref_batch = residual_reference_batch if residual_reference_batch is not None else diag_batch
                     rescal_log = self._residual_calibration_step(old_state, diag_batch, ref_batch)
                     log_dict.update(rescal_log)
+
+
 
 
                 if run_horizon_diagnostic:
@@ -5877,9 +7225,13 @@ class IQLJAX:
                     log_dict.update(horizon_log)
 
 
+
+
                 if run_loop_diagnostic and loop_batch_sequence is not None:
                     loop_log = self._closed_loop_diagnostic_step(old_state, loop_batch_sequence, diag_batch)
                     log_dict.update(loop_log)
+
+
 
 
                 if run_extended_diagnostic and extended_batch_sequence is not None:
@@ -5905,12 +7257,17 @@ class IQLJAX:
                             jnp.abs(r13 - r12) / jnp.maximum(jnp.abs(r12), 1e-30)
                         )
 
+
                 if run_ridge_diagnostic:
                     ridge_log = self._ridge_diagnostic_step(old_state, batch, diag_batch)
                     log_dict.update(ridge_log)
 
 
+
+
         return {key: float(jax.device_get(value)) for key, value in log_dict.items()}
+
+
 
 
     def actor_act(self, actor_params: Any, state: np.ndarray) -> np.ndarray:
@@ -5919,6 +7276,8 @@ class IQLJAX:
         action = policy_out if self.iql_deterministic else policy_out[0]
         action = jnp.clip(self.max_action * action, -self.max_action, self.max_action)
         return np.asarray(jax.device_get(action))[0]
+
+
 
 
     def eval_actor(
@@ -5949,6 +7308,8 @@ class IQLJAX:
         )
 
 
+
+
     def _build_actor_refit_step(self):
         q_apply = self.q_def.apply
         v_apply = self.v_def.apply
@@ -5957,6 +7318,8 @@ class IQLJAX:
         iql_deterministic = self.iql_deterministic
         use_dropout = self.actor_dropout is not None
         actor_apply_fn = self.actor_def.apply
+
+
 
 
         def apply_actor(actor_params: Any, observations: jnp.ndarray, training: bool, rng: Optional[jnp.ndarray] = None):
@@ -5970,10 +7333,14 @@ class IQLJAX:
             return actor_apply_fn({"params": actor_params}, observations, training=training)
 
 
+
+
         @jax.jit
         def actor_refit_step(actor_state: ActorState, iql_state: IQLState, batch: TensorBatch):
             observations = batch["observations"]
             actions = batch["actions"]
+
+
 
 
             qs = q_apply({"params": iql_state.q_target_params}, observations, actions)
@@ -5983,7 +7350,11 @@ class IQLJAX:
             exp_adv = jnp.minimum(jnp.exp(beta * jax.lax.stop_gradient(adv)), EXP_ADV_MAX)
 
 
+
+
             actor_key, dropout_key = jax.random.split(actor_state.key)
+
+
 
 
             def actor_loss_fn(actor_params):
@@ -6001,6 +7372,8 @@ class IQLJAX:
                     log_std_mean = jnp.mean(log_std)
                 actor_loss = jnp.mean(jax.lax.stop_gradient(exp_adv) * bc_losses)
                 return actor_loss, (bc_losses, policy_mean, log_std_mean)
+
+
 
 
             (actor_loss, (bc_losses, policy_mean, log_std_mean)), actor_grads = jax.value_and_grad(
@@ -6033,7 +7406,11 @@ class IQLJAX:
             return new_actor_state, log_dict
 
 
+
+
         return actor_refit_step
+
+
 
 
     def make_initial_actor_state(self) -> ActorState:
@@ -6045,6 +7422,8 @@ class IQLJAX:
             ),
             self.device,
         )
+
+
 
 
     def fit_actor(
@@ -6091,11 +7470,15 @@ class IQLJAX:
             return actor_state, refit_log
 
 
+
+
         best_eval_metric_mean = -np.inf
         save_dir_path = Path(save_dir) if save_dir is not None else None
         if save_dir_path is not None:
             save_dir_path.mkdir(parents=True, exist_ok=True)
         log_extra = {} if log_extra is None else dict(log_extra)
+
+
 
 
         def save_refit_snapshot(
@@ -6106,6 +7489,8 @@ class IQLJAX:
         ) -> None:
             if save_dir_path is None:
                 return
+
+
 
 
             logs_payload = {
@@ -6120,8 +7505,12 @@ class IQLJAX:
             save_logs_npz([logs_payload], str(logs_path))
 
 
+
+
             if is_best:
                 save_pickle(save_dir_path / "best_actor.pkl", actor_payload)
+
+
 
 
             if log_wandb and wandb.run is not None:
@@ -6131,16 +7520,22 @@ class IQLJAX:
                     wandb.save(str(save_dir_path / "best_actor.pkl"), policy="now")
 
 
+
+
         for fit_step in range(1, steps + 1):
             batch = replay_buffer.sample(batch_size)
             actor_state, step_log = self._actor_refit_step(actor_state, self.state, batch)
             step_log = {key: float(jax.device_get(value)) for key, value in step_log.items()}
 
 
+
+
             refit_log[f"{prefix}/final_loss"] = step_log["loss"]
             refit_log[f"{prefix}/final_bc_loss"] = step_log["bc_loss"]
             refit_log[f"{prefix}/final_adv_mean"] = step_log["adv_mean"]
             refit_log[f"{prefix}/final_exp_adv_mean"] = step_log["exp_adv_mean"]
+
+
 
 
             should_eval = (
@@ -6159,10 +7554,14 @@ class IQLJAX:
                 normalized_eval_scores = normalize_episode_scores(eval_env, eval_scores)
 
 
+
+
                 eval_score_mean = float(np.mean(eval_scores))
                 eval_score_std = float(np.std(eval_scores))
                 normalized_eval_score_mean, normalized_eval_score_std = mean_std_or_nan(normalized_eval_scores)
                 success_rate, success_std = mean_std_or_nan(eval_successes)
+
+
 
 
                 refit_log[f"{prefix}/inner_eval_steps"].append(int(fit_step))
@@ -6180,6 +7579,8 @@ class IQLJAX:
                 refit_log[f"{prefix}/final_success_std"] = success_std
 
 
+
+
                 eval_metric_mean = success_rate if np.isfinite(success_rate) else normalized_eval_score_mean
                 is_best = np.isfinite(eval_metric_mean) and eval_metric_mean > best_eval_metric_mean
                 if is_best:
@@ -6192,12 +7593,16 @@ class IQLJAX:
                     refit_log[f"{prefix}/best_success_std"] = success_std
 
 
+
+
                 save_refit_snapshot(
                     current_actor_state=actor_state,
                     current_refit_log=refit_log,
                     fit_step=fit_step,
                     is_best=is_best,
                 )
+
+
 
 
                 print(
@@ -6211,7 +7616,11 @@ class IQLJAX:
                 )
 
 
+
+
         return actor_state, refit_log
+
+
 
 
     def state_dict(self) -> Dict[str, Any]:
@@ -6222,6 +7631,8 @@ class IQLJAX:
             "initial_actor_key": serialization.to_state_dict(self.initial_actor_key),
             "iql_deterministic": self.iql_deterministic,
         }
+
+
 
 
     def load_state_dict(self, state_dict: Dict[str, Any]):
@@ -6255,6 +7666,10 @@ class IQLJAX:
 
 
 
+
+
+
+
 def save_pickle(path: Union[str, Path], obj: Any) -> None:
     with open(path, "wb") as f:
         pickle.dump(obj, f)
@@ -6262,9 +7677,17 @@ def save_pickle(path: Union[str, Path], obj: Any) -> None:
 
 
 
+
+
+
+
 def load_pickle(path: Union[str, Path]) -> Any:
     with open(path, "rb") as f:
         return pickle.load(f)
+
+
+
+
 
 
 
@@ -6277,11 +7700,17 @@ def resolve_checkpoint_path(
     """Return (run_dir, checkpoint_path) for a saved IQL-JAX checkpoint.
 
 
+
+
     Supported load_model formats:
+
+
 
 
     1. Direct checkpoint file:
        path/to/checkpoint.pkl
+
+
 
 
     2. Direct run directory:
@@ -6289,11 +7718,15 @@ def resolve_checkpoint_path(
        where path/to/run_dir/checkpoint.pkl exists
 
 
+
+
     3. Parent directory that contains env/seed subdirectory:
        path/to/base_dir/
        where path/to/base_dir/{run_name}/{seed}/checkpoint.pkl exists
     """
     load_path = Path(load_model)
+
+
 
 
     if load_path.is_file():
@@ -6304,16 +7737,24 @@ def resolve_checkpoint_path(
         return load_path.parent, load_path
 
 
+
+
     if not load_path.exists():
         raise FileNotFoundError(f"load_model path does not exist: {load_path}")
+
+
 
 
     candidates: List[Path] = []
     candidates.append(load_path / "checkpoint.pkl")
 
 
+
+
     if run_name is not None and seed is not None:
         candidates.append(load_path / run_name / str(seed) / "checkpoint.pkl")
+
+
 
 
     if run_name is not None:
@@ -6322,8 +7763,12 @@ def resolve_checkpoint_path(
             candidates.extend(sorted(run_name_dir.glob("*/checkpoint.pkl")))
 
 
+
+
     candidates.extend(sorted(load_path.glob("*/checkpoint.pkl")))
     candidates.extend(sorted(load_path.glob("*/*/checkpoint.pkl")))
+
+
 
 
     seen = set()
@@ -6337,6 +7782,8 @@ def resolve_checkpoint_path(
             existing_candidates.append(candidate)
 
 
+
+
     if len(existing_candidates) == 0:
         tried = "\n".join(str(p) for p in candidates[:20])
         raise FileNotFoundError(
@@ -6345,10 +7792,14 @@ def resolve_checkpoint_path(
         )
 
 
+
+
     if run_name is not None and seed is not None:
         exact = (load_path / run_name / str(seed) / "checkpoint.pkl").resolve()
         if exact in existing_candidates:
             return exact.parent, exact
+
+
 
 
     if len(existing_candidates) > 1:
@@ -6360,8 +7811,14 @@ def resolve_checkpoint_path(
         )
 
 
+
+
     checkpoint_path = existing_candidates[0]
     return checkpoint_path.parent, checkpoint_path
+
+
+
+
 
 
 
@@ -6373,8 +7830,12 @@ def load_run_config_for_refit(
     """Load saved config.yaml from the checkpoint run dir for refit mode.
 
 
+
+
     Priority:
         saved run config.yaml < explicit CLI flags
+
+
 
 
     This reconstructs the original training env/model/preprocessing settings,
@@ -6384,14 +7845,20 @@ def load_run_config_for_refit(
     saved_config_path = loaded_run_dir / "config.yaml"
 
 
+
+
     if not saved_config_path.exists():
         raise FileNotFoundError(
             f"mode='refit' expects saved run config at: {saved_config_path}"
         )
 
 
+
+
     with open(saved_config_path, "r") as f:
         saved_raw = yaml.safe_load(f) or {}
+
+
 
 
     config_fields = set(TrainConfig.__dataclass_fields__.keys())
@@ -6402,13 +7869,19 @@ def load_run_config_for_refit(
     }
 
 
+
+
     # 1. Start from the original saved training config.
     loaded_config = TrainConfig(**saved_kwargs)
+
+
 
 
     # 2. Override with explicitly provided CLI fields.
     cli_overrides = _cli_overridden_fields()
     current_config_dict = asdict(current_config)
+
+
 
 
     applied_cli_overrides = []
@@ -6419,9 +7892,13 @@ def load_run_config_for_refit(
         applied_cli_overrides.append(key)
 
 
+
+
     # 3. These must be forced for refit regardless of saved training config.
     loaded_config.mode = "refit"
     loaded_config.load_model = current_config.load_model
+
+
 
 
     # In refit mode, do not reuse the original training checkpoint output path.
@@ -6429,8 +7906,12 @@ def load_run_config_for_refit(
     loaded_config.checkpoints_path = None
 
 
+
+
     refresh_algorithm_names(loaded_config)
     validate_config(loaded_config)
+
+
 
 
     print(f"Loaded saved run config for refit from: {saved_config_path}")
@@ -6441,7 +7922,69 @@ def load_run_config_for_refit(
         )
 
 
+
+
     return loaded_config
+
+
+
+
+
+
+
+
+
+
+def _causal_probe_stats(trainer: IQLJAX, state: IQLState, probe: TensorBatch) -> Dict[str, float]:
+    """Stable CPU float64 probe summaries. No gradient or training mutation."""
+    obs, act = probe["observations"], probe["actions"]
+    qs = np.asarray(jax.device_get(
+        trainer.q_def.apply({"params": state.q_params}, obs, act)
+    ), dtype=np.float64)
+    target_qs = np.asarray(jax.device_get(
+        trainer.q_def.apply({"params": state.q_target_params}, obs, act)
+    ), dtype=np.float64)
+    vs = np.asarray(jax.device_get(
+        trainer.v_def.apply({"params": state.v_params}, obs)
+    ), dtype=np.float64)
+    next_v = np.asarray(jax.device_get(
+        trainer.v_def.apply({"params": state.v_params}, probe["next_observations"])
+    ), dtype=np.float64)
+    rewards = np.asarray(jax.device_get(probe["rewards"]), dtype=np.float64).reshape(-1)
+    dones = np.asarray(jax.device_get(probe["dones"]), dtype=np.float64).reshape(-1)
+    backup = rewards + (1.0 - dones) * trainer.discount * next_v
+    common = qs.mean(axis=0)
+
+
+    def rms(x):
+        x = np.asarray(x, dtype=np.float64)
+        return float(np.sqrt(np.mean(np.square(x))))
+
+
+    return {
+        "q_common_mean": float(np.mean(common)),
+        "q_common_rms": rms(common),
+        "q_common_centered_rms": rms(common - np.mean(common)),
+        "q_target_common_rms": rms(target_qs.mean(axis=0)),
+        "v_mean": float(np.mean(vs)),
+        "v_rms": rms(vs),
+        "backup_mean": float(np.mean(backup)),
+        "backup_rms": rms(backup),
+        "q_finite_fraction": float(np.mean(np.isfinite(qs))),
+        "v_finite_fraction": float(np.mean(np.isfinite(vs))),
+    }
+
+
+
+
+def _causal_exact_equal(a: IQLState, b: IQLState) -> bool:
+    """Shadow baseline must match all JAX state leaves, including optimizer state."""
+    aa, bb = jax.tree_util.tree_leaves(a), jax.tree_util.tree_leaves(b)
+    if len(aa) != len(bb):
+        return False
+    return all(np.array_equal(
+        np.asarray(jax.device_get(x)), np.asarray(jax.device_get(y)), equal_nan=True
+    ) for x, y in zip(aa, bb))
 
 
 
@@ -6450,13 +7993,19 @@ def _train_impl(config: TrainConfig):
     refit_only = config.mode == "refit"
 
 
+
+
     loaded_run_dir: Optional[Path] = None
     checkpoint_path: Optional[Path] = None
+
+
 
 
     if refit_only:
         if config.load_model == "":
             raise ValueError("refit mode requires --load_model")
+
+
 
 
         # First resolve the checkpoint using the current CLI config.
@@ -6468,6 +8017,8 @@ def _train_impl(config: TrainConfig):
         )
 
 
+
+
         # Then replace config with the original saved run config,
         # while preserving refit-specific CLI/runtime fields.
         config = load_run_config_for_refit(
@@ -6476,9 +8027,16 @@ def _train_impl(config: TrainConfig):
         )
 
 
+
+
     else:
         config = apply_env_hyperparams(config)
+        # Persistent branch snapshots require a local checkpoint output directory.
+        if config.causal_branch_enabled and config.checkpoints_path is None:
+            config.checkpoints_path = "checkpoints"
         config = finalize_checkpoint_path(config)
+
+
 
 
     checkpoint_manager = None
@@ -6505,8 +8063,12 @@ def _train_impl(config: TrainConfig):
             return
 
 
+
+
     jax_device = select_jax_device(config.device)
     env, dataset, dataset_backend = load_env_and_dataset(config.env)
+
+
 
 
     if len(env.observation_space.shape) != 1 or len(env.action_space.shape) != 1:
@@ -6516,8 +8078,12 @@ def _train_impl(config: TrainConfig):
         )
 
 
+
+
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
+
+
 
 
     if config.normalize_reward and dataset_backend == "d4rl":
@@ -6526,15 +8092,21 @@ def _train_impl(config: TrainConfig):
         print("Skipping D4RL reward normalization for non-D4RL dataset.")
 
 
+
+
     if config.normalize:
         state_mean, state_std = compute_mean_std(dataset["observations"], eps=1e-3)
     else:
         state_mean, state_std = 0, 1
 
 
+
+
     dataset["observations"] = normalize_states(dataset["observations"], state_mean, state_std)
     dataset["next_observations"] = normalize_states(dataset["next_observations"], state_mean, state_std)
     env = wrap_env(env, state_mean=state_mean, state_std=state_std)
+
+
 
 
     replay_buffer = ReplayBuffer(
@@ -6546,13 +8118,21 @@ def _train_impl(config: TrainConfig):
     replay_buffer.load_d4rl_dataset(dataset)
 
 
+
+
     max_action = float(env.action_space.high[0])
+
+
+
+
 
 
 
 
     seed = config.seed
     set_seed(seed, env)
+
+
 
 
     # Diagnostics use a separate deterministic RNG and a fixed probe batch.
@@ -6570,10 +8150,14 @@ def _train_impl(config: TrainConfig):
         )
 
 
+
+
     print("---------------------------------------")
     run_mode_name = "Actor refit" if refit_only else "Training"
     print(f"{run_mode_name} {ALGORITHM_NAME}-JAX, Env: {config.env}, Seed: {seed}")
     print("---------------------------------------")
+
+
 
 
     trainer = IQLJAX(
@@ -6635,6 +8219,7 @@ def _train_impl(config: TrainConfig):
         diag_enable_local_amplitude_ladder=config.diag_enable_local_amplitude_ladder,
         diag_local_amplitude_low=config.diag_local_amplitude_low,
         diag_local_amplitude_high=config.diag_local_amplitude_high,
+        causal_target_tau_multiplier=config.causal_target_tau_multiplier,
         diag_target_tau_fast_multiplier=config.diag_target_tau_fast_multiplier,
         diag_target_tau_very_fast_multiplier=config.diag_target_tau_very_fast_multiplier,
         diag_actual_source_cap_fraction=config.diag_actual_source_cap_fraction,
@@ -6646,6 +8231,8 @@ def _train_impl(config: TrainConfig):
         seed=seed,
         device=jax_device,
     )
+
+
 
 
     if config.load_model != "":
@@ -6660,20 +8247,100 @@ def _train_impl(config: TrainConfig):
         trainer.load_state_dict(checkpoint)
 
 
+
+
+    # Active causal branches share minibatches with the real baseline; they do
+    # not receive diagnostic minibatches or consume the training sampling RNG.
+    causal_active: Dict[str, Dict[str, Any]] = {}
+    causal_finished: Dict[str, Dict[str, Any]] = {}
+    causal_dir = (
+        Path(config.checkpoints_path) / "causal_branches"
+        if config.checkpoints_path is not None
+        else Path("causal_branch_outputs") / config.name / str(config.seed)
+    )
+    if config.causal_branch_enabled and not refit_only:
+        causal_dir.mkdir(parents=True, exist_ok=True)
+
+
+    def _causal_write(key: str, record: Dict[str, Any]) -> None:
+        output = causal_dir / (key + ".jsonl")
+        with open(output, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, allow_nan=True) + "\n")
+
+
+    def _causal_pack(entry: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "kind": entry["kind"],
+            "start": entry["start"],
+            "end": entry["end"],
+            "state": serialization.to_state_dict(entry["state"]),
+            "fixed_target": serialization.to_state_dict(entry["fixed_target"]),
+            "fixed_v": serialization.to_state_dict(entry["fixed_v"]),
+        }
+
+
+    def _causal_unpack(entry: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "kind": entry["kind"],
+            "start": int(entry["start"]),
+            "end": int(entry["end"]),
+            "state": tree_to_device(
+                serialization.from_state_dict(trainer.state, entry["state"]), jax_device
+            ),
+            "fixed_target": tree_to_device(
+                serialization.from_state_dict(trainer.state.q_target_params, entry["fixed_target"]), jax_device
+            ),
+            "fixed_v": tree_to_device(
+                serialization.from_state_dict(trainer.state.v_params, entry["fixed_v"]), jax_device
+            ),
+        }
+
+
+
+
     def _progress_state():
-        return trainer.state_dict()
+        if not config.causal_branch_enabled or refit_only:
+            return trainer.state_dict()
+        return {
+            "__integrated_causal_version__": 1,
+            "baseline": trainer.state_dict(),
+            "active": {key: _causal_pack(entry) for key, entry in causal_active.items()},
+            "finished": causal_finished.copy(),
+            "numpy_rng_state": np.random.get_state(),
+            "python_rng_state": random.getstate(),
+        }
+
+
 
 
     def _final_state():
+        # Preserve the original baseline-only final model format for actor refit.
         return trainer.state_dict()
 
 
+
+
     def _load_progress_state(payload):
-        trainer.load_state_dict(payload)
+        if not isinstance(payload, dict) or payload.get("__integrated_causal_version__") != 1:
+            trainer.load_state_dict(payload)
+            return
+        trainer.load_state_dict(payload["baseline"])
+        causal_active.clear()
+        causal_active.update({
+            key: _causal_unpack(entry) for key, entry in payload["active"].items()
+        })
+        causal_finished.clear()
+        causal_finished.update(payload.get("finished", {}))
+        np.random.set_state(payload["numpy_rng_state"])
+        random.setstate(payload["python_rng_state"])
+
+
 
 
     def _training_timestep():
         return int(jax.device_get(trainer.state.total_it))
+
+
 
 
     start_timestep = _training_timestep()
@@ -6690,6 +8357,9 @@ def _train_impl(config: TrainConfig):
             )
             if diagnostic_log_path is not None:
                 sanitize_diagnostic_jsonl(diagnostic_log_path, max_timestep=start_timestep)
+            if config.causal_branch_enabled:
+                for causal_path in causal_dir.glob("*.jsonl"):
+                    sanitize_diagnostic_jsonl(causal_path, max_timestep=start_timestep)
             print(f"Restored training at timestep {start_timestep}.")
         else:
             start_timestep = _training_timestep()
@@ -6699,6 +8369,8 @@ def _train_impl(config: TrainConfig):
                 eval_logs=eval_logs,
                 status="running",
             )
+
+
 
 
     if config.log_wandb:
@@ -6720,6 +8392,10 @@ def _train_impl(config: TrainConfig):
 
 
 
+
+
+
+
     def _wandb_log(metrics, step):
         if not config.log_wandb:
             return
@@ -6731,9 +8407,15 @@ def _train_impl(config: TrainConfig):
 
 
 
+
+
+
+
     if refit_only:
         if loaded_run_dir is None:
             raise ValueError("refit mode requires --load_model")
+
+
 
 
         actor_refit_dir = loaded_run_dir / config.actor_refit_dir_name
@@ -6751,8 +8433,12 @@ def _train_impl(config: TrainConfig):
         print("---------------------------------------")
 
 
+
+
         actor_state = trainer.make_initial_actor_state()
         loaded_checkpoint_for_log = str(loaded_run_dir / "checkpoint.pkl")
+
+
 
 
         refit_actor_state, refit_log = trainer.fit_actor(
@@ -6771,6 +8457,8 @@ def _train_impl(config: TrainConfig):
         )
 
 
+
+
         save_pickle(
             actor_refit_dir / "final_actor.pkl",
             serialization.to_state_dict(refit_actor_state.params),
@@ -6783,10 +8471,14 @@ def _train_impl(config: TrainConfig):
             pyrallis.dump(config, f)
 
 
+
+
         if config.log_wandb and wandb.run is not None:
             wandb.save(str(actor_refit_dir / "final_actor.pkl"), policy="now")
             wandb.save(str(actor_refit_dir / "fit_eval_logs.npz"), policy="now")
             wandb.save(str(actor_refit_dir / "refit_config.yaml"), policy="now")
+
+
 
 
         print("---------------------------------------")
@@ -6797,8 +8489,12 @@ def _train_impl(config: TrainConfig):
         return
 
 
+
+
     def _evaluation_required(step):
         return evaluation_is_due(int(step), int(config.eval_freq))
+
+
 
 
     try:
@@ -6854,6 +8550,8 @@ def _train_impl(config: TrainConfig):
                 }
 
 
+
+
             extended_batch_sequence = None
             if extended_due:
                 # Independent diagnostic RNG: no consumption of training NumPy RNG.
@@ -6868,6 +8566,7 @@ def _train_impl(config: TrainConfig):
                     key: jnp.stack([b[key] for b in ext_batches], axis=0)
                     for key in batch.keys()
                 }
+
 
             log_dict = trainer.train(
                 batch,
@@ -6885,6 +8584,133 @@ def _train_impl(config: TrainConfig):
             )
 
 
+
+
+            # Long, *actual* branch updates (not 100-step diagnostic scans).
+            if config.causal_branch_enabled:
+                if int(step) in {int(x) for x in config.causal_branch_start_steps}:
+                    for kind in config.causal_branch_types:
+                        key = f"{step}__{kind}"
+                        if key in causal_active or key in causal_finished:
+                            continue
+                        causal_active[key] = {
+                            "kind": kind,
+                            "start": int(step),
+                            "end": int(step) + int(config.causal_branch_horizon),
+                            # JAX arrays are immutable; branch updates return new states.
+                            "state": trainer.state,
+                            "fixed_target": trainer.state.q_target_params,
+                            "fixed_v": trainer.state.v_params,
+                        }
+                        _causal_write(key, {
+                            "timestep": int(step),
+                            "event": "branch_start",
+                            "kind": kind,
+                            "intervention_steps": int(config.causal_intervention_steps),
+                            "horizon": int(config.causal_branch_horizon),
+                            "probe": _causal_probe_stats(trainer, trainer.state, diagnostic_probe_batch),
+                        })
+
+
+                baseline_probe_stats = None
+                to_finish = []
+                for key, entry in list(causal_active.items()):
+                    if int(step) <= entry["start"]:
+                        continue
+                    within_intervention = (
+                        int(step) - entry["start"] <= int(config.causal_intervention_steps)
+                    )
+                    kind = entry["kind"]
+                    if within_intervention and kind != "shadow_baseline":
+                        updater = trainer._causal_branch_train_steps[kind]
+                        next_state, branch_train_logs = updater(
+                            entry["state"], batch, entry["fixed_target"], entry["fixed_v"]
+                        )
+                    else:
+                        next_state, branch_train_logs = trainer._train_step(entry["state"], batch)
+                    entry["state"] = next_state
+                    elapsed = int(step) - entry["start"]
+                    should_log = (
+                        elapsed == 1
+                        or int(step) % int(config.causal_branch_log_every) == 0
+                        or int(step) >= entry["end"]
+                    )
+                    if should_log:
+                        if baseline_probe_stats is None:
+                            baseline_probe_stats = _causal_probe_stats(
+                                trainer, trainer.state, diagnostic_probe_batch
+                            )
+                        branch_probe = _causal_probe_stats(
+                            trainer, entry["state"], diagnostic_probe_batch
+                        )
+                        record = {
+                            "timestep": int(step),
+                            "event": "branch_step",
+                            "kind": kind,
+                            "elapsed": elapsed,
+                            "intervention_active": bool(within_intervention and kind != "shadow_baseline"),
+                            "probe": branch_probe,
+                            "baseline_probe": baseline_probe_stats,
+                            "q_rms_over_baseline": (
+                                branch_probe["q_common_rms"]
+                                / max(1e-30, baseline_probe_stats["q_common_rms"])
+                            ),
+                            "q_loss": float(jax.device_get(branch_train_logs["q_loss"])),
+                            "v_loss": float(jax.device_get(branch_train_logs["value_loss"])),
+                            "actor_loss": float(jax.device_get(branch_train_logs["actor_loss"])),
+                        }
+                        if kind == "shadow_baseline":
+                            record["state_exact_match"] = _causal_exact_equal(
+                                entry["state"], trainer.state
+                            )
+                            if not record["state_exact_match"]:
+                                _causal_write(key, record)
+                                raise RuntimeError(
+                                    "Causal shadow_baseline deviated from the real baseline at "
+                                    f"step {step}; aborting intervention comparison"
+                                )
+                        _causal_write(key, record)
+                    if (
+                        int(step) % int(config.causal_branch_eval_every) == 0
+                        or int(step) >= entry["end"]
+                    ):
+                        # Branch evaluation must not change the real training RNG.
+                        _np_before_eval = np.random.get_state()
+                        _py_before_eval = random.getstate()
+                        try:
+                            scores, successes = trainer.eval_actor(
+                                env, entry["state"].actor_params,
+                                n_episodes=config.n_episodes,
+                                seed=config.seed,
+                            )
+                        finally:
+                            np.random.set_state(_np_before_eval)
+                            random.setstate(_py_before_eval)
+                        _causal_write(key, {
+                            "timestep": int(step),
+                            "event": "branch_eval",
+                            "kind": kind,
+                            "elapsed": elapsed,
+                            "reward_mean": float(np.mean(scores)),
+                            "success_mean": float(mean_std_or_nan(successes)[0]),
+                        })
+                    if int(step) >= entry["end"]:
+                        to_finish.append(key)
+                for key in to_finish:
+                    entry = causal_active.pop(key)
+                    causal_finished[key] = {
+                        "kind": entry["kind"],
+                        "start": entry["start"],
+                        "end": int(step),
+                        "completed": True,
+                    }
+                    _causal_write(key, {
+                        "timestep": int(step),
+                        "event": "branch_complete",
+                        "kind": entry["kind"],
+                    })
+
+
             if diagnostic_due:
                 diagnostic_record = {
                     "timestep": int(step),
@@ -6897,6 +8723,8 @@ def _train_impl(config: TrainConfig):
                 if diagnostic_log_path is not None:
                     with open(diagnostic_log_path, "a", encoding="utf-8") as f:
                         f.write(json.dumps(diagnostic_record, allow_nan=True) + "\n")
+
+
 
 
             if config.log_wandb and (step % config.log_every == 0 or diagnostic_due):
@@ -6998,6 +8826,12 @@ def _train_impl(config: TrainConfig):
 
 
 
+
+
+
+
+
+
 @pyrallis.wrap()
 @log_training_exceptions
 def train(config: TrainConfig):
@@ -7010,6 +8844,8 @@ def train(config: TrainConfig):
     finally:
         if getattr(wandb, "run", None) is not None:
             wandb.finish(exit_code=exit_code)
+
+
 
 
             
