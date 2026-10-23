@@ -649,7 +649,7 @@ EPSILON = 0.1
 #   "nn_like_field_spatial"  : ONLY spatial correlation; time is iid
 #   "nn_like_field_temporal" : ONLY temporal correlation; (state, action) independent
 #   "nn_like_field_iid"      : NEITHER spatial nor temporal correlation
-NOISE_MODE = "nn_like_field"
+NOISE_MODE = "nn_like_field_temporal"
 NOISE_SIGMA = 0.3
 
 # Reward shaping controls action gaps.
@@ -710,7 +710,7 @@ LOG_EVERY = 500
 
 # Run the same algorithms on 10 independent random seeds.
 # Using the same seed set for every algorithm enables paired comparisons.
-SEEDS = list(range(100))
+SEEDS = list(range(10))
 STD_DDOF = 1  # sample standard deviation across seeds
 
 

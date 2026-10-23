@@ -147,8 +147,8 @@ TensorBatch = Dict[str, jnp.ndarray]
 
 
 
-ALGORITHM_NAME = "IQL-PD-V16-CAUSAL"
-ALGORITHM_FULL_NAME = "IQL Propagation Diagnostics V16 with integrated causal branching"
+ALGORITHM_NAME = "IQL-PD-V21"
+ALGORITHM_FULL_NAME = "IQL V21: multi-method residual, critic-sensitivity and propagation-aware causal branching"
 
 
 
@@ -458,16 +458,66 @@ class TrainConfig:
 
     # Integrated causal branches: one train command, shared real minibatches.
     # The original baseline IQL and all V16 diagnostics remain unchanged.
+    # V18: targeted *real* long-horizon branches within the SAME baseline train run.
+    # profile: fixed = exact steps below; v17_risk_focused = environment-specific
+    # pre-onset schedule, returns no branches for unspecified combinations.
     causal_branch_enabled: bool = True
+    causal_branch_schedule_profile: str = "v17_risk_focused"
     causal_branch_start_steps: Tuple[int, ...] = (100000,)
-    causal_branch_horizon: int = 100000
+    causal_branch_horizon: int = 200000
     causal_intervention_steps: int = 10000
+    # Default: question-driven primary corrections + matched-rate controls.
+    # Older V18 edge/target-rate branches are still selectable by name.
+    # V21 broad simultaneous grid, 13 branches plus the unchanged full baseline.
+    # For GPU-limited runs, override causal_branch_types with the core set in README.
     causal_branch_types: Tuple[str, ...] = (
-        "shadow_baseline", "cut_target_q_input", "cut_v_backup_input", "target_tau_fast"
+        "shadow_baseline",
+        "bk_independent_control", "bk_target_relax", "bk_target_fixed", "q_update_fixed",
+        "residual_control", "residual_target_control", "residual_target_fixed", "v_extra_fit",
+        "residual_bk_joint", "bk_residual_propagation",
+        "factorial_qstep_residual_target", "factorial_relax_residual_target",
     )
-    causal_branch_log_every: int = 1000
+    # Every 250 steps supports the pre-declared 5 consecutive ×250 onset rule.
+    causal_branch_log_every: int = 250
     causal_branch_eval_every: int = 25000
     causal_target_tau_multiplier: float = 5.0
+    causal_target_tau_medium_multiplier: float = 2.0
+    causal_target_tau_slow_multiplier: float = 0.5
+    # A fixed-Q-step-scale control is critical: any sensitivity controller may
+    # merely act like reducing the critic learning rate.
+    causal_fixed_q_update_scale: float = 0.75
+    causal_fixed_v_update_scale: float = 0.75
+    # For robust TD loss: threshold = multiplier * median |TD| + floor * max(1,RMS(y)).
+    # The *loss* is equal to squared TD error for |TD| <= threshold, and
+    # linear above it. Threshold is detached; it does not identify true error.
+    causal_huber_median_multiplier: float = 2.5
+    causal_huber_target_floor_fraction: float = 0.01
+    # All V19 correction branches persist for the full horizon by default.
+    # B_k is estimated from paired +/- *one-step real Adam critic fits*, along a
+    # centered TD-residual direction. This is NOT the full B operator or true error.
+    causal_sensitivity_probe_every: int = 500
+    causal_sensitivity_relative_delta: float = 0.001
+    causal_sensitivity_gain_margin: float = 1.25
+    causal_sensitivity_alpha_min: float = 0.25
+    # When True, gain-sensitive interventions persist for full branch horizon,
+    # while edge cuts and tau-rate sweeps use causal_intervention_steps only.
+    causal_sensitivity_persistent: bool = True
+    # V20: 2x2 independent interventions. Conditional-head G/kappa is a proxy,
+    # NOT oracle residual. B-only probes constant and independent random inputs.
+    causal_residual_trigger_margin: float = 1.10
+    causal_bk_trigger_margin: float = 1.25
+    # V21 Stage-2: true Bellman target intervention, in addition to V20 optimizer-step interventions.
+    # Thresholds compare against the *same fixed diagnostic input/output probes* at branch start.
+    causal_residual_target_alpha_max: float = 0.25
+    causal_residual_target_fixed_alpha: float = 0.10
+    causal_residual_correction_cap_fraction: float = 0.05
+    causal_b_target_relax_alpha_floor: float = 0.10
+    causal_b_target_relax_fixed_alpha: float = 0.80
+    # Avoid interpreting a noisy zero-sized B response as a trustworthy controller.
+    causal_joint_half_fd_max_relerr: float = 0.50
+    # Include additional unconditional V-fit / fixed-Q-rate control branches
+    # manually for a strong paper-level comparison; supported legacy names remain.
+
 
 
     # Logging
@@ -593,9 +643,36 @@ def validate_config(config: TrainConfig) -> None:
         assert 0 < config.causal_intervention_steps <= config.causal_branch_horizon
         assert config.causal_branch_log_every > 0
         assert config.causal_branch_eval_every > 0
-        assert config.causal_target_tau_multiplier > 0
+        assert 0.0 < config.causal_target_tau_multiplier
+        assert 0.0 < config.causal_target_tau_medium_multiplier
+        assert 0.0 < config.causal_target_tau_slow_multiplier
+        assert config.causal_branch_schedule_profile in ("fixed", "v17_risk_focused")
+        assert 0.0 < config.causal_fixed_q_update_scale <= 1.0
+        assert 0.0 < config.causal_fixed_v_update_scale <= 1.0
+        assert config.causal_huber_median_multiplier > 0.0
+        assert config.causal_huber_target_floor_fraction >= 0.0
+        assert config.causal_sensitivity_probe_every >= 1
+        assert 0.0 < config.causal_sensitivity_relative_delta <= 0.05
+        assert config.causal_sensitivity_gain_margin >= 1.0
+        assert config.causal_residual_trigger_margin >= 1.0
+        assert config.causal_bk_trigger_margin >= 1.0
+        assert 0.0 <= config.causal_residual_target_alpha_max <= 1.0
+        assert 0.0 <= config.causal_residual_target_fixed_alpha <= 1.0
+        assert 0.0 < config.causal_residual_correction_cap_fraction <= 1.0
+        assert 0.0 < config.causal_b_target_relax_alpha_floor <= 1.0
+        assert 0.0 < config.causal_b_target_relax_fixed_alpha <= 1.0
+        assert config.causal_joint_half_fd_max_relerr > 0.0
+        assert 0.0 < config.causal_sensitivity_alpha_min <= 1.0
         assert all(int(t) >= 0 for t in config.causal_branch_start_steps)
-        legal = {"shadow_baseline", "cut_target_q_input", "cut_v_backup_input", "target_tau_fast"}
+        legal = {
+            "shadow_baseline", "cut_target_q_input", "cut_v_backup_input",
+            "target_tau_slow", "target_tau_medium", "target_tau_fast",
+            "q_update_fixed", "bk_gain_control", "bk_kappa_control", "residual_control", "bk_independent_control", "residual_bk_joint",
+            "q_td_huber", "v_extra_fit", "v_update_fixed",
+            "bk_target_relax", "bk_target_fixed",
+            "residual_target_control", "residual_target_fixed", "bk_residual_propagation",
+            "factorial_qstep_residual_target", "factorial_relax_residual_target",
+        }
         assert len(config.causal_branch_types) > 0
         assert set(config.causal_branch_types).issubset(legal)
         assert len(config.causal_branch_types) == len(set(config.causal_branch_types))
@@ -1617,6 +1694,14 @@ class IQLJAX:
         diag_local_amplitude_low: float = 0.5,
         diag_local_amplitude_high: float = 2.0,
         causal_target_tau_multiplier: float = 5.0,
+        causal_target_tau_medium_multiplier: float = 2.0,
+        causal_target_tau_slow_multiplier: float = 0.5,
+        causal_sensitivity_relative_delta: float = 0.001,
+        causal_residual_correction_cap_fraction: float = 0.05,
+        causal_joint_half_fd_max_relerr: float = 0.50,
+        causal_fixed_v_update_scale: float = 0.75,
+        causal_huber_median_multiplier: float = 2.5,
+        causal_huber_target_floor_fraction: float = 0.01,
         diag_target_tau_fast_multiplier: float = 5.0,
         diag_target_tau_very_fast_multiplier: float = 20.0,
         diag_actual_source_cap_fraction: float = 0.05,
@@ -1686,6 +1771,14 @@ class IQLJAX:
         self.diag_local_amplitude_low = float(diag_local_amplitude_low)
         self.diag_local_amplitude_high = float(diag_local_amplitude_high)
         self.causal_target_tau_multiplier = float(causal_target_tau_multiplier)
+        self.causal_target_tau_medium_multiplier = float(causal_target_tau_medium_multiplier)
+        self.causal_target_tau_slow_multiplier = float(causal_target_tau_slow_multiplier)
+        self.causal_sensitivity_relative_delta = float(causal_sensitivity_relative_delta)
+        self.causal_residual_correction_cap_fraction = float(causal_residual_correction_cap_fraction)
+        self.causal_joint_half_fd_max_relerr = float(causal_joint_half_fd_max_relerr)
+        self.causal_fixed_v_update_scale = float(causal_fixed_v_update_scale)
+        self.causal_huber_median_multiplier = float(causal_huber_median_multiplier)
+        self.causal_huber_target_floor_fraction = float(causal_huber_target_floor_fraction)
         self.diag_target_tau_fast_multiplier = float(diag_target_tau_fast_multiplier)
         self.diag_target_tau_very_fast_multiplier = float(diag_target_tau_very_fast_multiplier)
         self.diag_actual_source_cap_fraction = float(diag_actual_source_cap_fraction)
@@ -1799,8 +1892,19 @@ class IQLJAX:
         self._train_step = self._build_train_step()
         self._causal_branch_train_steps = {
             mode: self._build_causal_branch_train_step(mode)
-            for mode in ("cut_target_q_input", "cut_v_backup_input", "target_tau_fast")
+            for mode in (
+                "cut_target_q_input", "cut_v_backup_input", "target_tau_slow",
+                "target_tau_medium", "target_tau_fast", "q_update_fixed",
+                "bk_gain_control", "bk_kappa_control", "q_td_huber",
+                "v_extra_fit", "v_update_fixed",
+                "residual_control", "bk_independent_control", "residual_bk_joint",
+                "bk_target_relax", "bk_target_fixed", "residual_target_control",
+                "residual_target_fixed", "bk_residual_propagation",
+                "factorial_qstep_residual_target", "factorial_relax_residual_target",
+            )
         }
+        self._causal_sensitivity_step = self._build_causal_sensitivity_probe()
+        self._residual_bk_v20_step = self._build_residual_bk_v20_probe()
         self._value_divergence_diagnostic_step = self._build_value_divergence_diagnostic_step()
         self._propagation_diagnostic_step = self._build_propagation_diagnostic_step()
         self._residual_calibration_step = self._build_residual_calibration_step()
@@ -2109,6 +2213,12 @@ class IQLJAX:
         discount = self.discount
         tau = self.tau
         causal_multiplier = self.causal_target_tau_multiplier
+        causal_medium_multiplier = self.causal_target_tau_medium_multiplier
+        causal_slow_multiplier = self.causal_target_tau_slow_multiplier
+        huber_multiplier = self.causal_huber_median_multiplier
+        huber_floor_fraction = self.causal_huber_target_floor_fraction
+        fixed_v_scale = self.causal_fixed_v_update_scale
+        target_correction_cap_frac = self.causal_residual_correction_cap_fraction
         beta = self.beta
         iql_tau = self.iql_tau
         iql_deterministic = self.iql_deterministic
@@ -2154,7 +2264,10 @@ class IQLJAX:
 
 
         @jax.jit
-        def train_step(state: IQLState, batch: TensorBatch, frozen_q_target_params: Any, frozen_v_params: Any):
+        def train_step(state: IQLState, batch: TensorBatch, frozen_q_target_params: Any,
+                       frozen_v_params: Any, q_step_scale: jnp.ndarray,
+                       residual_gate: jnp.ndarray, target_relax_alpha: jnp.ndarray,
+                       residual_target_alpha: jnp.ndarray):
             total_it = state.total_it + jnp.asarray(1, dtype=jnp.int32)
             observations = batch["observations"]
             actions = batch["actions"]
@@ -2173,6 +2286,47 @@ class IQLJAX:
                 # Only freeze the V value used by the critic Bellman backup.
                 fixed_next_v = v_apply({"params": frozen_v_params}, next_observations)
                 target_q_for_backup = rewards + (1.0 - dones) * discount * fixed_next_v
+            # V21 Stage-2 interventions: modify ONLY the Q Bellman target.
+            # The live V/target-Q networks, optimizer moments, actor advantage and
+            # auxiliary diagnostic-head fitting are otherwise unchanged.
+            base_target_backup = target_q_for_backup
+            stage2_residual_raw = jnp.zeros_like(base_target_backup)
+            stage2_residual_applied = jnp.zeros_like(base_target_backup)
+            stage2_clip_fraction = jnp.asarray(0.0, dtype=jnp.float32)
+            if variant in (
+                "residual_target_control", "residual_target_fixed", "bk_residual_propagation",
+                "factorial_qstep_residual_target", "factorial_relax_residual_target",
+            ):
+                # Detach the diagnostic network: no actor/Q/V gradient is routed
+                # through G_hat, kappa_hat. These are imperfect conditional proxies.
+                raw_next = diag_apply({"params": state.diag_params}, next_observations)
+                g_next, kappa_next, _ = unpack_diag(raw_next)
+                # Safely fail closed on nonfinite residual-head predictions.
+                # With controller alpha=0, 0 * NaN must NOT corrupt Q targets.
+                v_correction = jax.lax.stop_gradient(
+                    jnp.nan_to_num(g_next / kappa_next, nan=0.0, posinf=0.0, neginf=0.0))
+                target_scale = jnp.maximum(1.0, jnp.sqrt(jnp.mean(base_target_backup ** 2)))
+                # Per-transition cap, in V-value units: |delta V| <= c*RMS(y)/gamma.
+                cap_y = target_correction_cap_frac * target_scale
+                h_uncapped = (1.0 - dones) * discount * v_correction
+                stage2_residual_raw = h_uncapped
+                stage2_clip_fraction = jnp.mean((jnp.abs(h_uncapped) > cap_y).astype(jnp.float32))
+                h_capped = jnp.clip(h_uncapped, -cap_y, cap_y)
+                stage2_residual_applied = residual_target_alpha * h_capped
+                target_q_for_backup = target_q_for_backup + stage2_residual_applied
+            stage2_anchor_delta_rms = jnp.asarray(0.0, dtype=jnp.float32)
+            if variant in ("bk_target_relax", "bk_target_fixed", "factorial_relax_residual_target"):
+                # Ensemble-mean anchor: under the twin-critic loss, this is NOT
+                # equivalent to multiplying every Adam Q-update by alpha.
+                q_anchor = jax.lax.stop_gradient(jnp.mean(
+                    q_apply({"params": state.q_params}, observations, actions), axis=0))
+                stage2_anchor_delta_rms = jnp.sqrt(jnp.mean((base_target_backup-q_anchor)**2))
+                relaxed_target = q_anchor + target_relax_alpha * (target_q_for_backup-q_anchor)
+                # alpha=1 must give an EXACT original target, not a numerically
+                # different value due to cancellation around a huge Q anchor.
+                target_q_for_backup = jnp.where(
+                    target_relax_alpha >= 1.0, target_q_for_backup, relaxed_target)
+            stage2_target_displacement = target_q_for_backup-base_target_backup
             target_qs = q_apply({"params": state.q_target_params}, observations, actions)
             target_q_for_v = jnp.min(target_qs, axis=0)
             # Actor advantage continues to use the live target Q.
@@ -2261,7 +2415,27 @@ class IQLJAX:
 
             (value_loss, v), v_grads = jax.value_and_grad(v_loss_fn, has_aux=True)(state.v_params)
             v_updates, v_opt_state = v_tx.update(v_grads, state.v_opt_state, state.v_params)
+            if variant == "v_update_fixed":
+                v_updates = jax.tree_util.tree_map(lambda u: fixed_v_scale * u, v_updates)
             v_params = optax.apply_updates(state.v_params, v_updates)
+            if variant == "v_extra_fit":
+                # A second Adam V-fit on the SAME frozen pre-update target Q.
+                # The Q backup still uses the OLD V as in baseline IQL.
+                (_, _), v_grads2 = jax.value_and_grad(v_loss_fn, has_aux=True)(v_params)
+                v_updates2, v_opt_state = v_tx.update(v_grads2, v_opt_state, v_params)
+                v_params = optax.apply_updates(v_params, v_updates2)
+            if variant in ("residual_control", "residual_bk_joint"):
+                # Second V fit is conditional on a detached G/kappa diagnostic
+                # measured on a fixed independent probe. Both V fits use the
+                # same OLD target Q, and Q's backup uses OLD V (baseline ordering).
+                def extra_fit(carry):
+                    params, opt_st = carry
+                    (_, _), grads2 = jax.value_and_grad(v_loss_fn, has_aux=True)(params)
+                    up2, opt2 = v_tx.update(grads2, opt_st, params)
+                    return optax.apply_updates(params, up2), opt2
+                v_params, v_opt_state = jax.lax.cond(
+                    residual_gate > 0.5, extra_fit, lambda z: z,
+                    (v_params, v_opt_state))
 
 
 
@@ -2272,7 +2446,19 @@ class IQLJAX:
                 # Average the squared TD error over both critic and batch axes.
                 # For num_critics=2, this has the same scaling as the original
                 # 0.5 * (MSE(q1) + MSE(q2)) formulation.
-                q_loss = jnp.mean((qs - target[None, :]) ** 2)
+                td = qs - target[None, :]
+                if variant == "q_td_huber":
+                    # This is a robust FITTING LOSS, not a true-error detector.
+                    scale = jnp.maximum(jnp.sqrt(jnp.mean(target ** 2)), 1.0)
+                    threshold = jax.lax.stop_gradient(
+                        huber_multiplier * jnp.median(jnp.abs(td))
+                        + huber_floor_fraction * scale)
+                    abs_td = jnp.abs(td)
+                    robust = jnp.where(abs_td <= threshold, td ** 2,
+                                       2.0 * threshold * abs_td - threshold ** 2)
+                    q_loss = jnp.mean(robust)
+                else:
+                    q_loss = jnp.mean(td ** 2)
                 return q_loss, qs
 
 
@@ -2280,8 +2466,19 @@ class IQLJAX:
 
             (q_loss, qs), q_grads = jax.value_and_grad(q_loss_fn, has_aux=True)(state.q_params)
             q_updates, q_opt_state = q_tx.update(q_grads, state.q_opt_state, state.q_params)
+            # The optimizer *moments* update normally, but the applied critic
+            # parameter step is scaled only on designated research branches.
+            if variant in ("q_update_fixed", "bk_gain_control", "bk_kappa_control",
+                           "bk_independent_control", "residual_bk_joint",
+                           "factorial_qstep_residual_target"):
+                q_updates = jax.tree_util.tree_map(lambda u: q_step_scale * u, q_updates)
             q_params = optax.apply_updates(state.q_params, q_updates)
-            effective_tau = min(1.0, tau * causal_multiplier) if variant == "target_tau_fast" else tau
+            tau_multiplier = (
+                causal_multiplier if variant == "target_tau_fast" else
+                causal_medium_multiplier if variant == "target_tau_medium" else
+                causal_slow_multiplier if variant == "target_tau_slow" else 1.0
+            )
+            effective_tau = min(1.0, tau * tau_multiplier)
             q_target_params = soft_update(q_params, state.q_target_params, effective_tau)
 
 
@@ -2341,8 +2538,37 @@ class IQLJAX:
 
 
 
+            # Comparable MSE is reported even when Huber changes the optimized loss.
+            td_pre = qs - target_q_for_backup[None, :]
+            q_step_tree = jax.tree_util.tree_map(lambda x,y: x-y, q_params, state.q_params)
+            v_step_tree = jax.tree_util.tree_map(lambda x,y: x-y, v_params, state.v_params)
+            td_scale = jnp.maximum(jnp.sqrt(jnp.mean(target_q_for_backup ** 2)), 1.0)
+            huber_threshold = (huber_multiplier * jnp.median(jnp.abs(td_pre))
+                               + huber_floor_fraction * td_scale)
             log_dict = {
+                "causal_stage2_b_target_alpha": target_relax_alpha,
+                "causal_stage2_residual_target_alpha": residual_target_alpha,
+                "causal_stage2_residual_raw_rms": jnp.sqrt(jnp.mean(stage2_residual_raw**2)),
+                "causal_stage2_residual_applied_rms": jnp.sqrt(jnp.mean(stage2_residual_applied**2)),
+                "causal_stage2_residual_clip_fraction": stage2_clip_fraction,
+                "causal_stage2_target_displacement_rms": jnp.sqrt(jnp.mean(stage2_target_displacement**2)),
+                "causal_stage2_anchor_delta_rms": stage2_anchor_delta_rms,
+                "causal_stage2_effective_target_rms": jnp.sqrt(jnp.mean(target_q_for_backup**2)),
+                "causal_stage2_original_target_rms": jnp.sqrt(jnp.mean(base_target_backup**2)),
                 "q_loss": q_loss,
+                "causal_q_td_mse": jnp.mean(td_pre ** 2),
+                "causal_q_parameter_step_log10_l2": stable_tree_log10_l2(q_step_tree),
+                "causal_v_parameter_step_log10_l2": stable_tree_log10_l2(v_step_tree),
+                "causal_huber_threshold": huber_threshold,
+                "causal_huber_tail_fraction": jnp.mean((jnp.abs(td_pre) > huber_threshold).astype(jnp.float32)),
+                "causal_v_extra_fit_steps": jnp.asarray(1.0 if variant == "v_extra_fit" else 0.0),
+                "causal_residual_extra_v_fit": (residual_gate if variant in
+                    ("residual_control", "residual_bk_joint") else jnp.asarray(0.0)),
+                "causal_v_update_scale": jnp.asarray(fixed_v_scale if variant == "v_update_fixed" else 1.0),
+                "causal_q_update_scale": q_step_scale if variant in
+                    ("q_update_fixed", "bk_gain_control", "bk_kappa_control",
+                     "bk_independent_control", "residual_bk_joint",
+                     "factorial_qstep_residual_target") else jnp.asarray(1.0),
                 "q_mean": jnp.mean(qs),
                 "q_min_mean": jnp.mean(jnp.min(qs, axis=0)),
                 "q_max_mean": jnp.mean(jnp.max(qs, axis=0)),
@@ -2379,6 +2605,224 @@ class IQLJAX:
         return train_step
 
 
+
+
+    def _build_causal_sensitivity_probe(self):
+        """One-step directional B_k probe, based on the ACTUAL Adam critic update.
+
+        Q_fit(y + delta*h)-Q_fit(y - delta*h) / (2*delta) is measured on a
+        fixed Q probe, with a centered unit-RMS frozen *batch TD residual* h.
+        Kappa/ESS are minibatch expectile-weight summaries, NOT state-conditional
+        error identification. Neither number implies the sign of useful learning.
+        This probe never commits optimizer parameters or consumes RNG state.
+        """
+        q_apply = self.q_def.apply
+        v_apply = self.v_def.apply
+        q_tx = self.q_tx
+        discount, expectile = self.discount, self.iql_tau
+        relative_delta = self.causal_sensitivity_relative_delta
+
+        @jax.jit
+        def probe(state: IQLState, batch: TensorBatch, fixed_probe: TensorBatch):
+            obs, acts = batch["observations"], batch["actions"]
+            r = jnp.squeeze(batch["rewards"], -1)
+            d = jnp.squeeze(batch["dones"], -1)
+            next_v = v_apply({"params": state.v_params}, batch["next_observations"])
+            y = r + (1.0-d) * discount * next_v
+            online_q = jnp.mean(q_apply({"params": state.q_params}, obs, acts), axis=0)
+            raw = jax.lax.stop_gradient(online_q - y)
+            centered = raw - jnp.mean(raw)
+            source_rms = jnp.sqrt(jnp.mean(centered**2) + 1e-30)
+            valid_source = source_rms > 1e-7
+            direction = jnp.where(valid_source, centered / jnp.maximum(source_rms, 1e-7),
+                                  jnp.zeros_like(centered))
+            delta = relative_delta * jnp.maximum(
+                1.0, jnp.sqrt(jnp.mean(y**2) + 1e-30))
+
+            def virtual_response(y_shifted):
+                def qloss(q_params):
+                    vals = q_apply({"params": q_params}, obs, acts)
+                    return jnp.mean((vals - jax.lax.stop_gradient(y_shifted)[None, :])**2)
+                grads = jax.grad(qloss)(state.q_params)
+                updates, _ = q_tx.update(grads, state.q_opt_state, state.q_params)
+                q_after = optax.apply_updates(state.q_params, updates)
+                return jnp.mean(q_apply({"params": q_after},
+                           fixed_probe["observations"], fixed_probe["actions"]), axis=0)
+
+            plus = virtual_response(y + delta * direction)
+            minus = virtual_response(y - delta * direction)
+            response = (plus - minus) / (2.0 * delta)
+            gain = jnp.sqrt(jnp.mean(response**2) + 1e-30)
+            qv = jnp.min(q_apply({"params": state.q_target_params},obs,acts), axis=0)
+            v = v_apply({"params": state.v_params},obs)
+            w = jnp.where(qv-v >= 0.0, expectile, 1.0-expectile)
+            kappa = jnp.mean(w)
+            ess = (jnp.mean(w)**2) / jnp.maximum(jnp.mean(w*w), 1e-12)
+            risk_gain = gain
+            risk_kappa = gain / jnp.sqrt(jnp.maximum(ess, 1e-6))
+            numeric_valid = jnp.all(jnp.isfinite(plus)) & jnp.all(jnp.isfinite(minus))
+            valid = valid_source & numeric_valid & jnp.isfinite(gain) & (gain > 1e-10)
+            return {
+                "bk_directional_gain": gain,
+                "bk_gain_ess_corrected": risk_kappa,
+                "kappa_batch_mean": kappa,
+                "expectile_weight_ess_fraction": ess,
+                "td_centered_source_rms": source_rms,
+                "bk_probe_delta": delta,
+                "bk_probe_valid": valid.astype(jnp.float32),
+                "bk_response_centered_rms": jnp.sqrt(jnp.mean(
+                   (response - jnp.mean(response))**2) + 1e-30),
+                "bk_response_even_rms": jnp.sqrt(jnp.mean(
+                   ((plus + minus) * 0.5 - virtual_response(y))**2) + 1e-30),
+            }
+        return probe
+
+
+    def _build_residual_bk_v20_probe(self):
+        """Three independent diagnostics: head G/kappa, B on independent inputs,
+        and B on the residual-induced Bellman direction. ALL use frozen state.
+
+        Ghat is a trained conditional proxy, not the true conditional expectation.
+        B here means only the one-step Adam *output* response on fixed Q probe.
+        Fixed random and constant input directions don't depend on TD or G.
+        The joint directional probe uses h_G=gamma(1-done)*Ghat(s')/kappahat(s').
+        Never commits any network/optimizer update or consumes train RNG.
+        """
+        q_apply = self.q_def.apply
+        v_apply = self.v_def.apply
+        head_apply = self.diag_def.apply
+        q_tx = self.q_tx
+        discount, etau = self.discount, self.iql_tau
+        rel_delta = self.causal_sensitivity_relative_delta
+        kfloor = self.diag_kappa_floor
+        diag_seed = self.diag_seed
+        joint_half_fd_max_relerr = self.causal_joint_half_fd_max_relerr
+
+        def srms(x):
+            return jnp.sqrt(jnp.mean(jnp.square(x)) + 1e-30)
+
+        def head_g_k(s, state):
+            raw = head_apply({"params": state.diag_params}, s)
+            g = raw[..., 0]
+            lo, hi = min(etau, 1.0-etau), max(etau, 1.0-etau)
+            k = jnp.maximum(lo + (hi-lo) * jax.nn.sigmoid(raw[..., 1]), kfloor)
+            return g, k
+
+        @jax.jit
+        def probe(state: IQLState, batch: TensorBatch, fixed: TensorBatch):
+            obs, act = batch["observations"], batch["actions"]
+            nxt = batch["next_observations"]
+            rew = jnp.squeeze(batch["rewards"], -1)
+            done = jnp.squeeze(batch["dones"], -1)
+            vobs = v_apply({"params":state.v_params}, obs)
+            g, kap = head_g_k(obs, state)
+            dhat = g / kap
+            # Raw score labels are only one behavior action per state. Their
+            # conditional expectation is the estimand, not the individual score.
+            tq = jnp.min(q_apply({"params":state.q_target_params}, obs, act),axis=0)
+            adv = tq-vobs
+            w = jnp.where(adv >= 0, etau, 1.0-etau)
+            score_label = w*adv
+            head_score_rmse = srms(g-score_label)
+            label_rms = srms(score_label)
+            v_scale = jnp.maximum(1.0, srms(vobs))
+            residual_score = srms(dhat) / v_scale
+            # Necessary but NOT sufficient calibration check: head outputs
+            # should at least match the unconditional aggregate moment/weight.
+            # One sampled action per state makes this noisy; quality failures
+            # suppress adaptive intervention rather than silently trusting Ghat.
+            kappa_calibration_gap = jnp.abs(jnp.mean(kap)-jnp.mean(w)) / jnp.maximum(jnp.mean(w),1e-4)
+            g_calibration_gap = jnp.abs(jnp.mean(g)-jnp.mean(score_label)) / jnp.maximum(jnp.mean(jnp.abs(score_label)),1e-4)
+            head_calibrated = ((kappa_calibration_gap < 0.50) & (g_calibration_gap < 2.0))
+            ref_numerical_valid = (jnp.all(jnp.isfinite(dhat)) &
+                         jnp.all(jnp.isfinite(g)) &
+                         (srms(dhat) > 1e-10))
+            ref_valid = ref_numerical_valid & head_calibrated
+            next_v = v_apply({"params":state.v_params},nxt)
+            y=rew+(1.0-done)*discount*next_v
+            gnext, knext = head_g_k(nxt, state)
+            h_g = discount*(1.0-done)*gnext/knext
+            h_g_scale = srms(h_g)
+            hg_valid = (jnp.all(jnp.isfinite(h_g)) & (h_g_scale > 1e-9))
+            h_g_unit = jnp.where(hg_valid,h_g/jnp.maximum(h_g_scale,1e-9), jnp.zeros_like(h_g))
+            h_const = jnp.ones_like(y)
+            # Fixed random direction across timesteps for comparable risk gain.
+            h_random=jax.random.rademacher(jax.random.PRNGKey(diag_seed+571),y.shape,dtype=y.dtype)
+            h_random = h_random/jnp.maximum(srms(h_random),1e-9)
+            eps=rel_delta*jnp.maximum(1.0,srms(y))
+
+            def virtual_output(yarg):
+                def qloss(params):
+                    preds=q_apply({"params":params},obs,act)
+                    return jnp.mean((preds-jax.lax.stop_gradient(yarg)[None,:])**2)
+                grads=jax.grad(qloss)(state.q_params)
+                updates,_=q_tx.update(grads,state.q_opt_state,state.q_params)
+                new_params=optax.apply_updates(state.q_params,updates)
+                return jnp.mean(q_apply({"params":new_params},
+                   fixed["observations"],fixed["actions"]),axis=0)
+
+            def response(direction):
+                pp=virtual_output(y+eps*direction)
+                mm=virtual_output(y-eps*direction)
+                return (pp-mm)/(2.0*eps),pp,mm
+
+            bc,_,_=response(h_const)
+            br,_,_=response(h_random)
+            bg,bp,bm=response(h_g_unit)
+            hc=(virtual_output(y+.5*eps*h_const)-virtual_output(y-.5*eps*h_const))/eps
+            hr=(virtual_output(y+.5*eps*h_random)-virtual_output(y-.5*eps*h_random))/eps
+            b_const_half_err=srms(hc-bc)/jnp.maximum(srms(bc),1e-8)
+            b_rand_half_err=srms(hr-br)/jnp.maximum(srms(br),1e-8)
+            gc,gr,gg=srms(bc),srms(br),srms(bg)
+            B_independent=jnp.maximum(gc,gr)
+            # An independent consistency check with half perturbation scale.
+            bp2=virtual_output(y+0.5*eps*h_g_unit)
+            bm2=virtual_output(y-0.5*eps*h_g_unit)
+            bg_half=(bp2-bm2)/eps
+            half_relerr=srms(bg_half-bg)/jnp.maximum(srms(bg),1e-8)
+            gB=jnp.maximum(0.0, gg)
+            B_valid=(jnp.isfinite(gc)&jnp.isfinite(gr)&
+                     (B_independent>1e-10)&
+                     jnp.all(jnp.isfinite(bc)) & jnp.all(jnp.isfinite(br)) &
+                     (b_const_half_err<0.5) & (b_rand_half_err<0.5))
+            ess=(jnp.mean(w)**2)/jnp.maximum(jnp.mean(w*w),1e-12)
+            return {
+                'v20_residual_score':residual_score,
+                'v20_residual_valid':ref_valid.astype(jnp.float32),
+                'v20_residual_numerical_valid':ref_numerical_valid.astype(jnp.float32),
+                'v20_head_global_calibrated':head_calibrated.astype(jnp.float32),
+                'v20_head_kappa_global_relerr':kappa_calibration_gap,
+                'v20_head_G_global_discrepancy':g_calibration_gap,
+                'v20_Ghat_rms':srms(g),
+                'v20_kappahat_mean':jnp.mean(kap),
+                'v20_Ghat_over_kappahat_rms':srms(dhat),
+                'v20_G_label_rms':label_rms,
+                'v20_G_head_label_rmse':head_score_rmse,
+                'v20_Ghat_mean':jnp.mean(g),
+                'v20_G_sample_score_mean':jnp.mean(score_label),
+                'v20_kappa_sample_mean':jnp.mean(w),
+                'v20_expectile_weight_ess':ess,
+                'v20_B_const_gain':gc,
+                'v20_B_random_gain':gr,
+                'v20_B_independent_gain':B_independent,
+                'v20_B_const_half_delta_relerr':b_const_half_err,
+                'v20_B_random_half_delta_relerr':b_rand_half_err,
+                'v20_B_valid':B_valid.astype(jnp.float32),
+                'v20_B_residual_gain':gB,
+                'v20_B_residual_valid':hg_valid.astype(jnp.float32),
+                'v20_B_residual_rel_half_eps_err':half_relerr,
+                'v20_h_G_input_rms':h_g_scale,
+                'v20_B_h_G_output_rms_est':gg*h_g_scale,
+                'v20_B_residual_response_centered_rms':srms(bg-jnp.mean(bg)),
+                # Stage-2: propagation risk normalized by the ACTUAL Bellman
+                # target RMS on the fixed independent controller batch.
+                'v21_target_rms':srms(y),
+                'v21_R_target_risk':h_g_scale/jnp.maximum(1.0,srms(y)),
+                'v21_BR_target_risk':(gg*h_g_scale)/jnp.maximum(1.0,srms(y)),
+                'v21_BR_valid':(hg_valid & head_calibrated &
+                    (half_relerr<joint_half_fd_max_relerr) & jnp.isfinite(gg)).astype(jnp.float32),
+            }
+        return probe
 
 
     def _build_value_divergence_diagnostic_step(self):
@@ -7935,6 +8379,138 @@ def load_run_config_for_refit(
 
 
 
+def causal_research_start_steps(config: TrainConfig) -> Tuple[int, ...]:
+    """Pre-specified V17-informed, descriptive schedules; NOT adaptive onset peeking.
+
+    These are NOT purportedly universal optimal steps.  In fixed mode the user's
+    explicit starts are authoritative. Risk-focused mode intentionally excludes
+    irrelevant configurations to avoid millions of unnecessary GPU branch updates.
+    """
+    if config.causal_branch_schedule_profile == "fixed":
+        return tuple(sorted(set(int(x) for x in config.causal_branch_start_steps)))
+    name = config.env.lower()
+    gamma, expectile = float(config.discount), float(config.iql_tau)
+    high = abs(gamma-0.999) < 1e-6 and abs(expectile-0.99) < 1e-6
+    medium = abs(gamma-0.99) < 1e-6 and abs(expectile-0.99) < 1e-6
+    low = abs(gamma-0.99) < 1e-6 and abs(expectile-0.9) < 1e-6
+    if "cube" in name and high:
+        return (50000,)  # V17 onset about 99.75k; avoid post-onset intervention
+    if "scene" in name and high:
+        return (120000,)  # V17 onset about 170k
+    if "scene" in name and medium:
+        return (200000,)  # V17 onset about 274k, previously unobserved at 200k
+    if "antmaze" in name and medium:
+        return (650000,)  # V17 onset about 732.5k
+    if "cube" in name and low:
+        return (100000,)  # matched non-runaway negative control
+    return ()
+
+
+def causal_controller_scale(kind: str, measured: Dict[str, float],
+                            reference: Dict[str, float], margin: float,
+                            alpha_min: float) -> float:
+    """Conservative, deterministic policy for one-step sensitivity caps.
+
+    The reference is measured from the SAME start checkpoint. Any non-finite
+    signal turns OFF adaptive damping and is logged as invalid. No true-error
+    signal is used. Only the designated critic *parameter step* is scaled.
+    """
+    field = "bk_gain_ess_corrected" if kind == "bk_kappa_control" else "bk_directional_gain"
+    gain, ref = float(measured.get(field, float("nan"))), float(reference.get(field, float("nan")))
+    if (float(measured.get("bk_probe_valid", 0.0)) < 0.5 or
+            float(reference.get("bk_probe_valid", 0.0)) < 0.5 or
+            not np.isfinite(gain) or not np.isfinite(ref) or gain <= 0.0 or ref <= 0.0):
+        return 1.0
+    return float(np.clip((ref * margin) / gain, alpha_min, 1.0))
+
+
+def v20_factorial_actions(kind: str, measured: Dict[str, float],
+                          reference: Dict[str, float], residual_margin: float,
+                          b_margin: float, alpha_min: float) -> Tuple[float, float]:
+    """Return (Q step scale, additional V-fit binary gate) without peeking at
+    future data. V-control uses only head G/kappa; B-control uses only the
+    independent constant/random one-step Adam probes. Joint combines both.
+    Invalid measurements do not trigger intervention and must be logged.
+    """
+    b_active = kind in ('bk_independent_control','residual_bk_joint')
+    r_active = kind in ('residual_control','residual_bk_joint')
+    q_scale, gate = 1.0, 0.0
+    if b_active:
+        value, base = measured.get('v20_B_independent_gain'), reference.get('v20_B_independent_gain')
+        if (measured.get('v20_B_valid',0.) >= .5 and
+            reference.get('v20_B_valid',0.) >= .5 and
+            value is not None and base is not None and
+            np.isfinite(value) and np.isfinite(base) and value > 0 and base > 0):
+            q_scale = float(np.clip(b_margin*base/value, alpha_min, 1.0))
+    if r_active:
+        value, base = measured.get('v20_residual_score'), reference.get('v20_residual_score')
+        if (measured.get('v20_residual_valid',0.) >= .5 and
+            reference.get('v20_residual_valid',0.) >= .5 and
+            value is not None and base is not None and
+            np.isfinite(value) and np.isfinite(base) and value > 0 and base > 0):
+            gate = float(value > residual_margin*base)
+    return q_scale, gate
+
+
+# V21 Stage-2 gating rules. These use only the identical fixed controller
+# input/output probes at every checkpoint; never use oracle error or future logs.
+V21_B_TARGET_TYPES = frozenset((
+    'bk_target_relax', 'bk_target_fixed', 'factorial_relax_residual_target'))
+V21_R_TARGET_TYPES = frozenset((
+    'residual_target_control', 'residual_target_fixed', 'bk_residual_propagation',
+    'factorial_qstep_residual_target', 'factorial_relax_residual_target'))
+V21_SENSITIVE_TYPES = frozenset((
+    'bk_target_relax', 'residual_target_control', 'bk_residual_propagation',
+    'factorial_qstep_residual_target', 'factorial_relax_residual_target'))
+V21_ALL_TYPES = V21_B_TARGET_TYPES | V21_R_TARGET_TYPES
+
+
+def v21_stage2_actions(kind: str, measured: Dict[str, float],
+                       reference: Dict[str, float], config: TrainConfig) -> Tuple[float,float,float]:
+    """Return (critic parameter scale, target-relax alpha, residual-target alpha).
+
+    Default alpha=1 for relaxation and alpha=0 for target correction.
+    Invalid/nonlinear/out-of-calibration head or B measurements fail closed
+    (no experimental intervention). No oracle labels or future-onset peeking.
+    """
+    q_scale, relax, res_alpha = 1.0, 1.0, 0.0
+    if kind == 'bk_target_fixed':
+        relax = float(config.causal_b_target_relax_fixed_alpha)
+    elif kind == 'residual_target_fixed':
+        # Comparability control: same cap and sign of correction, no risk gating.
+        if measured.get('v20_residual_valid', 0.) >= 0.5:
+            res_alpha = float(config.causal_residual_target_fixed_alpha)
+    if kind == 'factorial_qstep_residual_target':
+        q_scale, _ = v20_factorial_actions(
+            'bk_independent_control', measured, reference,
+            config.causal_residual_trigger_margin, config.causal_bk_trigger_margin,
+            config.causal_sensitivity_alpha_min)
+    b_needed = kind in ('bk_target_relax', 'factorial_relax_residual_target')
+    if b_needed:
+        value = measured.get('v20_B_independent_gain', float('nan'))
+        base = reference.get('v20_B_independent_gain', float('nan'))
+        if (measured.get('v20_B_valid', 0.) >= 0.5 and
+            reference.get('v20_B_valid', 0.) >= 0.5 and
+            np.isfinite(value) and np.isfinite(base) and value > 0 and base > 0):
+            relax = float(np.clip(config.causal_bk_trigger_margin*base/value,
+                                  config.causal_b_target_relax_alpha_floor, 1.0))
+    if kind in ('residual_target_control', 'factorial_qstep_residual_target',
+                'factorial_relax_residual_target'):
+        key, valid_key = 'v21_R_target_risk', 'v20_residual_valid'
+    elif kind == 'bk_residual_propagation':
+        key, valid_key = 'v21_BR_target_risk', 'v21_BR_valid'
+    else:
+        return q_scale, relax, res_alpha
+    value, base = measured.get(key, float('nan')), reference.get(key, float('nan'))
+    if (measured.get(valid_key, 0.) >= 0.5 and
+        reference.get(valid_key, 0.) >= 0.5 and
+        np.isfinite(value) and np.isfinite(base) and value > 0 and base > 0):
+        threshold = config.causal_residual_trigger_margin * base
+        res_alpha = float(config.causal_residual_target_alpha_max *
+                          np.clip(1.0 - threshold/max(value, 1e-12), 0.0, 1.0))
+    return q_scale, relax, res_alpha
+
+
 def _causal_probe_stats(trainer: IQLJAX, state: IQLState, probe: TensorBatch) -> Dict[str, float]:
     """Stable CPU float64 probe summaries. No gradient or training mutation."""
     obs, act = probe["observations"], probe["actions"]
@@ -7954,6 +8530,13 @@ def _causal_probe_stats(trainer: IQLJAX, state: IQLState, probe: TensorBatch) ->
     dones = np.asarray(jax.device_get(probe["dones"]), dtype=np.float64).reshape(-1)
     backup = rewards + (1.0 - dones) * trainer.discount * next_v
     common = qs.mean(axis=0)
+    target_min = target_qs.min(axis=0)
+    adv = target_min - vs
+    w = np.where(adv >= 0., trainer.iql_tau, 1. - trainer.iql_tau)
+    td = qs - backup[None, :]
+    td_abs = np.abs(td)
+    weighted_score = w * adv
+    ess = (np.mean(w)**2) / max(float(np.mean(w*w)), 1e-30)
 
 
     def rms(x):
@@ -7961,7 +8544,30 @@ def _causal_probe_stats(trainer: IQLJAX, state: IQLState, probe: TensorBatch) ->
         return float(np.sqrt(np.mean(np.square(x))))
 
 
+    reward_ref = max(rms(rewards), float(np.quantile(np.abs(rewards), 0.99)), 1e-8)
+    nominal = reward_ref / max(1.0-trainer.discount, 1e-6)
     return {
+        "nominal_discounted_return_scale": nominal,
+        "q_runaway_candidate_5x": bool(rms(common) > 5.0*nominal and np.mean(common) > 0.0),
+        "v_blowup_candidate_5x": bool(rms(vs) > 5.0*nominal),
+        "q_rms_over_nominal": rms(common) / nominal,
+        "v_rms_over_nominal": rms(vs) / nominal,
+        # These are probe DATA-FIT proxies, never Q* or true V* errors.
+        "probe_td_rms": rms(td),
+        "probe_td_abs_p95": float(np.quantile(td_abs, 0.95)),
+        "probe_td_abs_p99": float(np.quantile(td_abs, 0.99)),
+        "probe_td_tail_over_rms": float(np.quantile(td_abs, 0.99) / max(rms(td), 1e-30)),
+        "probe_td_signed_mean": float(np.mean(td)),
+        "probe_expectile_weighted_loss": float(np.mean(w * adv**2)),
+        "probe_expectile_score_mean": float(np.mean(weighted_score)),
+        "probe_expectile_score_absmean": float(np.mean(np.abs(weighted_score))),
+        "probe_expectile_score_imbalance": float(abs(np.mean(weighted_score)) / max(np.mean(np.abs(weighted_score)), 1e-30)),
+        "probe_kappa_batch_mean": float(np.mean(w)),
+        "probe_expectile_weight_ess": float(ess),
+        "probe_expectile_positive_fraction": float(np.mean(adv >= 0.)),
+        "probe_target_online_q_lag_rms": rms(qs - target_qs),
+        "q_common_abs_p99": float(np.quantile(np.abs(common), 0.99)),
+        "v_abs_p99": float(np.quantile(np.abs(vs), 0.99)),
         "q_common_mean": float(np.mean(common)),
         "q_common_rms": rms(common),
         "q_common_centered_rms": rms(common - np.mean(common)),
@@ -8149,6 +8755,15 @@ def _train_impl(config: TrainConfig):
             action_ref_rng,
         )
 
+    # Independent fixed INPUT and OUTPUT probes for V20 sensitivity controls:
+    # changing minibatches would confound a reference-vs-current B gain ratio.
+    diagnostic_control_batch = None
+    if (config.causal_branch_enabled and not refit_only and
+            any(k in ("residual_control", "bk_independent_control", "residual_bk_joint")
+                or k in V21_ALL_TYPES for k in config.causal_branch_types)):
+        diagnostic_control_batch = replay_buffer.sample_with_rng(
+            config.batch_size, np.random.default_rng(seed + 642_987))
+
 
 
 
@@ -8220,6 +8835,14 @@ def _train_impl(config: TrainConfig):
         diag_local_amplitude_low=config.diag_local_amplitude_low,
         diag_local_amplitude_high=config.diag_local_amplitude_high,
         causal_target_tau_multiplier=config.causal_target_tau_multiplier,
+        causal_target_tau_medium_multiplier=config.causal_target_tau_medium_multiplier,
+        causal_target_tau_slow_multiplier=config.causal_target_tau_slow_multiplier,
+        causal_sensitivity_relative_delta=config.causal_sensitivity_relative_delta,
+        causal_residual_correction_cap_fraction=config.causal_residual_correction_cap_fraction,
+        causal_joint_half_fd_max_relerr=config.causal_joint_half_fd_max_relerr,
+        causal_fixed_v_update_scale=config.causal_fixed_v_update_scale,
+        causal_huber_median_multiplier=config.causal_huber_median_multiplier,
+        causal_huber_target_floor_fraction=config.causal_huber_target_floor_fraction,
         diag_target_tau_fast_multiplier=config.diag_target_tau_fast_multiplier,
         diag_target_tau_very_fast_multiplier=config.diag_target_tau_very_fast_multiplier,
         diag_actual_source_cap_fraction=config.diag_actual_source_cap_fraction,
@@ -8276,6 +8899,19 @@ def _train_impl(config: TrainConfig):
             "state": serialization.to_state_dict(entry["state"]),
             "fixed_target": serialization.to_state_dict(entry["fixed_target"]),
             "fixed_v": serialization.to_state_dict(entry["fixed_v"]),
+            "sensitivity_reference": entry.get("sensitivity_reference"),
+            "sensitivity_last": entry.get("sensitivity_last"),
+            "q_update_scale": entry.get("q_update_scale", 1.0),
+            "residual_gate": entry.get("residual_gate", 0.0),
+            "target_relax_alpha": entry.get("target_relax_alpha", 1.0),
+            "residual_target_alpha": entry.get("residual_target_alpha", 0.0),
+            "q_streak": entry.get("q_streak", 0),
+            "v_streak": entry.get("v_streak", 0),
+            "q_onset": entry.get("q_onset"),
+            "v_onset": entry.get("v_onset"),
+            "last_streak_check": entry.get("last_streak_check"),
+            "eval_successes": entry.get("eval_successes", []),
+            "eval_rewards": entry.get("eval_rewards", []),
         }
 
 
@@ -8293,16 +8929,27 @@ def _train_impl(config: TrainConfig):
             "fixed_v": tree_to_device(
                 serialization.from_state_dict(trainer.state.v_params, entry["fixed_v"]), jax_device
             ),
+            "sensitivity_reference": entry.get("sensitivity_reference"),
+            "sensitivity_last": entry.get("sensitivity_last"),
+            "q_update_scale": float(entry.get("q_update_scale", 1.0)),
+            "residual_gate": float(entry.get("residual_gate", 0.0)),
+            "target_relax_alpha": float(entry.get("target_relax_alpha", 1.0)),
+            "residual_target_alpha": float(entry.get("residual_target_alpha", 0.0)),
+            "q_streak": int(entry.get("q_streak", 0)),
+            "v_streak": int(entry.get("v_streak", 0)),
+            "q_onset": entry.get("q_onset"),
+            "v_onset": entry.get("v_onset"),
+            "last_streak_check": entry.get("last_streak_check"),
+            "eval_successes": entry.get("eval_successes", []),
+            "eval_rewards": entry.get("eval_rewards", []),
         }
-
-
 
 
     def _progress_state():
         if not config.causal_branch_enabled or refit_only:
             return trainer.state_dict()
         return {
-            "__integrated_causal_version__": 1,
+            "__integrated_causal_version__": 2,
             "baseline": trainer.state_dict(),
             "active": {key: _causal_pack(entry) for key, entry in causal_active.items()},
             "finished": causal_finished.copy(),
@@ -8321,7 +8968,7 @@ def _train_impl(config: TrainConfig):
 
 
     def _load_progress_state(payload):
-        if not isinstance(payload, dict) or payload.get("__integrated_causal_version__") != 1:
+        if not isinstance(payload, dict) or payload.get("__integrated_causal_version__") not in (1, 2):
             trainer.load_state_dict(payload)
             return
         trainer.load_state_dict(payload["baseline"])
@@ -8343,6 +8990,10 @@ def _train_impl(config: TrainConfig):
 
 
 
+    research_start_steps = causal_research_start_steps(config) if config.causal_branch_enabled else ()
+    if config.causal_branch_enabled:
+        print(f"Causal branch schedule profile={config.causal_branch_schedule_profile}; starts={research_start_steps}; "
+              f"horizon={config.causal_branch_horizon}; types={config.causal_branch_types}")
     start_timestep = _training_timestep()
     eval_logs: List[Dict[str, Any]] = []
     diagnostic_log_path: Optional[Path] = None
@@ -8586,128 +9237,284 @@ def _train_impl(config: TrainConfig):
 
 
 
-            # Long, *actual* branch updates (not 100-step diagnostic scans).
+            # V18 real, shared-minibatch causal branches. A new branch begins
+            # strictly AFTER the baseline step, so step+1 is the first intervention.
             if config.causal_branch_enabled:
-                if int(step) in {int(x) for x in config.causal_branch_start_steps}:
-                    for kind in config.causal_branch_types:
-                        key = f"{step}__{kind}"
-                        if key in causal_active or key in causal_finished:
-                            continue
-                        causal_active[key] = {
-                            "kind": kind,
-                            "start": int(step),
-                            "end": int(step) + int(config.causal_branch_horizon),
-                            # JAX arrays are immutable; branch updates return new states.
-                            "state": trainer.state,
-                            "fixed_target": trainer.state.q_target_params,
-                            "fixed_v": trainer.state.v_params,
-                        }
-                        _causal_write(key, {
-                            "timestep": int(step),
-                            "event": "branch_start",
-                            "kind": kind,
-                            "intervention_steps": int(config.causal_intervention_steps),
-                            "horizon": int(config.causal_branch_horizon),
-                            "probe": _causal_probe_stats(trainer, trainer.state, diagnostic_probe_batch),
-                        })
-
+                if int(step) in research_start_steps:
+                    if step + int(config.causal_branch_horizon) > int(config.max_timesteps):
+                        print(f"Skipping causal start {step}: branch end exceeds max_timesteps")
+                    else:
+                        initial_probe = None
+                        initial_sensitive = None
+                        if any(kind in ("bk_gain_control", "bk_kappa_control",
+                                        "residual_control", "bk_independent_control",
+                                        "residual_bk_joint") or kind in V21_ALL_TYPES
+                               for kind in config.causal_branch_types):
+                            if any(k in ("residual_control", "bk_independent_control", "residual_bk_joint")
+                                   or k in V21_ALL_TYPES for k in config.causal_branch_types):
+                                raw = trainer._residual_bk_v20_step(
+                                    trainer.state, diagnostic_control_batch, diagnostic_probe_batch)
+                            else:
+                                raw = trainer._causal_sensitivity_step(
+                                    trainer.state, batch, diagnostic_probe_batch)
+                            initial_sensitive = {k: float(jax.device_get(v)) for k, v in raw.items()}
+                        for kind in config.causal_branch_types:
+                            key = f"{step}__{kind}"
+                            if key in causal_active or key in causal_finished:
+                                continue
+                            if initial_probe is None:
+                                initial_probe = _causal_probe_stats(
+                                    trainer, trainer.state, diagnostic_probe_batch)
+                            is_sensitive = (kind in ("bk_gain_control", "bk_kappa_control",
+                                        "residual_control", "bk_independent_control", "residual_bk_joint")
+                                        or kind in V21_ALL_TYPES
+                                        or (kind == "shadow_baseline" and initial_sensitive is not None
+                                            and "v20_residual_score" in initial_sensitive))
+                            causal_active[key] = {
+                                "kind": kind, "start": int(step),
+                                "end": int(step) + int(config.causal_branch_horizon),
+                                "state": trainer.state,
+                                "fixed_target": trainer.state.q_target_params,
+                                "fixed_v": trainer.state.v_params,
+                                "sensitivity_reference": initial_sensitive if is_sensitive else None,
+                                "sensitivity_last": initial_sensitive if is_sensitive else None,
+                                "q_update_scale": 1.0,
+                                "residual_gate": 0.0,
+                                "target_relax_alpha": 1.0,
+                                "residual_target_alpha": 0.0,
+                                "q_streak": 0, "v_streak": 0,
+                                "q_onset": None, "v_onset": None,
+                                "last_streak_check": None,
+                                "eval_successes": [], "eval_rewards": [],
+                            }
+                            _causal_write(key, {
+                                "timestep": int(step), "event": "branch_start",
+                                "kind": kind, "intervention_steps": int(config.causal_intervention_steps),
+                                "sensitivity_persistent": bool(config.causal_sensitivity_persistent),
+                                "horizon": int(config.causal_branch_horizon),
+                                "schedule_profile": config.causal_branch_schedule_profile,
+                                "probe": initial_probe,
+                                "sensitivity_reference": initial_sensitive if is_sensitive else None,
+                                "target_tau_multiplier": {
+                                    "target_tau_slow": config.causal_target_tau_slow_multiplier,
+                                    "target_tau_medium": config.causal_target_tau_medium_multiplier,
+                                    "target_tau_fast": config.causal_target_tau_multiplier,
+                                }.get(kind, 1.0),
+                            })
 
                 baseline_probe_stats = None
                 to_finish = []
                 for key, entry in list(causal_active.items()):
                     if int(step) <= entry["start"]:
                         continue
-                    within_intervention = (
-                        int(step) - entry["start"] <= int(config.causal_intervention_steps)
-                    )
                     kind = entry["kind"]
-                    if within_intervention and kind != "shadow_baseline":
+                    elapsed = int(step) - entry["start"]
+                    is_sensitive = (kind in ("bk_gain_control", "bk_kappa_control",
+                                        "residual_control", "bk_independent_control", "residual_bk_joint")
+                                    or kind in V21_ALL_TYPES
+                                    or (kind == "shadow_baseline" and
+                                        entry.get("sensitivity_reference") is not None and
+                                        "v20_residual_score" in entry["sensitivity_reference"]))
+                    persistent_kind = (kind in (
+                        "bk_gain_control", "bk_kappa_control", "q_update_fixed",
+                        "q_td_huber", "v_extra_fit", "v_update_fixed",
+                        "residual_control", "bk_independent_control", "residual_bk_joint",
+                    ) or kind in V21_ALL_TYPES)
+                    window = (int(config.causal_branch_horizon)
+                              if persistent_kind and config.causal_sensitivity_persistent
+                              else int(config.causal_intervention_steps))
+                    within_intervention = elapsed <= window and kind != "shadow_baseline"
+                    q_update_scale = 1.0
+                    residual_gate = 0.0
+                    target_relax_alpha = 1.0
+                    residual_target_alpha = 0.0
+                    if within_intervention and kind == "q_update_fixed":
+                        q_update_scale = float(config.causal_fixed_q_update_scale)
+                    elif within_intervention and is_sensitive:
+                        if (elapsed == 1 or
+                            (elapsed - 1) % int(config.causal_sensitivity_probe_every) == 0 or
+                            entry.get("sensitivity_last") is None):
+                            if kind in ("residual_control", "bk_independent_control", "residual_bk_joint") or kind in V21_ALL_TYPES:
+                                raw = trainer._residual_bk_v20_step(
+                                    entry["state"], diagnostic_control_batch, diagnostic_probe_batch)
+                            else:
+                                raw = trainer._causal_sensitivity_step(
+                                    entry["state"], batch, diagnostic_probe_batch)
+                            measured = {k: float(jax.device_get(v)) for k, v in raw.items()}
+                            entry["sensitivity_last"] = measured
+                            if kind in V21_ALL_TYPES:
+                                q, br, r_alpha = v21_stage2_actions(
+                                    kind, measured, entry["sensitivity_reference"], config)
+                                entry["q_update_scale"] = q
+                                entry["target_relax_alpha"] = br
+                                entry["residual_target_alpha"] = r_alpha
+                            elif kind in ("residual_control", "bk_independent_control", "residual_bk_joint"):
+                                q, r = v20_factorial_actions(
+                                    kind, measured, entry["sensitivity_reference"],
+                                    config.causal_residual_trigger_margin,
+                                    config.causal_bk_trigger_margin,
+                                    config.causal_sensitivity_alpha_min)
+                                entry["q_update_scale"] = q
+                                entry["residual_gate"] = r
+                            else:
+                                entry["q_update_scale"] = causal_controller_scale(
+                                    kind, measured, entry["sensitivity_reference"],
+                                    config.causal_sensitivity_gain_margin,
+                                    config.causal_sensitivity_alpha_min)
+                        q_update_scale = float(entry["q_update_scale"])
+                        residual_gate = float(entry.get("residual_gate", 0.0))
+                        target_relax_alpha = float(entry.get("target_relax_alpha", 1.0))
+                        residual_target_alpha = float(entry.get("residual_target_alpha", 0.0))
+                    if (kind == "shadow_baseline" and is_sensitive and
+                            (elapsed == 1 or (elapsed-1) % int(config.causal_sensitivity_probe_every) == 0)):
+                        raw = trainer._residual_bk_v20_step(
+                            entry["state"], diagnostic_control_batch, diagnostic_probe_batch)
+                        entry["sensitivity_last"] = {
+                            k: float(jax.device_get(v)) for k, v in raw.items()}
+                    if within_intervention:
                         updater = trainer._causal_branch_train_steps[kind]
                         next_state, branch_train_logs = updater(
-                            entry["state"], batch, entry["fixed_target"], entry["fixed_v"]
+                            entry["state"], batch, entry["fixed_target"], entry["fixed_v"],
+                            jnp.asarray(q_update_scale, dtype=jnp.float32),
+                            jnp.asarray(residual_gate, dtype=jnp.float32),
+                            jnp.asarray(target_relax_alpha, dtype=jnp.float32),
+                            jnp.asarray(residual_target_alpha, dtype=jnp.float32),
                         )
                     else:
                         next_state, branch_train_logs = trainer._train_step(entry["state"], batch)
                     entry["state"] = next_state
-                    elapsed = int(step) - entry["start"]
                     should_log = (
                         elapsed == 1
                         or int(step) % int(config.causal_branch_log_every) == 0
+                        or int(step) % 250 == 0  # exact 250-step runaway checks
                         or int(step) >= entry["end"]
                     )
                     if should_log:
                         if baseline_probe_stats is None:
                             baseline_probe_stats = _causal_probe_stats(
-                                trainer, trainer.state, diagnostic_probe_batch
-                            )
+                                trainer, trainer.state, diagnostic_probe_batch)
                         branch_probe = _causal_probe_stats(
-                            trainer, entry["state"], diagnostic_probe_batch
-                        )
+                            trainer, entry["state"], diagnostic_probe_batch)
+                        # Consecutive 250-step observations, NOT exact onset between probes.
+                        if int(step) % 250 == 0:
+                            prior = entry.get("last_streak_check")
+                            consecutive = prior is None or int(step) - int(prior) == 250
+                            entry["q_streak"] = (entry.get("q_streak", 0) if consecutive else 0) + 1 if branch_probe["q_runaway_candidate_5x"] else 0
+                            entry["v_streak"] = (entry.get("v_streak", 0) if consecutive else 0) + 1 if branch_probe["v_blowup_candidate_5x"] else 0
+                            entry["last_streak_check"] = int(step)
+                            if entry["q_streak"] >= 5 and entry.get("q_onset") is None:
+                                entry["q_onset"] = int(step) - 4 * 250
+                            if entry["v_streak"] >= 5 and entry.get("v_onset") is None:
+                                entry["v_onset"] = int(step) - 4 * 250
                         record = {
-                            "timestep": int(step),
-                            "event": "branch_step",
-                            "kind": kind,
-                            "elapsed": elapsed,
-                            "intervention_active": bool(within_intervention and kind != "shadow_baseline"),
-                            "probe": branch_probe,
-                            "baseline_probe": baseline_probe_stats,
+                            "timestep": int(step), "event": "branch_step",
+                            "kind": kind, "elapsed": elapsed,
+                            "intervention_active": bool(within_intervention),
+                            "probe": branch_probe, "baseline_probe": baseline_probe_stats,
                             "q_rms_over_baseline": (
-                                branch_probe["q_common_rms"]
-                                / max(1e-30, baseline_probe_stats["q_common_rms"])
-                            ),
+                                branch_probe["q_common_rms"] /
+                                max(1e-30, baseline_probe_stats["q_common_rms"])),
+                            "v_rms_over_baseline": (
+                                branch_probe["v_rms"] /
+                                max(1e-30, baseline_probe_stats["v_rms"])),
+                            "td_probe_rms_over_baseline": (
+                                branch_probe["probe_td_rms"] /
+                                max(1e-30, baseline_probe_stats["probe_td_rms"])),
                             "q_loss": float(jax.device_get(branch_train_logs["q_loss"])),
                             "v_loss": float(jax.device_get(branch_train_logs["value_loss"])),
                             "actor_loss": float(jax.device_get(branch_train_logs["actor_loss"])),
+                            "q_update_scale": float(q_update_scale),
+                            "residual_extra_v_fit_trigger": float(residual_gate),
+                            "target_relax_alpha": float(target_relax_alpha),
+                            "residual_target_alpha": float(residual_target_alpha),
+                            "stage2_original_target_rms": float(jax.device_get(branch_train_logs.get("causal_stage2_original_target_rms", jnp.nan))),
+                            "stage2_effective_target_rms": float(jax.device_get(branch_train_logs.get("causal_stage2_effective_target_rms", jnp.nan))),
+                            "stage2_applied_target_displacement_rms": float(jax.device_get(branch_train_logs.get("causal_stage2_target_displacement_rms", jnp.nan))),
+                            "stage2_residual_applied_rms": float(jax.device_get(branch_train_logs.get("causal_stage2_residual_applied_rms", jnp.nan))),
+                            "stage2_residual_clip_fraction": float(jax.device_get(branch_train_logs.get("causal_stage2_residual_clip_fraction", jnp.nan))),
+                            "v_update_scale": float(config.causal_fixed_v_update_scale) if kind == "v_update_fixed" and within_intervention else 1.0,
+                            "q_train_mse": float(jax.device_get(branch_train_logs.get("causal_q_td_mse", branch_train_logs["q_loss"]))),
+                            "q_parameter_step_log10_l2": float(jax.device_get(branch_train_logs.get("causal_q_parameter_step_log10_l2", jnp.asarray(float('nan'))))),
+                            "v_parameter_step_log10_l2": float(jax.device_get(branch_train_logs.get("causal_v_parameter_step_log10_l2", jnp.asarray(float('nan'))))),
+                            "q_train_huber_tail_fraction": float(jax.device_get(branch_train_logs.get("causal_huber_tail_fraction", jnp.asarray(float('nan'))))),
+                            "q_train_huber_threshold": float(jax.device_get(branch_train_logs.get("causal_huber_threshold", jnp.asarray(float('nan'))))),
+                            "q_runaway_5x_consecutive_250_count": entry.get("q_streak", 0),
+                            "v_blowup_5x_consecutive_250_count": entry.get("v_streak", 0),
+                            "q_runaway_5x_onset": entry.get("q_onset"),
+                            "v_blowup_5x_onset": entry.get("v_onset"),
+                            "sensitivity_measurement": entry.get("sensitivity_last") if is_sensitive else None,
+                            "sensitivity_reference": entry.get("sensitivity_reference") if is_sensitive else None,
+                            "controller_model": (
+                                "v21_stage2_B_target_relax" if kind in ("bk_target_relax", "bk_target_fixed")
+                                else "v21_stage2_G_over_kappa_target" if kind in ("residual_target_control", "residual_target_fixed")
+                                else "v21_stage2_B_hG_propagation_gated" if kind == "bk_residual_propagation"
+                                else "v21_stage2_factorial_qstep_plus_G" if kind == "factorial_qstep_residual_target"
+                                else "v21_stage2_factorial_relax_plus_G" if kind == "factorial_relax_residual_target"
+                                else "v20_conditional_G_over_kappa_plus_independent_B" if kind == "residual_bk_joint"
+                                else "v20_conditional_G_over_kappa" if kind == "residual_control"
+                                else "v20_independent_random_constant_B" if kind == "bk_independent_control"
+                                else "1step_centered_td_adam_with_batch_ess" if kind == "bk_kappa_control"
+                                else "1step_centered_td_adam_gain" if kind == "bk_gain_control"
+                                else "fixed_critic_step_scaling" if kind == "q_update_fixed"
+                                else None),
                         }
                         if kind == "shadow_baseline":
                             record["state_exact_match"] = _causal_exact_equal(
-                                entry["state"], trainer.state
-                            )
+                                entry["state"], trainer.state)
                             if not record["state_exact_match"]:
                                 _causal_write(key, record)
                                 raise RuntimeError(
                                     "Causal shadow_baseline deviated from the real baseline at "
-                                    f"step {step}; aborting intervention comparison"
-                                )
+                                    f"step {step}; aborting intervention comparison")
                         _causal_write(key, record)
                     if (
                         int(step) % int(config.causal_branch_eval_every) == 0
                         or int(step) >= entry["end"]
                     ):
-                        # Branch evaluation must not change the real training RNG.
+                        # Branch evaluation may change environment RNG; snapshot
+                        # global NumPy/Python state, preserve baseline data sampling.
                         _np_before_eval = np.random.get_state()
                         _py_before_eval = random.getstate()
                         try:
                             scores, successes = trainer.eval_actor(
                                 env, entry["state"].actor_params,
-                                n_episodes=config.n_episodes,
-                                seed=config.seed,
-                            )
+                                n_episodes=config.n_episodes, seed=config.seed)
                         finally:
                             np.random.set_state(_np_before_eval)
                             random.setstate(_py_before_eval)
+                        success_mean = float(mean_std_or_nan(successes)[0])
+                        reward_mean = float(np.mean(scores))
+                        entry["eval_successes"].append([int(step), success_mean])
+                        entry["eval_rewards"].append([int(step), reward_mean])
                         _causal_write(key, {
-                            "timestep": int(step),
-                            "event": "branch_eval",
-                            "kind": kind,
-                            "elapsed": elapsed,
-                            "reward_mean": float(np.mean(scores)),
-                            "success_mean": float(mean_std_or_nan(successes)[0]),
+                            "timestep": int(step), "event": "branch_eval",
+                            "kind": kind, "elapsed": elapsed,
+                            "reward_mean": reward_mean,
+                            "success_mean": success_mean,
+                            "eval_n_episodes": int(config.n_episodes),
                         })
                     if int(step) >= entry["end"]:
                         to_finish.append(key)
                 for key in to_finish:
                     entry = causal_active.pop(key)
-                    causal_finished[key] = {
-                        "kind": entry["kind"],
-                        "start": entry["start"],
-                        "end": int(step),
-                        "completed": True,
+                    finite_success = [float(p[1]) for p in entry.get("eval_successes", []) if np.isfinite(float(p[1]))]
+                    finite_reward = [float(p[1]) for p in entry.get("eval_rewards", []) if np.isfinite(float(p[1]))]
+                    summary = {
+                        "kind": entry["kind"], "start": entry["start"],
+                        "end": int(step), "completed": True,
+                        "q_runaway_5x_onset": entry.get("q_onset"),
+                        "v_blowup_5x_onset": entry.get("v_onset"),
+                        "eval_count": len(finite_reward),
+                        "success_mean_across_evals": float(np.mean(finite_success)) if finite_success else None,
+                        "success_best": float(np.max(finite_success)) if finite_success else None,
+                        "success_final": float(finite_success[-1]) if finite_success else None,
+                        "reward_mean_across_evals": float(np.mean(finite_reward)) if finite_reward else None,
+                        "reward_final": float(finite_reward[-1]) if finite_reward else None,
                     }
+                    causal_finished[key] = summary
                     _causal_write(key, {
-                        "timestep": int(step),
-                        "event": "branch_complete",
-                        "kind": entry["kind"],
+                        "timestep": int(step), "event": "branch_complete",
+                        **summary,
                     })
 
 
