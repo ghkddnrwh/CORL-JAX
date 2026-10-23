@@ -1,11 +1,14 @@
-"""Tabular GridWorld: three noise modes + generalized N-member Double Q.
+"""Tabular GridWorld: noise-mode ablations + generalized N-member Double Q.
 
-Modes:
-    shared_target  : one per-step noisy Q view (shared by behavior and TD target)
-    table_additive : permanently perturb every online Q-table cell after TD
-    nn_like_field  : stationary, temporally persistent, feature-correlated mean-zero approximation error
+Noise modes:
+    shared_target         : per-step shared noisy Q view
+    table_additive        : permanent iid noise added to online Q tables after TD
+    nn_like_field         : BOTH temporal and spatial approximation-error correlation
+    nn_like_field_spatial : ONLY spatial approximation-error correlation (rho forced to 0)
+    nn_like_field_temporal: ONLY temporal approximation-error correlation (independent state-actions)
+    nn_like_field_iid     : NEITHER spatial nor temporal approximation-error correlation
 
-The full experiment configuration is near section 5 at the bottom.
+Change only NOISE_MODE in section 5 to select an ablation.
 """
 
 import os
@@ -152,7 +155,29 @@ def choose_action(q_values, epsilon, rng):
 # 4. Noise models / Training
 # ============================================================
 
-NOISE_MODES = ("shared_target", "table_additive", "nn_like_field")
+NN_LIKE_NOISE_MODES = (
+    "nn_like_field",           # temporal + spatial
+    "nn_like_field_spatial",   # spatial only: rho=0
+    "nn_like_field_temporal",  # temporal only: independent (state, action) noise
+    "nn_like_field_iid",       # neither: independent across steps and (state, action)
+)
+NOISE_MODES = ("shared_target", "table_additive", *NN_LIKE_NOISE_MODES)
+
+
+def resolve_field_correlation(noise_mode, field_rho):
+    """Return (effective_rho, spatial_correlation) derived ONLY from noise_mode.
+
+    FIELD_RHO sets the temporal strength only in temporal-enabled modes.
+    For spatial-only and iid modes, time correlation is disabled regardless
+    of the configured FIELD_RHO; spatial correlation is determined by mode.
+    """
+    if noise_mode not in NN_LIKE_NOISE_MODES:
+        raise ValueError(f"Not an NN-like noise mode: {noise_mode}")
+    if not 0 <= field_rho < 1:
+        raise ValueError("field_rho must be in [0, 1)")
+    temporal_enabled = noise_mode in ("nn_like_field", "nn_like_field_temporal")
+    spatial_enabled = noise_mode in ("nn_like_field", "nn_like_field_spatial")
+    return (field_rho if temporal_enabled else 0.0), spatial_enabled
 
 
 class NNLikeErrorField:
@@ -161,8 +186,10 @@ class NNLikeErrorField:
     For fixed x, E[eps_i,t(x)]=0 and Var[eps_i,t(x)]=sigma^2.
     Gaussian innovations give a Gaussian field; Student-t and Rademacher
     innovations retain centered errors without assuming normality.
-    Features couple errors across state/action. AR(1) latent weights couple
-    errors over time. The cross-estimator shared_fraction can be set to zero
+    When spatial_correlation=True, fixed features couple errors across
+    state/action. When False, each (state, action) gets an independent AR(1)
+    noise process. AR(1) latent variables couple errors over time. The
+    cross-estimator shared_fraction can be set to zero
     to study correlations emerging from learning, not imposed exogenously.
 
     IMPORTANT: mean-zero MARGINAL noise does not guarantee that the learned
@@ -172,7 +199,8 @@ class NNLikeErrorField:
 
     def __init__(self, n, height, width, sigma, rho, feature_dim,
                  shared_fraction, lengthscale, action_scale, seed,
-                 innovation="gaussian", student_df=5.0):
+                 innovation="gaussian", student_df=5.0,
+                 spatial_correlation=True):
         if not 0 <= rho < 1:
             raise ValueError("field_rho must be in [0, 1)")
         if not 0 <= shared_fraction <= 1:
@@ -189,7 +217,16 @@ class NNLikeErrorField:
         self.sigma = sigma
         self.rho = rho
         self.shared_fraction = shared_fraction
+        self.spatial_correlation = spatial_correlation
         self.rng = np.random.default_rng(seed)
+        if not spatial_correlation:
+            # Independent noise at every (state, action), with AR(1) persistence
+            # ONLY along time. shared_fraction=0 also gives independence across
+            # ensemble members before learning-induced correlations arise.
+            self.phi = None
+            self.shared = self.rng.standard_normal((height, width, 4))
+            self.private = self.rng.standard_normal((n, height, width, 4))
+            return
         # Fixed nonlinear random Fourier feature map, shared across estimators:
         # similar (state,action) -> correlated errors, as with shared NN weights.
         coords = np.empty((height, width, 4, 6), dtype=float)
@@ -226,13 +263,22 @@ class NNLikeErrorField:
 
     def _latent(self):
         c = self.shared_fraction
-        return np.sqrt(1. - c) * self.private + np.sqrt(c) * self.shared[None, :]
+        return np.sqrt(1. - c) * self.private + np.sqrt(c) * self.shared[None, ...]
 
     def at(self, state):
         r, c = state
+        if not self.spatial_correlation:
+            # Read only the requested state; avoid allocating [N,H,W,4].
+            q = self.shared_fraction
+            return self.sigma * (
+                np.sqrt(1. - q) * self.private[:, r, c, :]
+                + np.sqrt(q) * self.shared[r, c, :][None, :]
+            )
         return self.sigma * np.einsum('ad,nd->na', self.phi[r, c], self._latent())
 
     def full(self):
+        if not self.spatial_correlation:
+            return self.sigma * self._latent()
         return self.sigma * np.einsum('hwad,nd->nhwa', self.phi, self._latent())
 
 
@@ -278,9 +324,9 @@ class StepQView:
                     size=(self.tables.shape[0], 4, self.num_candidates),
                 )
                 self._cache[state] = base + eps
-            elif self.noise_mode == "nn_like_field":
+            elif self.noise_mode in NN_LIKE_NOISE_MODES:
                 if self.noise_field is None:
-                    raise ValueError("nn_like_field requires noise_field")
+                    raise ValueError(f"{self.noise_mode} requires noise_field")
                 self._cache[state] = base + self.noise_field.at(state)[:, :, None]
             else:
                 # Freeze pre-update values for this one step.
@@ -316,7 +362,7 @@ def train(
     log_every=500,
     seed=0,
 ):
-    """Train one tabular algorithm with one of three noise mechanisms.
+    """Train one tabular algorithm with the requested noise mechanism.
 
     noise_mode='shared_target':
       Per step, create *logically* one noisy view of each CURRENT online
@@ -334,12 +380,15 @@ def train(
       Delayed DD-Q tables are snapshots, not separately perturbed each step.
       In this mode max_dim_multiplier is ignored: there are 4 real actions.
 
-    noise_mode='nn_like_field':
-      Fixed random features map each (state, action) to a shared latent
-      representation. Independent (per estimator) AR(1) Gaussian weights form
-      temporally persistent, spatially correlated mean-zero output noise.
-      A DD snapshot freezes the COMPLETE noisy function, not newly sampled
-      noise over stale clean table. Only 4 actual actions are considered, K=1.
+    NN-like field ablation modes (configured by noise_mode ALONE):
+      nn_like_field          : temporal + spatial error correlation
+      nn_like_field_spatial  : spatial correlation only; effective rho=0
+      nn_like_field_temporal : temporal correlation only; each (s,a) independent
+      nn_like_field_iid      : no imposed temporal or spatial correlation
+      FIELD_RHO matters only for modes with temporal correlation.
+      Spatial modes use fixed random Fourier features; non-spatial modes use
+      independent per-(state,action) latent errors. DD snapshots freeze the
+      COMPLETE observed noisy function. Only 4 real actions, K=1.
 
     Generalized Double Q when N>2:
       Q_i chooses argmax using its own view; estimator (i+shift)%N evaluates
@@ -357,8 +406,8 @@ def train(
         raise ValueError("noise_sigma must be >= 0")
     if max_dim_multiplier < 1:
         raise ValueError("max_dim_multiplier must be >= 1")
-    if noise_mode == "nn_like_field" and max_dim_multiplier != 1:
-        raise ValueError("nn_like_field requires K=1 (one NN output per actual action)")
+    if noise_mode in NN_LIKE_NOISE_MODES and max_dim_multiplier != 1:
+        raise ValueError(f"{noise_mode} requires K=1 (one NN output per actual action)")
     if num_updates < 1 or log_every < 1:
         raise ValueError("num_updates and log_every must be >= 1")
     if method in ("double_q", "clipped_double_q") and double_num_q < 2:
@@ -388,11 +437,18 @@ def train(
     # All trainable estimators have uniform shape [N, H, W, 4].
     Qs = np.zeros((n, grid_height, grid_width, 4), dtype=float)
 
-    field = (NNLikeErrorField(
-        n, grid_height, grid_width, noise_sigma, field_rho,
-        field_features, field_shared_fraction, field_lengthscale,
-        field_action_scale, seed + 100_003, field_innovation, field_student_df,
-    ) if noise_mode == "nn_like_field" else None)
+    if noise_mode in NN_LIKE_NOISE_MODES:
+        effective_rho, spatial_correlation = resolve_field_correlation(
+            noise_mode, field_rho
+        )
+        field = NNLikeErrorField(
+            n, grid_height, grid_width, noise_sigma, effective_rho,
+            field_features, field_shared_fraction, field_lengthscale,
+            field_action_scale, seed + 100_003, field_innovation, field_student_df,
+            spatial_correlation=spatial_correlation,
+        )
+    else:
+        field = None
 
     if method == "dd_q":
         # Only online tables are learned/perturbed; snapshots are periodically
@@ -583,16 +639,18 @@ GRID_WIDTH = 150
 NUM_UPDATES = 100_000
 
 ALPHA = 0.1
-GAMMA = 0.9999
+GAMMA = 0.99
 EPSILON = 0.1
 
-# Select ONE of the two mutually exclusive noise injection mechanisms:
-#   "shared_target": per-step shared noisy view for behavior AND bootstrap;
-#                    does NOT permanently overwrite the Q tables.
-#   "table_additive": directly add iid Gaussian noise to ALL online Q-table
-#                     entries after EACH learning update.
-NOISE_MODE = "nn_like_field"  # options: shared_target, table_additive, nn_like_field
-NOISE_SIGMA = 0.3           # same Gaussian std used in either mode
+# Change ONLY this setting to choose the desired noise mechanism/ablation:
+#   "shared_target"          : iid noisy Q-view per update (existing mode)
+#   "table_additive"         : iid perturbations permanently added after TD (existing)
+#   "nn_like_field"          : BOTH temporal + spatial correlation (existing behavior)
+#   "nn_like_field_spatial"  : ONLY spatial correlation; time is iid
+#   "nn_like_field_temporal" : ONLY temporal correlation; (state, action) independent
+#   "nn_like_field_iid"      : NEITHER spatial nor temporal correlation
+NOISE_MODE = "nn_like_field"
+NOISE_SIGMA = 0.3
 
 # Reward shaping controls action gaps.
 # More negative WALL_REWARD makes wrong wall selections much more costly,
@@ -611,10 +669,12 @@ GOAL_REWARD = 1.0
 MAX_DIM_MULTIPLIER = 1
 BEHAVIOR_USE_ALL_K = True
 
-# NN-like stationary Gaussian output-error field. Each fixed (s,a) has
-# marginally centered error. rho controls temporal persistence, shared_fraction
-# controls EXOGENOUS cross-estimator coupling (set 0 initially to measure
-# endogenous correlation caused by Double-Q/DD-Q updates).
+# NN-like approximation-error field parameters.
+# In nn_like_field and nn_like_field_temporal, FIELD_RHO controls AR(1)
+# persistence. In nn_like_field_spatial and nn_like_field_iid, rho is FORCED
+# to zero automatically; you do not need to change FIELD_RHO.
+# FIELD_SHARED_FRACTION controls cross-estimator EXOGENOUS correlation, not
+# spatial correlation across states/actions. Set 0 for an independent baseline.
 FIELD_RHO = 0.999
 FIELD_FEATURES = 64
 FIELD_SHARED_FRACTION = 0.0
@@ -626,7 +686,7 @@ FIELD_STUDENT_DF = 5.0
 
 # Generalized Double / Clipped Double ensemble sizes.
 # N=2 preserves the original Double Q update rule.
-DOUBLE_Q_CONFIGS = [2, 3]
+DOUBLE_Q_CONFIGS = [2, 5, 10]
 CLIPPED_DOUBLE_Q_CONFIGS = [2, 3]
 
 # DD-Q configurations
@@ -636,16 +696,21 @@ CLIPPED_DOUBLE_Q_CONFIGS = [2, 3]
 #
 DD_Q_CONFIGS = [
     (2, 1),
-    (2, 10),
+    (5, 1),
+    (10, 1),
     (2, 100),
-    (2, 1000),
+    (5, 100),
+    (10, 100),
+    # (2, 10),
+    # (2, 100),
+    # (2, 1000),
 ]
 
 LOG_EVERY = 500
 
 # Run the same algorithms on 10 independent random seeds.
 # Using the same seed set for every algorithm enables paired comparisons.
-SEEDS = list(range(10))
+SEEDS = list(range(100))
 STD_DDOF = 1  # sample standard deviation across seeds
 
 
@@ -672,8 +737,8 @@ SAVE_DIR = os.path.join(
     f"sigma{NOISE_SIGMA:g}",
     (f"K{MAX_DIM_MULTIPLIER}_behavior_" + ("allK" if BEHAVIOR_USE_ALL_K else "k0"))
     if NOISE_MODE == "shared_target" else (
-        f"rho{FIELD_RHO:g}_shared{FIELD_SHARED_FRACTION:g}_features{FIELD_FEATURES}_{FIELD_INNOVATION}"
-        if NOISE_MODE == "nn_like_field" else "real_actions_only"
+        f"rho{resolve_field_correlation(NOISE_MODE, FIELD_RHO)[0]:g}_shared{FIELD_SHARED_FRACTION:g}_features{FIELD_FEATURES}_{FIELD_INNOVATION}"
+        if NOISE_MODE in NN_LIKE_NOISE_MODES else "real_actions_only"
     ),
 )
 
@@ -1135,8 +1200,12 @@ def main():
     print("Bootstrap candidates     :", candidates)
     print("Noise mode               :", NOISE_MODE)
     print("Noise sigma              :", NOISE_SIGMA)
-    if NOISE_MODE == "nn_like_field":
-        print("Field AR rho             :", FIELD_RHO)
+    if NOISE_MODE in NN_LIKE_NOISE_MODES:
+        effective_rho, spatial_correlation = resolve_field_correlation(
+            NOISE_MODE, FIELD_RHO
+        )
+        print("Effective field AR rho   :", effective_rho)
+        print("Field spatial corr       :", spatial_correlation)
         print("Field shared fraction    :", FIELD_SHARED_FRACTION)
         print("Field features           :", FIELD_FEATURES)
         print("Field innovation         :", FIELD_INNOVATION)
