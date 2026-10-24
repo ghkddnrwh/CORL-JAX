@@ -649,7 +649,7 @@ EPSILON = 0.1
 #   "nn_like_field_spatial"  : ONLY spatial correlation; time is iid
 #   "nn_like_field_temporal" : ONLY temporal correlation; (state, action) independent
 #   "nn_like_field_iid"      : NEITHER spatial nor temporal correlation
-NOISE_MODE = "nn_like_field_temporal"
+NOISE_MODE = "nn_like_field"
 NOISE_SIGMA = 0.3
 
 # Reward shaping controls action gaps.
@@ -734,6 +734,7 @@ RUN_METHODS = [
 SAVE_DIR = os.path.join(
     "./logs/iclr2027_dd_iql/tabular_dual_noise",
     NOISE_MODE,
+    f"{GAMMA:g}",
     f"sigma{NOISE_SIGMA:g}",
     (f"K{MAX_DIM_MULTIPLIER}_behavior_" + ("allK" if BEHAVIOR_USE_ALL_K else "k0"))
     if NOISE_MODE == "shared_target" else (
