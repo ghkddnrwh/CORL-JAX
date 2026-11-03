@@ -1,0 +1,34 @@
+Target definitions when interpreting research logs
+==================================================
+
+For empirical_backup_core_v1, mean_empirical_backup_core_v1, and
+anchored_empirical_backup_core_v1:
+  td_rms is the generic learned-V snapshot Q-r-gamma*mask*V(s_next).
+  V is NOT in their actual Q training target. Treat this field as a learned-V
+  counterfactual, not the finite-backup Bellman residual.
+  score_rms measures the auxiliary learned-V fit proxy against target minQ,
+  not the finite-root score, population conditional zeta or true Q error.
+  critic/critic_loss is the ACTUAL online projected finite-target loss,
+  averaged over the logged replay-update window. It is not a fixed-data probe.
+  backup/clip_fraction and finite_proposal_score_* are actual training-window
+  finite-backup diagnostics. Zero proposal score applies only to that set.
+
+External audit_finite_target_snapshot_v2 reconstructs the actual min/mean
+finite target at immutable checkpoints, using fixed train1024 indices. Its
+explicit actual_projected_finite_backup_snapshot_TD_RMS is for one frozen BC
+proposal draw and current frozen target-Q, with CPU inference. It is neither
+the exact original GPU batch loss nor a population Bellman error. Archived
+float64-from-float32 predictions and numerical controls make this distinction
+reviewable. The anchored recipe needs its own matching target reconstruction;
+the min/mean auditor intentionally rejects an anchored run.
+
+Half correction, supervised-boundary and next-success-boundary cores implement
+their own probe targets and explicitly label learned-V-only counterfactuals.
+For ordinary learned-V IQL/IFQL, the generic unprojected V-based snapshot is the
+appropriate frozen operator residual; projection and online-batch losses remain
+distinct quantities. FQL/ReBRAC runners have their own target implementations.
+
+All raw CPU episode success scores, checkpoint identities and training targets
+are unaffected by this LOG-LABEL correction. No active/resumable source was
+changed. For original historical reports that list td_rms without this caveat,
+use the corrected semantics and the later explicit actual-target snapshots.

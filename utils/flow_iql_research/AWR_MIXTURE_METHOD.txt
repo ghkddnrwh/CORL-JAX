@@ -1,0 +1,85 @@
+AWR mixture policy with the same IQL value correction
+====================================================
+
+This is an alternative policy family, not another loss added to the flow
+policies. It is exploratory and has no benchmark result yet.
+
+Keep the official-style IQL Q/V objectives and V2 correction: two V Adam fits
+against frozen old target-min-Q, fresh-V bootstrap, known-return Q-target
+projection, one Q/actor update and the public old-online-Q target EMA.
+
+Keep the Gaussian IQL actor's public AWR objective:
+
+    A(s,a) = min Q_online_old(s,a) - V_old(s)
+    w(s,a) = min(exp(alpha*A), 100)
+    L_actor = -mean_data[ w(s,a) log pi_theta(a|s) ].
+
+Evaluate the exponential as exp(min(alpha*A, log100)) to avoid unnecessary
+overflow. Do not normalize by the minibatch weight sum. No additional entropy,
+flow matching, Q-action-gradient, distillation, or behavior teacher is trained.
+
+Change pi from one fixed-variance Gaussian to a five-component conditional
+diagonal Gaussian mixture. The architecture is the existing mixture BC model:
+public GELU hidden layers, actor without LayerNorm, and log std clipped to the
+public Actor range[-5,2]. Alpha values are inherited from the public Gaussian
+baseline, not tuned for these pilots. Five components are shared across tasks
+and reuse the earlier unweighted mixture control's count.
+
+At evaluation temperature0, choose the component with the largest mixture
+probability and use its mean, clipped to[-1,1]. Do not query Q at deployment.
+This is a deterministic latent-component rule. It is not claimed to find the
+global mode of the full mixture density. No per-task decoder choice is allowed.
+
+Why test this
+--------------
+For a fixed-variance single Gaussian and fixed state, the population weighted
+log-likelihood optimum has mean E_mu[w*a]/E_mu[w]. When good data actions have
+multiple separated modes, this average can fall between them. A mixture can
+represent multiple modes and deploy one component instead of averaging them.
+This is a representation hypothesis, not a guarantee of higher return.
+
+Unlike the previous mixture BC experiment, this actor is trained directly on
+advantage-weighted data and does not sample32 behavior actions for Q selection.
+The comparator of interest is Gaussian IQL with the same value controller,
+not just the old unweighted mixture proposal model. Because the mixture also
+learns component variances, a gain cannot be attributed purely to component
+count without a learned-variance K1 control. That control is implemented as
+kind awr_gaussian, but is not claimed to have a benchmark result.
+
+V errors are still relevant: without the cap, a fixed state's exp(-alpha*V)
+factor cancels from the ideal normalized conditional action law, but changes
+state weighting in finite shared-function fitting. The cap can also change
+relative action weights. This method therefore complements the value study;
+it does not claim to remove all actor sensitivity to V error.
+
+What is controlled and logged
+-----------------------------
+Copy the initial Q/V/target-Q parameters and agent RNG from the public Gaussian
+initialization. Actor loss gradients into those parameters are zero. Four CPU
+updates reproduce the public Gaussian V2 Q/V parameters exactly in the unit
+test. This does not certify identical long GPU trajectories: the existing
+graph-dependent BC arithmetic finding applies to such claims.
+
+Training records AWR mass, ESS, clipping/underflow proxies, zero-mass batches,
+mixture entropy, effective components, weighted component responsibilities,
+component spread and std-bound saturation. Frozen-Q diagnostics also compare
+independent train and validation likelihoods, posterior/component usage,
+greedy-component versus conditional-mean MSE, and learned-Q contrasts. Better
+likelihood or lower MSE does not certify better actual return.
+
+An unregularized mixture can collapse its component use or push variances to
+the allowed lower bound. These are possible failure modes to diagnose, not
+reasons to silently tune a different regularizer for each task.
+
+Pilot protocol
+---------------
+Antmaze-large, Cube-double and Puzzle3 use one common K5 recipe, tau .9 and
+gamma .999, for1M Q updates. Primary evaluation is CPU50 at800K/900K/1M with
+independently reset seeds42..91. Early curves are progress only. A selected
+recipe must be tested uniformly across all nine environments and confirmed
+on fresh training seeds before a FQL/ReBRAC superiority claim.
+
+The public fixed-std Gaussian remains the baseline. No completed or active
+training source is edited; new runs use awr_mixture_core_v1 and
+train_awr_mixture_v1. Frozen diagnostics dispatch this family through v5,
+while existing policy families retain their existing diagnostic helpers.

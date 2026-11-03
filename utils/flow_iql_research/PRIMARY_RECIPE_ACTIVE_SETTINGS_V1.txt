@@ -1,0 +1,96 @@
+현재 우선 후보에서 실제로 사용하는 설정과 그 이유
+=================================================
+
+후보: 공식 스타일 IQLV2 + unweighted BC flow + 독립 critic3개의 순위 평균.
+9개 환경 모두 같은 방법을 쓴다. 탐색9-task last3 평균은0.5459259이고,
+새 그룹[3,4,5], [6,7,8]의 확인은 아직 끝나지 않았다.
+
+학습에 추가한 것은 value fitting/target 수정 묶음이다.
+  같은 minibatch에서 OLD target-minQ를 고정해 V를 Adam으로2회 fitting;
+  fresh V로 r+gamma*mask*V(next)를 계산;
+  알려진 반환 구간[L,0]으로 target을 projection;
+  Q와 unweighted BC flow는 각각1회, 공식 old-onlineQ EMA 순서 유지.
+
+이 묶음은 fitting 지연과 target 크기를 다루는 개입이다. Adam2회가 참
+조건부 residual을 반드시 줄이거나 NN Bellman 반복을 수렴시킨다는 보장은
+없다. 실제 value 수정의 효과는 환경별로 달랐다. fitting 횟수와 freshness를
+각각 독립적인 원인으로 분리한 전체9-task ablation은 아직 없다.
+
+정책에서는 세 learner를 서로 독립적으로 학습한다. ensemble Q를 다시
+학습 target에 넣지 않는다. 배포 시 첫 learner의 BC만10 Euler step으로
+행동9개를 만들고, 각 learner의 현재 ONLINE twin-minQ가 같은9개를 평가한다.
+critic별 midrank를 구해3개를 동등 평균한 뒤 argmax를 선택한다. 동률은
+첫 후보를 택한다. 세 학습 모델은 한 ensemble 반복이며, 세 반복이 아니다.
+
+따라서 ensemble 단계는 Q/V의 B_k를 직접 추정하거나 빼는 학습 규칙이
+아니다. critic 간 수치 calibration/상대 스케일에 덜 의존하는 행동 추출이다.
+각 critic 안의 strictly increasing 변환에는 선택이 불변이다. 공통의 잘못된
+행동 순서나 action-dependent bias까지 제거하지는 않는다. 평균 순위에는
+중앙값 순위의 '둘이 유일 최선을 지지하면 반드시 선택' 성질도 없다.
+
+동일한 기존 모델0/1/2, BC0,9후보에 네 규칙을 비교했다.
+                   평균          중앙값
+  raw Q            0.485926      0.477037
+  critic별 순위    0.545926      0.505926
+현재 선택은 전체9-task 탐색 평균에 기초하며 환경별 좋은 규칙을 섞지 않았다.
+새 그룹에서는 순위 평균/기존 순위 중앙값/raw평균을 모두 고정해 비교한다.
+raw평균은 대조군이며 같은 확인 결과를 보고 새 후보로 승격시키지 않는다.
+
+공통 설정
+  expectile0.9, discount0.999, learner3개, 행동 후보9개;
+  V fitting2회, Q/BC fitting1회, target EMA coefficient0.005;
+  Adam3e-4, batch256, learner별1M update, BC Euler10step.
+config의 tau=0.005는 EMA 계수이고, 사용자가 말한 expectile tau=0.9는
+expectile 키다. 두 tau를 혼동하지 않는다.3개/N9가 보편적으로 최적이라는
+주장은 없고, 탐색 후 새 시드 확인 전에 동일한 값으로 고정한 것이다.
+
+기본 구조는 공개 설정을 따른다. navigation은4x512, manipulation은4x256,
+GELU, Q/V LayerNorm, BC actor에는 LayerNorm을 쓰지 않는다. L은 환경의
+알려진 reward cost와 gamma로 계산한다. 이 차이는 환경별 성능을 보고
+세밀하게 맞춘 보정 계수가 아니다. 관측값은 raw이고, 학습 action의1e-5
+clipping과 평가 seed 규칙도 모든 비교 방법에 동일하게 적용한다.
+
+설정 파일에 남아 있지만 이 IFQL 경로에서 사용하지 않는 필드
+  alpha, actor_loss='awr', const_std,
+  flow_temperature, distill_coefficient, normalize_advantage.
+이는 Gaussian IQL/AWRflow/student 등 다른 agent의 설정을 상속한 흔적이다.
+현재 IFQL actor_loss는 unweighted flow-matching MSE이고 AWR 가중치나
+advantage 정규화, Q-gradient policy loss, distillation loss를 사용하지 않는다.
+Gaussian IQL 대조군의 advantage는 공식 OLD ONLINE minQ-OLD V이며,
+OLD targetQ-OLD V로 바꾸지 않았다. 현재 BC flow에는 이 advantage를 쓰지 않는다.
+
+미사용 필드에 대한 실제 검증도 남겼다. 기존 CubeS1M 모델에서 위6개
+필드를 극단적인 값으로 동시에 바꿔도, 초기화234개 array와 실제 모델의
+CPU4update 후 모든 state/metric array가 정확히 같았다. 실제3critic/N9
+선택의8개 key에서도 action/Q/score가 정확히 같았다. GPU 성능 실험이나
+새 train seed로 세지 않으며, 다른 agent에도 미사용이라는 뜻은 아니다.
+  analysis/IFQL_inherited_config_invariance_v1.json
+
+finite expectile root, mean-head backup, known-goal auxiliary loss,
+next-boundary 보정, temporal K3, AWR mixture, data-rank/synthetic-rank policy
+flow 실험은 현재 후보에 쌓아 넣은 구성 요소가 아니다. 별도의 대안/진단
+가지이며, 성공과 실패를 각각 기록한다. 예를 들어 finite-min root의
+전체9-task 평균0.400과 GMM decoder의 Ant 실패를0.545926에 합산하지 않는다.
+
+주의할 진단 의미
+  일반 td_rms는 projection 전의 현재 V target 차이다.
+  finite-root 가지에서는 학습의 bootstrap 변수와도 다르다.
+  샘플별 expectile score RMS는 조건부 평균 score의 RMS가 아니다.
+참 zeta/B_k와 대리 지표를 구분한다. 이 해석 정정은 학습과 성공률을
+바꾸지 않는다. LEARNED_V_PROBE_SEMANTICS_V1.txt를 참고한다.
+
+평가는800K/900K/1M 각각 CPU50(seed42..91)의 성공률을 모두 동등 평균하고,
+9개 환경과 새 두 ensemble 그룹도 동등 가중한다. 결측을0으로 채우지 않고
+환경/시드/평가 step별 우승 조합을 만들지 않는다. 새 두 그룹 평균과 탐색을
+포함한 세 그룹 평균 모두.47을 넘어야 하며 실제 모델/optimizer clock/
+source/raw episode 검증과 최종 검토가 필요하다. 학습비용은 기본 IFQLV2
+learner3개(Q3M/V6M at1M/member)다. FQL과 동등 FLOPs/시간에서의 우위,
+DD-ReBRAC.63 대비 SOTA, 참 residual 감소나 보편적 안정성은 아직 주장하지 않는다.
+
+공식 코드 정렬과 논문 소프트웨어 환경의 완전 재현도 구분한다. 실제 환경은
+기존 JAX0.4.1/Flax0.6.1/OGBench1.2.1이고, 제공한 FQL requirements와 다르다.
+공식 원본7개 모듈과의 차이는 import와 Flax 컨테이너 변환으로 제한됨을
+검증했으며, 현재 raw dataset18개와 설치 OGBench 코드/assets의 SHA256,
+패키지 버전과 GPU runtime 설정을 reproduction_environment_v1에 남겼다.
+로컬 FQL/ReBRAC 대조도 같은 캠페인 환경을 쓴다. 현재 데이터 지문이 과거
+모든 실행의 입력을 소급 증명하지는 않는다는 한계도 함께 기록한다.

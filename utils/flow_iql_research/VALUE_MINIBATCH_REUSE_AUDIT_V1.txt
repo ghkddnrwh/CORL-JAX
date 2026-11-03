@@ -1,0 +1,42 @@
+두 번째 V minibatch 비교 실험의 자동 감사
+
+학습 등록: value_minibatch_reuse_pilots_registration_v1.json
+분석 등록: value_minibatch_reuse_analysis_registration_v1.json
+출력: analysis/value_minibatch_reuse_audit_v1/status.json 및 완료 후 summary.json
+모두 logs/diagnosis/flow_iql_research_20261026 아래에 있다.
+
+실행 중인 감사 controller는 PID1450670이다. 학습이나 평가 에피소드를
+추가하지 않으며 새6개 실험의 완료를 기다린다. 같은 출력 경로에서
+watcher를 다시 실행하지 않는다. 분석 소스는 등록 후 동결했다.
+
+모든 task에서800K/900K/1M 체크포인트와 CPU50 원시 에피소드 결과를
+직접 읽는다. reset42..91, binary success, reward/length 배열, 정확한
+마지막3평균, 실행 identity와 소스, actual Q Adam1M/V Adam2M 및
+저장 state의 유한성을 확인한다. 미완료 실험은0으로 채우지 않는다.
+전체3개 paired task가 완료되기 전에는 성능 차이 평균과 판정값을 null로 둔다.
+
+같은 checkpoint step에서 fresh/repeated의 main replay RNG, 보조 V replay
+RNG와 learner RNG가 일치하는지 확인한다. BC 모든 파라미터의 차이를
+원소 수, 최대 절댓값 및 RMS로 기록한다. BC가 달라지면 그 사실을 공개해
+Q/V만의 변화라는 해석을 제한한다. 성능 결과를 조용히 제외하지 않는다.
+
+새 repeated 대조군과 기존 seed3 bounded_v2의 전체 state 및 에피소드
+배열도 비교한다. 둘은 추가 독립 시드가 아니다. 전체 state가 같은데도
+평가 배열이 달라지면 프로토콜 문제로 감사에 실패한다.
+
+신규6개 실험은 아직 시작되지 않은 상태에서 분석 규칙을 고정했다.
+기존 실제 Puzzle seed3의3개 late model로 감사를 검증했다. 자기 자신과의
+전체 state/BC/평가 배열 비교는 정확히 일치했고, 잘못된 seed·source 및
+기존 run을 새 recipe로 사용하는 경우를 거부했다. 결과는
+analysis/value_minibatch_reuse_auditor_validation_v1.json에 있다.
+
+온라인 critic loss에서 복원한 sqrt(loss/2)는 두 head의 실제 projected
+학습 target에 대한 해당 로그 구간의 RMS다. 서로 다른 학습 시점의
+minibatch들을 합친 값이며 고정 snapshot의 모집단 오차가 아니다.
+legacy fixed-query td_rms는 projection을 생략한다. samplewise score RMS와
+main minibatch의 post-fit loss는 conditional residual이나 B_k의 정답이 아니다.
+
+3개 pilot 평균 차이>0 및 최소2개 task delta>=0은 full9 확장 검토 조건이다.
+이를9환경 평균 승리나 독립 재현으로 해석하지 않는다. root 검토 없이
+학습을 추가하거나 환경별 승자를 조합하지 않는다. 새 알고리즘을 선정하면
+seed>=9에서 독립적으로 확인해야 한다.

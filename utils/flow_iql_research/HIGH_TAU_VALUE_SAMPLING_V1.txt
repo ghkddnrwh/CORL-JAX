@@ -1,0 +1,41 @@
+높은 expectile과 V minibatch 재사용의 분리 실험
+
+기존 새6개 pilot은 tau=.9, gamma=.999에서 같은 batch 반복과 독립적인
+두 번째 V batch를 비교한다. 여기에 사용자가 처음 제시한 tau=.99 설정을
+추가한다. AntMaze-large, HumanoidMaze-medium, Puzzle3x3의 seed3에서
+두 proposed profile을 그대로 사용한다. 새 실수 HP나 환경별 값은 추가하지 않는다.
+
+tau가 .9에서 .99가 되면 expectile loss의 양/음 residual 가중치 비는
+9:1에서99:1이 된다. 이는 loss 가중치의 비이며 신경망 Hessian의 실제
+condition number라는 주장은 아니다. 더 강한 upper-tail 선택이 정책에
+유리할 수도 있지만, V fitting의 표본 오차와 bootstrap 편향에 민감할 수도 있다.
+Projection은 critic target을 제한한다. 네트워크 수렴이나 올바른 행동 순위를
+보장하지 않으며, target이 자주 상한에 붙는 퇴화 가능성도 따로 확인한다.
+
+새 proposed run은 총6개다. 동일한2V/1Q/1BC Adam 횟수, fresh-V bootstrap,
+반환 범위 projection, 원래 old-online-Q EMA, N9 및 네트워크를 유지한다.
+동일한 소스의 expectile 인자만 .99로 바꾼다. 기존 tau=.9의6개 run과
+합치면2tau x2V-sampling x3task의 pilot 비교가 된다.
+
+추가로 tau=.99 native IFQL 대조군을3task에 각각 둔다. Native는 기존
+공식 스타일 update로1V/1Q/1BC이며 separate V Adam count는0이다.
+이 대조군이 있어야 높은 tau 자체의 효과와 value 보정의 효과를 구분할 수 있다.
+Native critic loss의 정규화와 diagnostic 의미는 소스를 따로 확인한다.
+Proposed의 sqrt(critic_loss/2)를 native에 자동 적용하지 않는다.
+
+신규 GPU run은 총9개이며 이미 허용된 두 training module만 쓴다.
+기존54개 독립 검증과 mean-backup 확장 및 tau=.9 신규6개의 우선순위를
+유지한다. GPU는 계속2x8, memory fraction=.1이다. 학습 소스나 기존
+등록 identity를 수정하지 않는다. tau=.99의8CPU updates/4+4 resume는
+전체 checkpoint SHA256 일치로 검증했으며, 이는 수렴/성능 검증이 아니다.
+
+표에는 tau별 sampling 효과, sampling별 tau 효과 및 두 효과의 상호작용을
+남긴다. Value loss나 samplewise score RMS는 tau가 다르면 가중치도 달라진다.
+값의 단순 감소를 residual 감소의 정답으로 해석하지 않는다.
+Native 수치 실패는 실패로 보고하고 미완료 성능을0으로 채우지 않는다.
+
+각 run의 평가 기준은800K/900K/1M CPU50, reset42..91의 동일 가중 평균이다.
+3task pilot은9환경 benchmark가 아니다. 환경별 tau/방법 승자를 섞지 않고,
+선정할 때는 하나의 전역 설정으로 전체9환경을 평가한다. 새로 선정한 방법은
+seed>=9의 독립 학습으로 확인해야 한다. FQL/ReBRAC을 넘었다는 판정은
+전체9환경 및 독립 검증 결과를 실제 모델/원시 평가와 대조한 뒤 내린다.

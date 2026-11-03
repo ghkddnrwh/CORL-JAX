@@ -1,0 +1,58 @@
+Value-component evidence: current scope
+=======================================
+
+The complete Ant Gaussian comparison at tau .9/gamma .999/seed0 gives last3
+CPU50 success0 for native IQL and .793333 for two V fits + fresh bootstrap +
+known-return target projection. That whole-intervention gain does not identify
+which component stabilizes training.
+
+Two additional1M runs isolate the fitting/fresh package and target projection.
+Their immutable500K checkpoints now permit a matched intermediate comparison:
+
+  Package                         Mean Q       Q RMS     Out-of-range error
+                                                         RMS lower bound
+  One V fit, old bootstrap         +6401.06     6685.09      6685.09
+  Two V fits, fresh bootstrap     +22757.38    23443.66     23443.66
+  One V fit, old, projected         -127.88      153.15          .02064
+  Two V fits, fresh, projected      -143.36      169.64          .04667
+
+All four use the same scientific architecture/hyperparameters, actual replay
+RNG state and agent RNG state at500K. Their actual checkpoints, source hashes,
+optimizer clocks and full-state finiteness were checked. Probe statistics cover
+both critic heads on the fixed1024 data transitions, not every deployed state.
+
+Ant rewards are nonpositive with known discounted return interval[-1000,0].
+For any true return Q* in that interval,
+  |Qhat-Q*| >= distance(Qhat,[-1000,0]).
+The RMS version yields the listed lower bound. A small lower bound does NOT
+certify accuracy inside the interval. The unprojected runs have finite arrays
+but predictions incompatible with the known return range: avoiding NaN is not
+an adequate stability criterion.
+
+For any valid oracle Bellman target y* in[L,U], scalar projection also gives
+  |project_[L,U](y)-y*| <= |y-y*|.
+This is a diagnosis-free target-error safeguard. It does not guarantee that
+every neural Q prediction stays in[L,U] or that neural training converges.
+
+The observed stability pattern favors target projection in this one Ant stress
+case. Two fitting steps + fresh bootstrap alone are insufficient. Fit count
+and fresh/old ordering are still one package here; their individual effects
+are not isolated by this2x2 comparison. Extra minibatch fitting also does not
+certify a reduction of the true conditional expectile residual zeta.
+In the unprojected two-fit run, the paired before/after batch objectives averaged
+over the500K logging window decline from36947.6 to24322.3, while Q is already
+far outside the known return interval. Better fitting to a learned critic's
+targets does not establish smaller oracle residual or target bias, especially
+on next states. This observation does not disprove the supplied theoretical
+residual bound; it limits what these practical fitting proxies can demonstrate.
+
+The two new ablations have not completed800K/900K/1M yet. Consequently the500K
+stability result cannot establish their final performance or justify deleting
+the extra fitting package globally. The original-discount comparison already
+shows task/discount interactions: V2 helps HMM but hurts Ant in those seed0
+trajectories. Any simplified recipe must be evaluated uniformly across all nine
+tasks, without choosing components or discount separately for each task.
+
+Reproduce with audit_ant_value_components_v1.py. The authoritative numerical
+record is analysis/Ant_value_component_stability_500K_v1.json. This evidence is
+part of mechanism analysis, not a claim of superiority over FQL/ReBRAC.

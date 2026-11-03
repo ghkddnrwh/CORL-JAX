@@ -1,0 +1,11 @@
+Secondary high-tau extraction experiment, registered before late outcomes.
+
+Primary N9 training/evaluation is unchanged. All nine registered tau=.99 seed3 pilots receive one secondary N99 CPU50 evaluation at each of 800K,900K,1M, resets42..91. A fixed first9 proposal prefix exactly matches existing single-observation IFQL extraction. Extra90 proposals use independent fold91837; select maximum online min-twin Q with first-index tie resolution. No per-environment values. No new GPU learner.
+
+Rationale: IDQL Eq9 gives the implicit actor mu*w/Z, w=tau above exact expectile V,1-tau below. For scalar IID X and finite first absolute moment, N>=tau/(1-tau) is sufficient for E max_N X >= e_tau(X). See the separately recorded proof and10,000discrete oracle checks. Thus tau=.9 needsN9 and tau=.99 needsN99 under these ideal assumptions. This derivation is posthoc relative to old N9 discovery experiments; no novelty claim.
+
+Approximate Q, V and behavior flows invalidate direct environment improvement guarantees. Maximizing more proposals can amplify Q errors. Report all three-task primary/secondary means for native/repeated/fresh separately, plus raw episodes and predictedQ/action-choice diagnostics. Diagnostics on visited secondary states are not paired primary-state advantages or conditional residuals. More proposals use more inference compute. No equal-latency or equal-compute claim.
+
+No pilot mean is a nine-task benchmark result. Any method chosen here requires uniform9 completion and fresh training seeds>=9. Missing/nonfinite/stopped native controls remain missing with explicit failure evidence, never score0. All prior original N9 ensemble confirmation gates remain unchanged.
+
+Sources: https://arxiv.org/html/2304.10573v2 (IDQL implicit actor and best-N extraction); https://arxiv.org/html/2405.18187v2 (alignment limitations with approximate V).

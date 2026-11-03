@@ -1,0 +1,64 @@
+Exact next-success boundary in the finite expectile backup
+========================================================
+
+This candidate makes ONE change to the finite-min-Q expectile backup. It does
+not combine independent critics, temporal averaging, boundary auxiliary loss,
+GMM, rank-flow or half correction. All tasks retain tau=.9, gamma=.999, nine
+behavior-flow proposals, min twin-Q, projected targets, and best9 deployment.
+The existing two auxiliary V fits remain for a matched diagnostic/control
+implementation; neither learned V nor its optimizer enters this Q backup.
+
+Ordinary finite backup:
+  y = r + gamma * current_mask * empirical_expectile_tau(target_minQ(s',a_1:9)).
+Boundary version:
+  y_B = r + gamma * current_mask * (1 - certified_next_success) * root.
+Both use the same final projection onto the known return interval. There is no
+additional coefficient, loss, data resampling or RNG stream.
+
+Why zero is known here
+---------------------
+Installed OGBench single-task relabeling defines success from the CURRENT state
+(qpos/button state), with r=0 and mask=0 there for every action. Thus Q(s_goal,a)
+and every policy/expectile continuation at that state are exactly0 in this
+implemented masked task. This is not a generic interpretation of timeout/done.
+The original trajectory-cut terminals and these reward masks are distinct.
+
+Regular OGBench data retain next_observations and current-state rows. A label is
+certified only when the original trajectory-cut terminal[t] is0 AND the next
+observation exactly equals observations[t+1]. Then masks[t+1]==0 certifies a
+next-success state. Noncut observation mismatch aborts; never approximately
+match observations or shift across a trajectory cut. The final next state of a
+trajectory is not a retained current-state row and remains unknown. This uses
+only training data already supplied to the learner, with no reward thresholds
+or environment-dependent tunable values. No validation transitions are trained.
+
+Relation to propagated error
+----------------------------
+On a certified active edge (current_mask=1, next_success=1), the exact Bellman
+target is r. The original target's boundary error is gamma*root, and the new
+target removes exactly that error on this edge. This does not identify errors
+at other states, repair action ranks, or guarantee a policy return gain.
+
+For a fixed behavior generator, empirical expectiles are1-Lipschitz in their
+input values under the sup norm. Multiplication by mask*(1-c) in[0,1] and
+interval projection are nonexpansive. Hence the corresponding ideal fixed-
+generator boundary operator is at most gamma-contracting. On functions with
+the correct zero boundary it agrees with the original operator on covered
+edges. Learned neural optimization, a changing behavior flow, finite proposals
+and uncovered next-state labels retain their usual limitations.
+
+Coverage is deliberately narrow
+------------------------------
+The train active-edge counts from the complete adjacency audit are:
+Ant321/1M, HMM209/2M, HML128/2M, Soccer54/1M, CubeS448/1M,
+CubeD17/1M, Pz3 68/1M, Pz4 ZERO, Scene49/1M. Most consecutive success-state
+rows already have current_mask0, so overriding their next value changes no
+target. Sparse entry edges may explain a null result; this method does not
+increase their training weight. Empty coverage is exactly the original method.
+
+Initial pilot environments are HMM, Ant and CubeD, all seed0. These test the
+previous collapse, the largest navigation entry coverage, and the much rarer
+CubeD entry coverage respectively. No nine-task mean exists until all9 complete
+tasks from one common recipe are available. Last3 CPU50 (800K/900K/1M, episode
+seeds42..91) remains the sole primary metric; intermediate diagnostics do not
+replace it. A discovery gain still needs independent training-seed confirmation.

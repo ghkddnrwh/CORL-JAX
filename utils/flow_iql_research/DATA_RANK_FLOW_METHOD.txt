@@ -1,0 +1,116 @@
+Real-data rank-weighted policy flow: exploratory comparison
+=========================================================
+
+Question and scope
+------------------
+The synthetic-label rank-flow pilot distills actions selected from a learned BC
+generator. A bad generator or its poorly valued outliers can become policy
+labels. This comparison keeps the same IQL V2 Q/V updates, unweighted BC flow,
+policy architecture, optimizer clocks, and deployment procedure, but changes the
+policy objective to weighted flow matching on actual dataset actions. It is a
+new hypothesis, not a demonstrated improvement or a claim of novelty.
+
+The whole value intervention is two same-minibatch V Adam fits against a frozen
+old target-min-Q, fresh-V bootstrap, and projection of the Q target to the known
+return interval. Gaussian AWR in the official-style baseline uses OLD ONLINE
+min-Q minus OLD V. The target critic supplies V targets, not the AWR advantage.
+The policy methods here do not use V in their actor losses.
+
+One global policy rule
+----------------------
+For each data pair (s,a), generate nine actions from the old unweighted BC flow.
+Evaluate all actions with the old ONLINE twin-min-Q. Attach independent Uniform
+tie breakers to the data action and the comparator actions; order by (Q,tie).
+Let C be the number of comparators below the data action. Set
+
+    w(C) = 9 if C=9, 1 if C=8, and 0 otherwise.
+
+Train a separate policy flow with mean[w * squared FM velocity error], using the
+real data action as its endpoint and independent Gaussian/time samples. Add the
+ordinary unweighted BC-flow FM loss with coefficient one. These losses optimize
+separate parameter blocks. Stop policy gradients through weights/comparators/Q.
+Do not divide the policy loss by the realized minibatch weight sum. Deploy one
+sample from the policy flow with ten Euler steps, without a critic or BC flow.
+
+This is a comparison of policy objectives, not another combination of separate
+correction heuristics. Nine comparators and order nine are the same on all pilot
+tasks. There is no exponential temperature or actor dependence on V residuals.
+Common training setting: expectile .9, gamma .999, public network/Adam settings.
+
+Why these weights have a statistical interpretation
+---------------------------------------------------
+Fix s, a critic, and a conditional behavior distribution mu. First assume the
+BC flow samples exactly mu. The augmented (Q,Uniform) score has an atomless CDF
+F even when Q has ties. Conditional on the data action's augmented score x,
+the nine comparator outcomes are independent Bernoulli(F(x)). The weight is the
+average of nine estimators, each equal to 9 times the indicator that the data
+action beats a subset of eight comparators:
+
+    w = (9/9) sum_{j=1}^9 I[data beats every comparator except j].
+    E[w | s,a,tie] = 9 F(x)^8.
+
+The best of nine independent mu actions has exactly density 9 F(x)^8 relative
+to the augmented mu law. Integrating out the random tie breaker gives the same
+action law as random-tie best-of-nine selection. Thus weighted real-action FM
+and FM on independently selected best-of-nine labels have the same population
+objective under these assumptions. Their finite-data estimators differ.
+
+The data action has a uniform rank among ten iid augmented actions, so
+
+    E[w]=1, E[w^2]=(1+81)/10=8.2,
+    asymptotic ESS/batch_size = 1/8.2 = 5/41, about .122.
+
+The bounded weights are stable to positive affine changes in Q, but sparse.
+About 80 percent of examples have zero weight in the ideal iid calculation.
+This variance is a concrete disadvantage compared with dense selected-label FM;
+it is not hidden by batch normalization of the weights.
+
+Relation to expectile policy extraction
+---------------------------------------
+The bounded-action order-statistic argument in RANK_FLOW_METHOD.txt shows that
+E[max_{i<=N} X_i] >= expectile_tau(X) when N >= tau/(1-tau). Order nine satisfies
+this at tau=.9. With exact Q_tau, an exact behavior generator, and an exact
+policy distribution fit, this gives the same ideal policy-improvement argument
+as the selected-label policy. It does not prove performance relative to FQL or
+the selected-label teacher. Order nine has no analogous guarantee at tau=.99.
+
+What can invalidate the interpretation
+--------------------------------------
+The actual BC flow approximates mu. Then the conditional comparator CDF is F_BC
+and the weighted data target is proportional to
+    mu(a|s) * E_tie[9 F_BC(Q(s,a),tie)^8].
+Its statewise mass need not equal one. Finite-capacity learning can also change
+the effective weighting of states. This intentionally differs from best-nine
+synthetic labels and is precisely the failure channel under investigation.
+Learned Q may rank actions incorrectly, including on the data. Random ties only
+remove deterministic tie bias; they do not recover missing action information.
+Flow approximation error, sparse weights, target drift, finite data and Euler
+discretization remain. Small residual loss or small actor FM loss is not proof
+of a useful policy. An exact student of a fixed ideal teacher does not exceed
+that teacher by virtue of this derivation.
+
+Diagnostics and fair comparison
+-------------------------------
+Training logs include weight mean, ESS, fractions of 0/1/9 weights, zero-mass
+minibatches, observed/comparator Q contrasts at the same state, exact Q ties,
+candidate Q/action contrast, and unweighted policy data-FM loss. No zero-mass
+minibatch is silently resampled. Existing rank-flow distribution diagnostics
+compare policy/BC/best9-BC distributions and report independent teacher sampling
+resolution. Here the synthetic best9 flow is a REFERENCE policy, not the exact
+training-label distribution when the BC generator is misspecified. The named
+selected-target FM probe is likewise a reference objective. Auxiliary teacher
+CPU50 evaluations do not replace primary policy CPU50 evaluations.
+
+Existing inference/frozen-V helpers instantiate the original RankFlowAgent.
+This is valid only because both models have identical serialized arrays,
+configuration, sample_actions, selected_teacher_targets, and Q/V computations.
+They have different actor losses. Tests must verify exact state restoration and
+identical deployment from both templates, and the actual runner is separately
+tested for full/resumed training. Source hashes include this new core, its
+runner, rank_flow_core_v1, policy_core, core, and all vendored dependencies.
+
+Each pilot runs 1M critic updates. Primary score is CPU50 mean at 800K/900K/1M
+with independently reset seeds42..91. Pilot environments are Antmaze-large,
+Cube-double and Puzzle3. No per-task winning-method mixture or incomplete
+nine-task mean is eligible. All benchmark conclusions require actual results;
+CPU implementation tests and estimator simulations are not training replicates.

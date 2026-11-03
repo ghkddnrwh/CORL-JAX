@@ -1,0 +1,57 @@
+Learned-V mean target-Q teacher: component ablation, not a new feature stack
+
+Question
+The uniform finite mean-backup scored .617037 on nine tasks/seed0, versus .4
+for finite minimum. Actual BC parameters/moments/replay/agent RNG are exact
+across that54-checkpoint control. Does changing the teacher of learned V to
+mean target-Q already recover the gain, or does the finite root contribute
+further? A learned-mean control is needed before assigning the full gain to
+removing expectile fitting residual. This experiment does not change the
+locked mean-backup recipe or its fresh9/10/11 validation.
+
+Fixed intervention
+Keep unweighted official BC flow, two same-minibatch V Adam fits, fresh fitted
+V bootstrap, known-return projection, old-online-Q EMA, best9 min-Q deployment.
+Change only frozen V teacher from target twin minimum to target twin mean.
+No finite next-action samples enter this learned-V target. Diagnostics use the
+actual mean teacher; min-teacher scores are explicitly counterfactual.
+
+Three discovery tasks, chosen before any new learned-mean outcomes
+Ant-large, Humanoid-medium, Cube-double; seed0, tau.9, gamma.999, N9,1M.
+All widths, Adam/batch/EMA/flow settings remain the same public per-task config.
+Existing finite-min/mean returns were known when choosing these heterogeneous
+tasks: Ant .54/.46, HMM0/.82, CubeD0/.32. This is a post-discovery mechanism
+ablation, not an unbiased new benchmark or held-out task selection.
+Use all800K/900K/1M CPU50 episodes, reset seeds42..91. No early policy evaluation.
+Missing/stopped scores are unobserved, never0. No task-wise hyperparameter tuning.
+
+Controls
+Compare existing finite mean, finite minimum and learned min-Q V2 models at the
+same checkpoints, completing a learned/finite x min/mean descriptive factorial.
+Use pinned N9 evaluation files for the older learned-min parents, whose training
+config had N32. Never compare their N32 primary score as if it were N9.
+Audit actual BC parameters, Adam moments, replay and agent RNG at all late
+checkpoints. A mismatch requires fixed-actual-BC CPU counterfactuals before
+claiming a value-only effect. Allthree tasks must complete before a pilot mean.
+No automatic method promotion or mixing with the current full9 method.
+
+Validation and source policy
+Actual Ant512/CubeD2561M states:24CPUupdates. Reversing only the teacher mean
+back to minimum in a validation-only in-memory control reproduces original
+boundedV2 state EXACTLY. Mean intervention changes the value system while
+BC parameters/moments and learner RNG stay exact in the short CPU test.
+Real runner8continuous versus4+4resumed CPUupdates has an identical checkpoint
+SHA, Q8/V16 clocks, exact replay and no episodes. GPU/late equivalence still
+requires the registered actual-model auditor. Existing active sources unchanged.
+Generic legacy V diagnostics assume a min teacher; dispatcherV6 skips non-min
+teacher configs. This control's correctly labelled online diagnostics and
+dedicated pilot auditor own its records. No old diagnostic is relabelled.
+
+Resources and interpretation
+Exactly3newGPUjobs, placed after ALL queued mean-confirmation jobs. Keep8/GPU,
+memory fraction.1, no learner restarts. New schedulerV21 only adds the permitted
+runner; it adopts live handles. Current mean confirmation has scheduling priority.
+The three-task result cannot prove a full9 improvement or the true conditional
+residual/B_k. Smaller fitting loss is not an oracle bias measurement. If this
+alternate later becomes a candidate, full9 and fresh unused training seeds>=12
+are required; current fresh9/10/11 results cannot silently validate a new recipe.

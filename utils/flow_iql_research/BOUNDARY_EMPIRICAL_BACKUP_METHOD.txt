@@ -1,0 +1,83 @@
+Known success boundaries after removing the learned-V backup residual
+====================================================================
+
+This experiment isolates one remaining error source in the finite-expectile
+backup. It does not combine rank-flow, GMM, head-mean or half correction.
+
+Evidence motivating it
+----------------------
+Frozen500K Humanoid critics trained with the finite-9 expectile backup have
+severe errors even on states with a known exact zero bootstrap target. Across
+ALL791/338 validation success transitions, respectively, twin-Q RMS to the
+known value0 is674.934/709.032. The learned-V IFQLV2 controls have7.737/4.023.
+Training success-state errors are also151.535/218.377, so this is not solely a
+heldout-data issue. These are boundary errors, not oracle interior-Q errors.
+
+Uniform256-transition batches contain on average .502/.314 success examples
+in the two Humanoid training datasets, and .149 in Cube-double. Puzzle4 has no
+complete-success transitions at all. Counts and error audits are recorded in
+analysis/terminal_boundary_audit_v1/summary.json, with actual source/checkpoint
+hashes. Independent conditional-generator diagnostics further distinguish
+finite proposal size, critic source and generator source. More proposals do
+not restore a critic that is already nearly constant at the return floor.
+
+Why zero values are known here
+------------------------------
+The installed OGBench single-task relabeler computes successes from CURRENT
+state qpos/button information, sets r=0 and mask=0 at full success, and does
+not condition this label on the chosen action. Locomaze single-task evaluation
+uses success_timing='pre'. Therefore the implemented masked task has
+
+    Q(s_success,a)=0 for EVERY action a.
+
+This is a boundary condition available from training labels and benchmark
+semantics, not an estimated residual or an oracle for nonterminal values.
+For generic datasets whose terminal flag depends on the sampled outcome or
+means a timeout, the all-action statement need not hold. This runner is scoped
+to the nine verified OGBench tasks and pins the relabeler source hash.
+
+One global intervention
+------------------------
+Retain the finite-9 old target-minQ expectile bootstrap, known-return target
+projection, unchanged IFQL BC flow/best9 deployment, and the two auxiliary
+V Adam fits used in the existing control. The learned V remains absent from
+the Q backup. At every update, independently draw32 training success states.
+For each state use its observed action AND one Uniform[-1,1] action. Add
+
+    L_boundary = mean_64_pairs[ sum_two_heads Q(s_success,a)^2 ]
+
+to the original critic loss with coefficient1. The existing joint Q/BC
+optimizer takes one update on L_TD + L_boundary + L_BC. There are no extra Q,
+BC or V optimizer steps. The V objective is unchanged. This specifically
+tests the critic boundary condition, with no V-boundary auxiliary loss.
+
+The coefficient1,32 states and one uniform action are fixed across all tasks.
+There is no environment-specific tuning. If the training success pool is
+empty, the boundary loss is exactly disabled; missing success data is never
+fabricated. Thus Puzzle4 follows the unaugmented finite-backup update.
+
+The auxiliary replay RNG is independent of the original replay RNG, stored in
+the resumable checkpoint. Uniform actions use a folded JAX key and do not
+consume BC matching/proposal random streams. Log main TD and boundary losses
+separately, observed/uniform boundary Q RMS, actual finite-backup snapshot TD,
+and boundary V RMS. Learned-V-only TD is explicitly a counterfactual metric.
+
+Connection to residual and propagation
+--------------------------------------
+The finite backup already removes learned-V fitting error from bootstrapping.
+Large boundary errors there demonstrate that this removal is insufficient.
+Boundary errors can feed predecessor targets and propagate through Bellman
+updates; direct supervision fixes a known source without diagnosing unknown
+interior zeta or B_k. This does not prove that boundary error was the sole
+cause, or that reducing it improves action ranking, generalization or return.
+
+The auxiliary loss reweights the critic regression and augments actions at
+known-zero states. Although the exact masked Bellman solution satisfies these
+labels, a finite neural network may trade interior accuracy for boundary fit.
+Therefore all pilots must finish800K/900K/1MCPU50 and compare both boundary and
+interior diagnostics. Any performance claim still requires one uniform9-task
+recipe and independent training-seed confirmation above FQL.47/ReBRAC.44.
+
+Planned pilots are Humanoid-medium and Cube-double (failure cases), and
+Puzzle3 (the existing finite-backup success case, to detect regressions).
+No GPU result existed when this method and its validation were registered.

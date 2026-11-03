@@ -1,0 +1,57 @@
+Compact policy artifacts for the validated mean-head finite-backup recipe
+
+Scope
+Predefine one policy per environment: first fresh seed9, exactly1Mupdates.
+Never choose a best seed/checkpoint or mix methods by task. Nine bundle exports
+and CPU50 replays are deployment verification, not additional training
+replications or observations in the800K/900K/1M performance metric.
+The primary goal still requires all27fresh parents/all81late checkpoints and
+the original frozen independent-confirmation gates. A ready bundle is not a
+passing benchmark claim.
+
+Contents
+Each pickle carries only trained behavior-flow and online twin-critic parameters,
+model configuration/dimensions, relative source hashes, framework versions and
+source provenance. No V, target critic, Adam, replay or training RNG is needed.
+The artifact cannot resume training. Source checkpoint paths are metadata and
+are never opened by the loader. Repository code and compatible recorded
+framework versions are required; this is not a Python-dependency-free file.
+The initial network scaffolding is discarded; only its loaded actor/critic
+are used, and its optimizer is None. No synthetic training clocks are exposed.
+
+CPU single-observation action
+Set CUDA_VISIBLE_DEVICES='' before importing JAX in a fresh process.
+from utils.flow_iql_research.mean_backup_bundle_v1 import load
+import jax
+import numpy as np
+metadata, state, policy = load('PATH_TO_BUNDLE.pkl')
+key = jax.random.PRNGKey(42)
+key, action_key = jax.random.split(key)
+action = np.asarray(policy(state.agent.network.params,
+                           np.asarray(observation, np.float32), action_key))
+For a rollout, continue splitting key on every action. The official IFQL
+single-observation forward pass generates9flow candidates with10Euler steps,
+then chooses the highest online twin-minimum Q. Deployment still uses min;
+mean target-Q is the training-backup rule. No policy or gradient is retrained.
+
+Export and exact replay tools
+python -m utils.flow_iql_research.export_mean_backup_bundle_v1 RUN_DIRECTORY \
+  --output NEW_BUNDLE.pkl
+python -m utils.flow_iql_research.evaluate_mean_backup_bundle_v1 NEW_BUNDLE.pkl \
+  --reference-run RUN_DIRECTORY --output NEW_REPLAY_RESULT.json
+Use the existing ogbench Python environment and CUDA_VISIBLE_DEVICES=''.
+Export supports fixed1M only and requires a completed mean-backup parent.
+The comparison tool reads the reference config/evaluation JSON after rollout;
+source learner directories are blocked throughout loading and acting.
+It blocks optimization and requires all50success/reward/length arrays to match
+the original1M row exactly. Raw primary files are never overwritten.
+
+Portability and limits
+Inference source hashes are relative to the repository root, so original
+absolute checkpoint/config paths are not deployment dependencies. Exact CPU50
+equivalence is verified on the current environment and hardware; this does not
+guarantee bitwise equality on different frameworks, JAX runtime flags, hardware
+or MuJoCo/OGBench versions. GPU inference latency/precision is not benchmarked.
+Batch observations are outside this verified single-observation interface.
+The automatic package manager retains every failure and never selects an
+alternative model. It uses only low-priority CPU slots and adds no GPU learners.

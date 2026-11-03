@@ -1,0 +1,93 @@
+Residual control and actual policy improvement
+
+The supplied Analysis the Stability of IQL.pdf defines the score residual by
+G_tau(q,V_tilde)+zeta=0. Its local decomposition (14) is
+  g_k = D e_tau(Q_k)[epsilon_k] + zeta_k/kappa_k + r_k.
+Its propagation equations (16)-(20) retain the critic-fit response B_k and give
+upper norm bounds. The residual channel can have a larger condition number.
+These results do not give a monotonic policy-improvement guarantee when one
+signed error channel is reduced while the other channels and B_k can change.
+
+An exact local counterexample
+
+Consider a start state with actions leading to G or B at zero immediate cost.
+At either destination the behavior action a is uniform on [-1,1], followed by
+termination. Rewards are .1*a-.15 at G and .1*a-.1505 at B. Thus G is better
+by .0005 under any common continuation action or common action distribution.
+Both action-value distributions are atomless. Rewards lie within [-1,0].
+
+The population expectile of uniform[-1,1] is
+  c_tau=(sqrt(tau)-sqrt(1-tau))/(sqrt(tau)+sqrt(1-tau)).
+Consequently V*_G=-.15+.1*c_tau and V*_B=V*_G-.0005.
+
+Give G two frozen critic heads Q*-b and Q*+b, with b=.001. At B both heads
+equal Q*. Mean aggregation equals truth in this constructed example; minimum
+aggregation shifts the exact expectile at G downward by b. Suppose the fitted
+V_G initially equals V*_G. Its fitting displacement relative to the perturbed
+min-Q expectile is +b, exactly canceling the critic-induced displacement -b.
+
+Before residual correction the start targets prefer G. After perfectly fitting
+V to the min-Q population expectile, the start targets prefer B, because
+  V*_G-b < V*_G-.0005.
+The resulting actual return loss under any common continuation action is
+gamma*.0005=.0004995 for gamma=.999. Clipping to the valid conservative return
+range [-1000,0] is inactive. Using mean twin-Q in the exact expectile restores
+the correct ordering in this particular constructed case.
+
+This respects the paper's residual sign convention. The score at approximate
+V_G is .1/4*[tau*(1-t)^2-(1-tau)*(1+t)^2], with t=c_tau+b/.1; zeta is minus
+this score. Kappa at the exact root is sqrt(tau*(1-tau)). At tau=.9, zeta is
+.000298 and zeta/kappa=.000993333, close to the exact displacement .001.
+The remaining difference is the local expansion's higher-order term.
+The numerical record also evaluates tau=.99.
+
+This is a one-update counterexample with frozen perturbations, not a claim
+about asymptotic learning. It shows why reducing a sensitive residual channel
+alone need not reduce the actual signed disturbance or improve the policy.
+It neither refutes the paper's propositions nor establishes that real critics
+are unbiased when averaged.
+
+What the actual OGBench evidence says
+
+Holding the actual V2 BC flow fixed, changing only the deployed critic source
+to the finite-expectile-backup critic changes the last-three CPU50 success:
+  Antmaze-large: .060000 -> .486667
+  Cube-double:   .313333 -> .000000
+  Puzzle-3x3:    .926667 -> 1.000000
+These are three pilot tasks, not a nine-task result or extra training seeds.
+The controller change also changes the behavior-distribution approximation;
+it is not an oracle intervention on the true conditional residual alone.
+
+In 128 common heldout next states at 100K, 300K, 800K and 1M, both observed
+next-action Q and generated-action Q fall together for Cube-double. The
+finite-backup critic approaches -2000 and loses most within-state generated-
+action contrast. Replacing one generated action by an observed action has a
+small frozen expectile shift in these checkpoints. This weakens the current
+anchor hypothesis; it does not prove that the behavior generator is accurate.
+A flat or otherwise wrong learned critic can hide proposal-quality differences.
+
+For identical frozen proposals, averaging the two target heads instead of
+taking their minimum raises the finite expectile. This follows from
+  min(Q1,Q2)=(Q1+Q2)/2-|Q1-Q2|/2
+and monotonicity of the expectile. The computed difference is not a true-Q
+bias measurement. Its product with gamma/(1-gamma)=999 is an illustrative
+fixed-operator sensitivity scale, not a prediction of actual neural values.
+
+The next registered experiment changes only this backup aggregation. It keeps
+the same tau=.9, gamma=.999, nine proposals, BC training, unused auxiliary V
+fits, return projection and min-Q deployment. Public FQL and the user's FQL
+port default to mean target-Q aggregation. No per-task coefficient is added.
+Overestimation can increase, so complete late evaluations and independent
+training seeds are still required. The fixed-proposal contraction argument
+does not bound the neural fitting response B_k or prove training convergence.
+
+Evidence and reproduction
+  analysis/residual_cancellation_counterexample_v1.json
+  analysis/finite_backup_common_BC_late_v1/summary.json
+  analysis/observed_action_backup_trace_v1/{cubed,ant,pz3}.json and .npz
+  analysis/observed_action_backup_trace_v1/Q_scale_and_action_contrast_v1.png
+  analysis/min_vs_mean_finite_backup_diagnostic_v1.json
+  mean_finite_backup_pilot_plan_v1.json
+All analysis paths are relative to logs/diagnosis/flow_iql_research_20261026.
+The mean-backup training implementation is mean_empirical_backup_core_v1.py
+and train_mean_empirical_backup_v1.py in this directory.

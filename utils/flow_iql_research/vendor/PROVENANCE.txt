@@ -1,0 +1,42 @@
+Source: user-provided FQL repository snapshot
+  algorithms/uk_offline/basic/propagation/fql/
+  commit e8cd16eb490332924dfa2492097219f181765933
+
+The supplied repository's LICENSE is preserved in this directory.
+
+The seven copied modules are agents/iql.py, ifql.py, fql.py, rebrac.py and
+utils/flax_utils.py, networks.py, encoders.py. Their only code translations are:
+
+1. from utils.* imports point to utils.flow_iql_research.vendor.*.
+2. The four agents' initialized network_params are converted with
+   flax.core.unfreeze(), for the existing Flax0.6.1 parameter-container API.
+
+flax_utils.py and networks.py are byte-identical to the supplied versions.
+The environment capture verifies the exact text/AST after these explicit
+translations, and records both files' SHA256s. New value/policy experiments
+live outside the vendor directory. Registered training sources remain frozen.
+
+The running campaign uses the existing ogbench Python3.10 environment, including
+JAX0.4.1, jaxlib0.4.1+cuda11.cudnn86, Flax0.6.1 and OGBench1.2.1. These differ
+from the provided FQL requirements (JAX>=0.4.26, Flax>=0.8.4, OGBench1.1.0).
+The exact observed package versions, GPU driver/runtime settings, supplied-code
+translation audit, current installed OGBench code/assets and current raw dataset
+file hashes are recorded under:
+
+  logs/diagnosis/flow_iql_research_20261026/analysis/reproduction_environment_v1/
+
+The architecture/loss/update/configuration alignment is to the supplied official
+code and paper settings. It is not a claim of bitwise paper-environment
+reproduction across different library/simulator versions. Fresh local FQL and
+ReBRAC references use the same campaign runtime. Current dataset hashes identify
+the current files; they do not retroactively certify every earlier run's input.
+
+Import utils.flow_iql_research.core before restoring standalone Optax objects;
+it contains the existing runtime-only SciPy tril/triu compatibility alias.
+No installed dependency has been edited or upgraded for this research.
+
+Reproduce baseline hyperparameters from the registered job/config arguments,
+not from a bare generic factory default. In particular Gaussian IQL on
+puzzle-4x4 explicitly uses --alpha3 in the audited campaign jobs. The generic
+inherited alpha is unused by the primary IFQL BC-flow path; that fact was
+checked separately in analysis/IFQL_inherited_config_invariance_v1.json.

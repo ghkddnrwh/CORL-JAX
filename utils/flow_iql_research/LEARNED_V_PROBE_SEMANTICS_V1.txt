@@ -1,0 +1,39 @@
+Additional clarification: generic learned-V probe semantics
+===========================================================
+
+The earlier DIAGNOSTIC_TARGET_SEMANTICS.txt focuses on finite-backup branches,
+where the generic learned-V td_rms also uses the WRONG bootstrap variable for
+their actual Q update. A separate qualification applies even to ordinary
+bounded_v2 IQL/IFQL, including the preferred three-critic policy's base learner.
+
+core.probe uses current parameters on fixed replay queries:
+  y_raw = r + gamma * mask * V_current(s_next)
+  td_rms = RMS(Q_current - y_raw).
+It does not project y_raw. The bounded_v2 learner actually projects its fresh-V
+training target onto[L,0]. Consequently the generic td_rms is an UNPROJECTED
+snapshot Bellman-difference proxy, not its actual projected fitting residual.
+The raw-y difference can differ from the projected snapshot residual whenever
+the target clips. Even the projected snapshot residual is not the old online
+training minibatch's residual, because its queries and parameter time differ.
+
+In core.build_update and its unchanged policy_core/AWR-mixture delegates,
+critic/critic_loss is the ACTUAL two-head sum of projected squared errors.
+For that loss alone, sqrt(critic_loss/2) recovers the RMS of the two heads.
+When logged as an average over an update window, it is a window RMS over the
+changing parameters/replay minibatches, not the fixed-query snapshot quantity.
+The formula does not automatically apply to auxiliary-Q-loss branches or to
+other agents' differently normalized critic loss definitions. Check each source.
+
+Likewise score_rms is RMS over individual fixed sampled(state,data_action)
+expectile scores. It is not RMS of the conditional mean score given the state.
+score_mean can cancel between states; neither statistic identifies the true
+conditional expectile residual or propagated B_k without additional assumptions.
+In finite-backup branches the learned V can additionally be an unused auxiliary
+head, so its score need not diagnose the bootstrap that trains Q at all.
+
+All training equations, checkpoints, evaluation successes, and the preferred
+discovery9-task last3 mean.5459259259259259 are unchanged. The correction concerns
+the interpretation of logged probes. No pinned source/log was edited. Read this
+qualification together with DIAGNOSTIC_TARGET_SEMANTICS.txt; its narrower
+'other finite branches only' wording does not make bounded_v2 td_rms a projected
+training-error metric. External learned-V snapshots explicitly report both.

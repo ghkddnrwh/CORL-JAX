@@ -1,0 +1,11 @@
+Complete existing tau.9 seed0 expectile-weighted flow pilots, not a new method.
+
+Three original Ant/Puzzle3/Scene runs stopped reversibly at300K and already have phase3 resume jobs. Continue the exact frozen actor/V2 recipes to1M. Weight is tau if old target-min-Q >= oldV,1-tau otherwise; actor loss is weighted real-action flow matching divided by observed batch mean weight. The batch ratio is a practical finite-minibatch normalization; do not claim it is an unbiased population weighted loss. No new temperature/flow network/gradient through Q/actor entered into critic targets.
+
+Known IDQL implicit actor at exact V: pi=mu*w/Z. For arbitrary V, E_pi Q-V = rho_tau/Z with rho_tau=E_mu[w(Q-V)]. This connects conditional expectile residual to policy/value alignment, without claiming observed sample score RMS estimates rho_tau. Approximate Q, action-mode coverage, signs near threshold and finite network capacity can still cause poor return.
+
+The original100K/300K outcomes were seen (Ant .26/.08,Pz3 0/0,Scene .66/.78). No late outcome exists at this registration. This is completion of exploratory pilots, not independent confirmation. Compare all800K/900K/1MCPU50 to matched BC-flow N9 controls at same seed, gamma and value controller. Controls were trained with inference-only N32 config and already have audited separate N9 evaluations; compare actual Q/V parameter trajectories/replay and agent RNG instead of assuming equality across compiled actor objectives.
+
+No new GPU jobs, no source edits or checkpoint resets. Scheduling amendment changes unstarted job order only. A winner needs uniform9 and new training seeds>=9 before the main goal can be met. The unregistered expectile_sign_flow_core_v2.py is an unused draft created during a corrected file-name collision; it is not this experiment.
+
+References: https://arxiv.org/html/2304.10573v2 (Eq9); https://arxiv.org/html/2405.18187v2 (approximate V alignment).

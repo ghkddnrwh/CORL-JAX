@@ -1,0 +1,108 @@
+Status: independent confirmation complete; the candidate missed the 0.47 goal.
+
+Metric
+  At each training seed and task, average CPU50 success at exactly 800K, 900K,
+  and 1M Q updates. Average all nine task means equally, then training seeds
+  equally. Missing tasks/checkpoints never contribute zero. The three critic
+  snapshots used inside a policy are not three independent training seeds.
+
+Common recipe
+  Expectile 0.9; discount 0.999; nine behavior-flow proposals; ten Euler steps.
+  Four GELU layers: published 512-wide navigation and 256-wide manipulation.
+  Q/V layer normalization, no actor layer normalization, raw observations.
+  Adam 3e-4, fixed learning rates. One Q and one BC-flow update per replay batch.
+  Two V Adam fits use the same batch and the frozen old minimum target-Q.
+  The V optimizer owns its own moments and clock. After 1M Q/BC updates it has
+  made 2M updates. Use the newly fitted V in the critic backup and clip that
+  target to [-n/(1-discount),0], with n the known reward-component count.
+  Preserve the official target-Q EMA convention: its rate is 0.005 and its
+  source is the old online Q. The BC flow uses plain flow matching, without
+  an advantage weight or an action gradient from Q.
+
+Deployment
+  Retain online critic parameter snapshots every 100K updates. Use the current
+  BC flow to generate nine actions from Gaussian latents. For each action take
+  the minimum twin-Q prediction within each critic, then average these values
+  across the three most recent past/current critic snapshots. Choose the action
+  with the largest average. Do not average success scores or select a checkpoint
+  separately for each task.
+
+  At 800K: critics 600K,700K,800K; actor 800K.
+  At 900K: critics 700K,800K,900K; actor 900K.
+  At 1M:   critics 800K,900K,1M;   actor 1M.
+
+Rationale and limits
+  Extra V fits address regression underfitting; target projection uses known
+  return bounds; a behavioral flow supplies a richer action proposal family.
+  Temporal Q averaging tests sensitivity to changing action rankings. A frozen
+  HMM intervention with identical BC900 achieved 0.70 using Q800 and 0.02 using
+  Q900. This establishes a critic-source effect in that intervention, not a true
+  critic-bias estimate or a proof that the expectile residual caused it.
+
+  Minibatch expectile loss and generated-action residuals are not oracle
+  conditional residuals. Repeated fitting need not help heldout states. The
+  temporal filter changes policy extraction only; it does not make the neural
+  Bellman training operator a contraction. Native-vs-V2 BC parameters can differ
+  despite equal replay/JAX RNG states, so fixed-BC causal controls are separate.
+  No novelty claim or all-task/all-expectile stability guarantee is made here.
+
+Observed exploratory seed0 results
+  Original-discount official-style Gaussian IQL: nine-task mean 0.1888889.
+  V2 IFQL with best32: 0.3400000; best9: 0.4088889.
+  V2 IFQL with best9 and temporal K3: 0.4718519.
+  Fresh same-protocol FQL, discount 0.999: 0.4540741.
+  Provided plain FQL/ReBRAC comparison threshold: 0.47.
+  Fresh same-protocol ReBRAC, discount 0.999: 0.4296296.
+  Seed0 selected the recipe. Locked independent seeds1/2 achieved 0.4022222 and
+  0.4829630; their mean is 0.4425926. All three seeds average 0.4523457, with
+  sample standard deviation 0.0437623 across seed-level nine-task means.
+  All 81 primary evaluations were audited against their raw CPU50 arrays,
+  source/checkpoint identities and actual optimizer clocks. The candidate does
+  not establish superiority to the supplied FQL threshold. It remains useful
+  as a reproducible negative result, not a qualifying final algorithm.
+
+Reproduce one fresh training run from the repository root
+  CUDA_VISIBLE_DEVICES=0 XLA_PYTHON_CLIENT_MEM_FRACTION=0.1 \
+  /home/ukjo1/anaconda3/envs/ogbench/bin/python -m \
+    utils.flow_iql_research.train_temporal_policy_v1 \
+    --env puzzle-3x3-play-singletask-v0 \
+    --output logs/diagnosis/temporal_ifql_reproduction/pz3_seed0 \
+    --seed 0 --steps 1000000 --episodes 50
+
+Evaluate its self-contained checkpoint
+  CUDA_VISIBLE_DEVICES='' /home/ukjo1/anaconda3/envs/ogbench/bin/python -m \
+    utils.flow_iql_research.evaluate_temporal_model_v1 \
+    logs/diagnosis/temporal_ifql_reproduction/pz3_seed0/checkpoint_1000000.pkl \
+    --output logs/diagnosis/temporal_ifql_reproduction/pz3_seed0_1M_eval.json
+
+Existing reported experiments
+  These used the original train_policy/train_policy_v2 learning runner and
+  separately evaluated the locked K3 deployment rule on retained checkpoints.
+  The integrated runner implements the same learning equations and stores the
+  critic history inside each checkpoint. Short real-Cube CPU tests verify exact
+  learning-state/replay equivalence, exact history restoration after resume,
+  and the correct warmup windows. These tests do not imply bitwise identity of
+  long GPU trajectories. No active historical worker was migrated.
+
+  Export an existing reported run with export_temporal_model_v1; this produces
+  a self-contained deployment bundle, not a new training run. Its evaluation
+  matched all 50 success/reward/length episode arrays of the corresponding
+  original Cube1M K3 evaluation. Checkpoint/source hashes remain in the bundle.
+
+Compute
+  Counting proposal-wise work, best32 uses 320 flow-field and 32 twin-Q action
+  evaluations per decision; best9/K3 uses 90 flow-field and 27 twin-Q action
+  evaluations. These are not wall-clock measurements. FQL deploys a one-step
+  student without Q selection and has a substantially smaller inference graph.
+
+Authoritative records
+  logs/diagnosis/flow_iql_research_20261026/
+    temporal_critic_full9_registration_v1.json
+    confirmation_temporal_inference_lock_v4.json
+    confirmation_temporal_seed1_registration_v1.json
+    confirmation_temporal_seed2_registration_v1.json
+    analysis/confirmation_three_seed_audit_v1.json
+    analysis/temporal_integrated_runner_validation_v1/validation.json
+    analysis/temporal_deployment_validation_v1/exported_cube_cpu50.json
+    analysis/late_critic_drift_causal_summary_v1.json
+    analysis/seed0_comparison_v1.csv

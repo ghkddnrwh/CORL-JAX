@@ -1,0 +1,86 @@
+Boundary error and the return-floor geometry
+==========================================
+
+This note interprets the registered diagnostics. It is not a neural convergence
+claim, an oracle for interior values, or a benchmark performance result.
+
+Why a bad constant critic can fit most sparse-cost transitions
+------------------------------------------------------------
+Let the largest per-step component cost be C and L=-C/(1-gamma). Consider the
+constructed constant critic Q(s,a)=L and its constant finite-proposal expectile
+V(s)=L. On a nonterminal transition,
+
+    r + gamma L - L = r + C.
+
+Thus every nonterminal transition with r=-C has exactly zero TD target gap.
+For a mask-zero success with r=0 the target is0, and the gap is -L. Partial
+progress rewards greater than -C also break the constant-floor consistency.
+Projection to[L,0] does not remove these facts. It constrains target range,
+while success requires the correct value at a particular boundary state.
+
+The constant floor is NOT a fixed point of the complete episodic Bellman
+operator: success boundaries explicitly contradict it. This construction
+explains the weak training signal in the bulk of sparse-cost data; it does
+not prove that stochastic neural learning will converge to that critic.
+
+With a constant proposal-Q value, the finite expectile equals that constant
+for every tau and sample count. More proposals or larger tau cannot restore
+missing contrast at such a frozen critic. They may change earlier learning
+dynamics, so the ongoing tau.99 experiment remains necessary.
+
+Measured training-data geometry
+------------------------------
+audit_reward_floor_geometry_v1.py evaluates the above identity on all nine
+training and validation datasets, using each task's known return bound.
+All navigation/Soccer and Cube-single nonterminal rewards are the minimum
+cost, hence their nonterminal progress-floor signal fraction is0.
+The corresponding fractions are about .0514 for Cube-double, .9974 for
+Puzzle3,1 for Puzzle4, and .9166 for Scene. Cube-single has about5.33 success
+rows per uniform256 batch; HMM/HML have only .50/.31 and Cube-double .15.
+
+These differences provide a reason to inspect boundary supervision and reward
+density together. They do not uniquely identify the cause of any result.
+Different dynamics, representation demands, behavior coverage and critic
+approximation remain possible explanations. Puzzle4 has no complete-success
+rows; the new boundary auxiliary correctly disables itself there.
+
+A certified empirical error contribution
+----------------------------------------
+On the verified OGBench state-based mask-zero boundary, true masked-task
+Q(s,a)=0 for every action. If f is the boundary frequency in an empirical
+dataset and E_goal is the RMS of both learned Q heads on all its goal rows,
+
+    empirical RMS Q error >= sqrt(f) * E_goal,
+    frozen empirical sum-head critic MSE >= 2 f E_goal^2.
+
+The second inequality follows because the regression target on those rows is
+exactly0 regardless of learned V, target Q, generator or discount. Every
+other row contributes a nonnegative squared error. The first uses only the
+known true boundary value and says nothing about true interior Q.
+
+For the actual500K finite-backup HMM/HML models, the training-data RMS error
+lower bounds are6.71/7.64 and the sum-head regression-MSE lower bounds are
+90.04/116.84. On their validation empirical measures the RMS lower bounds are
+42.45/29.15. These are NOT bounds under an unknown deployment occupancy and
+must not be compared directly to a moving minibatch-window loss.
+
+Relation to the residual and propagation hypothesis
+---------------------------------------------------
+The finite backup computes its proposal expectile algebraically; its auxiliary
+learned V cannot influence the Q/BC update. Consequently boundary failures in
+this branch cannot be explained by that learned-V fitting residual entering
+the backup. Critic approximation, generator/finite-proposal effects and their
+Bellman propagation remain. A finite-proposal score near0 is compatible with
+wrong values at known success states.
+
+One isolated Q-boundary refit tests local repair after collapse while keeping
+BC,V and target Q fixed. Its boundary-only loss intentionally omits TD, so it
+cannot establish what happens when repaired labels are propagated through
+coupled learning. The separately registered from-start boundary-augmented
+finite-backup pilots test that coupled question. A failure of the frozen
+refit to improve return is not a rejection of the preventive intervention.
+
+The ideal fixed-generator exact scalar backup remains a gamma contraction.
+That statement does not establish contraction of neural projection, optimizer
+updates or a changing learned generator. Removing a V fitting displacement
+does not eliminate these other approximation and propagation channels.

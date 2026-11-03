@@ -1,0 +1,46 @@
+Mechanism ablation of independent-critic extraction
+=================================================
+
+Keep all three existing IQLV2 learners0/1/2, BC0 proposals, N9, current-step
+min-twinQ, tau.9/gamma999, all task/checkpoint/reset seeds and CPU50 unchanged.
+Evaluate the complete2x2 design:
+
+                   arithmetic mean       median
+  raw Q values     existing .485926       new median_value
+  per-critic ranks new mean_rank          selected .505926
+
+Only the two missing off-diagonal rules require new evaluations (54CPU50).
+This is a discovery mechanism ablation on ONE existing ensemble group, with
+zero additional GPU training. It does not alter the already locked median_rank
+fresh-confirmation recipe, queue, training source or score. No per-task winners.
+
+What each factor tests
+----------------------
+Raw mean is invariant to an independent additive state offset on each critic,
+but changes under relative positive scaling of the critics. Raw pointwise
+median can change action choice under independent state offsets: different
+critics can become the median at different actions. Thus raw median alone is
+not a general solution to critic calibration differences.
+
+Both rank rules are invariant to a strictly increasing transformation of each
+critic at a state, including positive scaling and offsets. Mean rank can still
+favor the third critic's preference when the other two agree on the unique
+best candidate but only weakly prefer it over a runner-up. Median rank selects
+that common unique best candidate regardless of the third critic's ordering.
+Unit examples exercise these differences, including ties and batched actions.
+
+These are finite-candidate algebraic properties. They do not certify oracle
+action ranks, critic accuracy, uncorrelated errors or better policy return.
+The four actual nine-task means determine whether the expected factor effects
+are present in this discovery cohort; interpretation must report all cells.
+
+Implementation controls
+------------------------
+Version2selector preserves the two original rules' actions, values and scores
+exactly for eight CPU keys and batched observations. Before launching the54
+off-diagonal evaluations, the driver replays an actual three-critic CubeS800K
+median_rank CPU50 evaluation and requires all50 successes/rewards/lengths to
+match the saved version1reference exactly. No mixed learning state is saved.
+Every new evaluation pins all three actual model/config/source hashes and
+optimizer clocks. The strict version2 auditor requires all9x3 records per rule,
+all raw episodes and all81 unique late member checkpoints; missing is not zero.

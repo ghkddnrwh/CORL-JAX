@@ -1,0 +1,44 @@
+두 번의 V fitting에서 minibatch 재사용만 바꾸는 대조 실험
+
+기존 bounded_v2는 고정한 old target-min-Q를 목표로 같은 minibatch에서
+V Adam을 두 번 갱신한다. 첫 갱신 후 파라미터는 그 minibatch에 의존한다.
+따라서 같은 batch로 두 번째 gradient를 계산하면 모집단 또는 데이터셋
+전체의 gradient와 차이가 생길 수 있다.
+
+고정된 데이터셋 D와 target-Q에 대해 첫 갱신 후 파라미터를 theta1이라 하면,
+독립적으로 뽑은 두 번째 batch B'의 gradient는 조건부로
+E[g_B'(theta1) | theta1, target-Q, D] = grad L_D(theta1)를 만족한다.
+이는 표본 gradient의 성질이다. Adam의 파라미터 갱신이 unbiased라는 주장,
+실제 행동 분포의 conditional expectile residual을 제거한다는 주장,
+critic 오차나 B_k를 없앤다는 주장으로 확대하지 않는다.
+
+변형은 두 번째 V batch의 observations/actions만 독립 replay stream에서
+뽑는다. 첫 V batch와 Q/BC batch는 기존 replay stream을 그대로 사용한다.
+두 V fit 모두 같은 old target-Q 파라미터를 쓴다. V Adam은 두 번, Q/BC는
+각 한 번 갱신한다. 새 V로 bootstrap하고 기존 반환 범위로 projection한다.
+target EMA는 원래 old-online-Q 규칙이다. tau=.9, gamma=.999, N9 및
+공식 스타일 네트워크/학습률은 모두 동일하다. 새로운 환경별 실수 HP는 없다.
+
+대조군은 기존 bounded_v2 업데이트를 그대로 호출한다. 대조군도 보조 replay
+stream을 같은 횟수로 진행시키지만 보조 표본을 학습에는 사용하지 않는다.
+두 stream의 상태를 checkpoint에 함께 저장해 정확한 재개가 가능하다.
+stream seed offset273509는 고정된 난수 관리 규칙이며 튜닝한 HP가 아니다.
+
+가설의 출발점은 이미 본 실패 결과다. Puzzle3x3에서 BC와 critic 출처를
+교차하자 새 BC도 기존 critic으로는 높은 성공률을 보였지만 새 critic은
+두 BC 모두에서 실패했다. AntMaze는 BC와 critic 양쪽의 영향을 받았다.
+또한 3환경 x6시드의 고정-Q CPU 진단에서 batch 반복 fitting의 검증 loss
+악화를 관찰했다. 독립 batch의 효과도 Ant에서는 섞였다. 해당 진단은
+학습 성능이나 conditional residual의 정답을 제공하지 않는다.
+
+처음에는 AntMaze-large, HumanoidMaze-medium, Puzzle3x3의 seed3에서
+대조군/변형군을 모두 학습한다. 총6개 pilot이며 기존 seed3 결과도 보존한다.
+seed3은 이미 본 진단용 시드다. 새 독립 검증 시드로 계산하지 않는다.
+평가는 각각800K/900K/1M CPU50, reset42..91의 정확한 마지막3평균이다.
+환경별 승자 조합, peak 선택, 부분 환경의9-task 평균 대체를 허용하지 않는다.
+
+후속9환경 확장은 세 pilot 모두 완료되고 actual-model/source/Adam-clock 및
+finite 검사를 통과한 뒤 검토한다. 변형의3환경 평균이 대조군보다 높고
+최소2개 환경에서 delta>=0일 때만 확장 후보로 삼는다. 이는 benchmark
+우승 기준이 아니다. 새 방법을 선정하면 seed>=9의 독립 학습으로 다시
+확인해야 한다. 기존 rank-mean 주 후보와 두 fresh 그룹의 규칙은 유지한다.

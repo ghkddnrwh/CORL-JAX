@@ -1,0 +1,184 @@
+Research mechanism and comparison map
+====================================
+
+This is a map of alternative experiments and their interpretation, not a recipe
+that stacks every available technique. No uniform nine-task method has yet
+passed independent confirmation above the supplied plain FQL threshold .47.
+The supplied plain ReBRAC threshold is .44; DD-ReBRAC .63 is a different row.
+
+The value and policy pathways
+-----------------------------
+The supplied propagation analysis separates critic error, conditional expectile
+fitting residual, and their Bellman propagation. The fitting residual is a
+conditional score expectation, not the squared loss on one observed action per
+state. Frozen minibatch loss, validation loss, and finite-proposal root scores
+are useful diagnostics, but none is an oracle measurement of that residual.
+
+V2 intervention:
+  1. Freeze old target-min-Q on the sampled data batch.
+  2. Fit V twice on that same target/batch, advancing V's own Adam twice.
+  3. Use fresh V(s_next) in r + gamma*mask*V, and project this Q target to the
+     known reward/discount return interval. Fit Q once.
+  4. Fit the actor once using old parameters for its targets, and preserve the
+     public target EMA convention, which uses the old online Q.
+
+In the official Gaussian AWR actor, advantage is OLD ONLINE min-Q minus OLD V.
+The target critic supplies the V-regression target, not the actor advantage.
+Gaussian AWR therefore gives V error an additional route into policy weights.
+
+The unweighted BC flow and best-N policy depend instead on a behavior generator
+and action rankings from learned Q. Common state-value offsets cancel in the
+argmax. Action-dependent Q error, generator mismatch, and numeric sensitivity
+can still damage selection even when value magnitudes remain bounded. A flow
+policy trained on selected labels adds a distribution-fitting error and a
+numerical integration error. Those errors need not affect return monotonically.
+
+What is actually being compared
+-------------------------------
+* Gaussian IQL with/without V2: same official policy family. The complete
+  gamma=.999 seed0 nine-task means are .199259 and .263704. The improvement is
+  driven by Ant, where value explosion is prevented and late success rises from
+  0 to .793333. Excluding Ant, the descriptive eight-task mean declines .026667.
+  This supports a concrete stability benefit, not a universal residual claim.
+  The matched500K component audit further shows two fits+fresh WITHOUT target
+  projection at meanQ+22757, versus projection-only at meanQ-128. Full V2 is
+  meanQ-143 and native is+6401. All state arrays are finite. This identifies
+  projection's stability role in this one case; final ablation performance is
+  still pending. See VALUE_COMPONENT_EVIDENCE.txt, not a residual-oracle claim.
+  The original-discount V2 cohort is only3/9 complete, not7/9. Ant declines
+  .473333->.266667, HMM improves .186667->.393333, HML improves .02->.033333.
+  Two300K resumes and four unstarted tasks remain prioritized. These three
+  completed tasks cannot stand in for the missing nine-task comparison.
+
+* Finite-expectile backup: replace learned V in the Q bootstrap with the exact
+  expectile of nine BC-flow target-min-Q values. Auxiliary V fits are retained
+  only as clock controls. This removes learned-V fitting residual from that
+  sampled backup, while leaving generator, finite-sampling and critic errors.
+  Ant/CubeD/Puzzle3 full late means are .54/0/1. Other six tasks are training.
+  CubeD's nearly constant wrong value shows why an algebraically small sampled
+  score does not certify a useful critic.
+
+* Mean-target finite backup: change target twin-min-Q to twin-mean-Q only.
+  Keep the original min-Q deployment rule to isolate this factor. Three full
+  pilots are running; partial evaluations cannot be treated as a nine-task win.
+  It removes an explicit downward operation, not every source of Q bias.
+
+* Synthetic-label rank flow: keep IQL V2 and a separate unweighted BC flow.
+  Select the best of nine old-BC actions with old online min-Q; fit a separate
+  policy flow to those labels using independent FM noise/time. Deploy one flow
+  sample. Three full pilots are running. There are no actor V weights, Q-action
+  gradients, or task-specific policy-loss coefficients.
+
+* Real-data rank flow: an ALTERNATIVE actor objective, not an additional term on
+  synthetic-label policy FM. Train on observed data actions with bounded 0/1/9
+  rank weights against nine BC comparators. Under exact behavior generation,
+  this has the same population best9 target; its finite estimator is sparse.
+  Under actual generator misspecification the objectives differ and statewise
+  weight mass can shift. Three pilots are queued. See DATA_RANK_FLOW_METHOD.txt.
+
+* AWR mixture: another ALTERNATIVE policy family. Keep the public AWR weighted
+  data log-likelihood and the same V2 Q/V controller. Replace fixed-std Gaussian
+  with K5 conditional diagonal Gaussian mixture; deploy its most probable
+  component mean without Q selection. Component count and std bounds are common
+  across tasks. It also learns variances, so component count alone is not an
+  isolated causal factor. A K1 learned-variance control is implemented but has
+  no benchmark result. Three pilots are queued; see AWR_MIXTURE_METHOD.txt.
+
+* Observed next-action anchoring: another finite-backup alternative, replacing
+  one of nine generated backup actions with a verified observed next action.
+  Frozen traces show weak backup shifts in the CubeD failure, so this hypothesis
+  currently has lower priority. It is not added to both actor flow objectives.
+
+* Higher expectile .99: stress pilots are queued. Nine proposals no longer
+  satisfy the population best-N/expectile bound N>=tau/(1-tau), which becomes
+  99. A fixed-generator finite sampled backup can still be Lipschitz; that is
+  not evidence that it accurately approximates the population .99 expectile.
+  The Ant/CubeD pair is now active and Puzzle3 is queued. There is a separate
+  finite-operator bestN guarantee for ANY N/tau; it compares with Q_tau,N,
+  not population Q_tau. See FINITE_BACKUP_POLICY_ALIGNMENT.txt for the exact
+  propagated backup/extraction gap and its limits. No benchmark gain follows
+  just from reducing that gap.
+
+* Temporal critic averaging K3: average three per-snapshot twin-min predictions
+  for the same BC actions. This is a separate inference recipe addressing
+  ranking drift. Its selected seed0 mean .471852 did not survive independent
+  confirmation: three-seed mean .452346, independent seeds1/2 mean .442593.
+
+Two frozen-model diagnostics added in this round
+------------------------------------------------
+Head aggregation is a 2x2 factor comparison: target min/mean versus deployed
+min/mean, with actual model/proposals held fixed within each deployment pair.
+The mean-deployment rule is applied globally, never selected per task. The
+min-backup group contains all nine environments; the mean-backup group has only
+three pilots. Their results are not pooled. The actual CubeD300K min selector
+reproduced all50 original episode arrays and32 scalar action probes exactly.
+
+Student integration uses the same retained actor field and initial latent with
+10/20/50 Euler steps. Q, V, BC and policy parameters stay fixed; the BC teacher
+always remains at10 steps. Same-latent endpoint RMS is meaningful here because
+the vector field and initial condition are common. Independent student/teacher
+latents are instead compared by distribution distances and teacher-teacher
+Monte Carlo resolution. The fifty-step solution is not an oracle ODE solution.
+
+These diagnostics are motivated by Ant100K: the actual policy flow scored .54,
+its own current best9 BC reference .10, and all50 policy episode arrays were
+reproduced. The fixed-data Q diagnostic favors the reference on average, while
+the student's action saturation is lower and conditional action std is similar.
+Finite fitting, target history, action smoothing and Euler error are competing
+explanations. No theorem that exact distillation beats a fixed teacher is being
+claimed. This100K point was chosen posthoc and cannot replace the last3 metric.
+
+The completed integration check scored .54/.40/.44 at10/20/50 steps, versus
+.10 for the unchanged reference. Policy-reference energy remained about .28,
+above reference-reference Monte Carlo resolution .0976. Coarse integration
+affects return but does not by itself explain the observed policy/reference
+gap. The original10-step episode arrays and the shared BC probe actions were
+reproduced exactly. These are one-model observations, not a global decoder win.
+
+A separate frozen-current-teacher fit advances only the policy block with its
+actual extracted Adam moments. Q/V/BC, their optimizers and Bellman counters
+remain fixed. Fresh training teacher samples are drawn at every auxiliary
+update; cached validation labels are used only for matched diagnostics. The
+policy-only artifacts cannot be loaded as a joint training resume state.
+At0/256/1024 additional updates the same Ant100K model scored .54/.62/.52.
+Heldout FM loss was .37276/.36074/.36368; policy-reference energy was
+.28021/.24307/.24656. Thus fitting can improve local distribution metrics
+without giving a monotone return improvement. The256-update peak is not a
+selected algorithm, a new training seed, or a substitute for the last3 metric.
+
+How to read causal and numerical evidence
+-----------------------------------------
+Frozen swaps show that a critic change alone can ruin deployed performance
+while BC is held fixed, both in a late HMM case and across Puzzle3 training
+seeds. They do not identify the true critic error or prove that V residual was
+its sole cause. Likewise, removing learned V from a sampled backup can expose
+other signed biases that previously canceled. See RESIDUAL_BIAS_INTERACTION.txt.
+
+Even mathematically independent BC updates need not remain bitwise identical
+inside different joint optimizer graphs. The actual GPU same-input32-update
+probe found repeatable cross-graph BC parameter differences of3.21567e-5;
+identical-graph repeats were exact. Requesting highest matmul precision did not
+remove this difference in that probe. This is not proof of a hardware fault or
+the cause of historical million-step divergence. Actual fixed-BC swaps, source
+hashes, optimizer clocks and independent train seeds remain essential.
+
+Evaluation and acceptance
+--------------------------
+The primary metric is the equal mean of CPU50 at800K/900K/1M, independently reset
+with seeds42..91, then equal task and training-seed weights. Missing/stopped runs
+remain missing, not zero. Early curves, a best checkpoint, auxiliary selectors,
+and correlated snapshots are not additional training seeds. CPU smoke tests
+and numerical probes are excluded from benchmark means.
+
+A candidate is one common recipe across all nine tasks. Published task-category
+architectures and public actor hyperparameters are inherited baselines; new
+rank sample counts, fitting counts and loss coefficients are common. Complete
+nine-task exploratory results must beat .47 and the fresh competitors before
+independent confirmation. The current conditional promoter covers the registered
+finite-min backup with min-Q selection; a different qualified recipe requires
+its own frozen confirmation registration. None has qualified yet.
+
+Training code is frozen per run, all resumed states retain source/clock/replay
+identity, and primary evaluations are immutable. The two GPUs continue at eight
+training runs each with XLA memory fraction .1. Auxiliary CPU jobs are reported
+as diagnostics, not inflated training-run counts.

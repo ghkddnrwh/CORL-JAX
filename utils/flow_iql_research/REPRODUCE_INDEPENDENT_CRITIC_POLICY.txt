@@ -1,0 +1,65 @@
+Selected discovery candidate; fresh confirmation is pending
+=========================================================
+
+Use the ogbench conda environment and run from the repository root. No tracked
+original algorithm implementation was modified. The exact research recipes,
+source digests and run names are recorded in:
+  logs/diagnosis/flow_iql_research_20261026/
+    independent_critic_policy_discovery_registration_v1.json
+    independent_critic_fresh_confirmation_registration_v1.json
+    analysis/independent_critic_fresh_confirmation_v1/promotion_receipt.json
+
+One environment and one ensemble group
+-------------------------------------
+Train three separate learners using seeds3,4,5. For each member use:
+
+  CUDA_VISIBLE_DEVICES=<assigned GPU> XLA_PYTHON_CLIENT_MEM_FRACTION=0.1 \
+  OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 MUJOCO_GL=egl \
+  python -m utils.flow_iql_research.train_policy_v2 \
+    --env <OGBench environment> --output <member output directory> \
+    --kind ifql --profile bounded_v2 --seed <3,4,or5> \
+    --discount .999 --expectile .9 --samples 9 \
+    --steps 1000000 --episodes 50 --aux-eval-steps ''
+
+Repeat over all nine environments listed in the registration. The repository
+runner chooses the public architecture widths by environment family; there are
+no new per-environment ensemble or value-controller parameters. The existing
+scheduler manages8 simultaneous learners on each of2 GPUs. Do not duplicate
+the already-running research queue when reproducing on this same machine.
+
+At each of800000,900000,1000000, evaluate the THREE same-step checkpoints:
+
+  CUDA_VISIBLE_DEVICES='' OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MUJOCO_GL=egl \
+  python -m utils.flow_iql_research.evaluate_independent_critic_policy_v1 \
+    --actor-run <seed3 directory> \
+    --critic-runs <seed3 directory> <seed4 directory> <seed5 directory> \
+    --step <checkpoint step> --rule median_rank --output <new JSON path>
+
+Only seed3's BC flow generates9 action proposals. Every critic uses its minimum
+twin-Q head. Convert each critic's9 values to midranks; select the action with
+the highest median rank across the3 critics, using first proposal on ties.
+The evaluator uses50 independent CPU episodes with seeds42..91 and saves all
+successes, rewards and episode lengths. No parameters or optimizer states are
+mixed for training or resume. The evaluator's historical kind string includes
+"discovery"; the registered learner cohort determines discovery vs confirmation.
+
+Exact metric and interpretation
+-------------------------------
+For each task average success at800K,900K,1M. Average the9 task means with equal
+weights. Missing checkpoints or stopped/incomplete runs have no task mean.
+For confirmation repeat with seeds6,7,8 and BC seed6, retaining exactly the same
+rule and all parameters. Both fresh-group average and all-three-group average
+must exceed.47. Complete actual-model/source/raw-episode audits and scientific
+review are still required. The controller never marks the research goal done.
+
+Discovery seeds0/1/2 formed ONE ensemble group, mean.5059259259259259.
+The comparison with FQL.47/ReBRAC.44 is a discovery point estimate. Training
+cost is approximately3 base learners:3M Q updates and6M V updates at the1M
+member endpoint, and3 BC models trained although only the first is deployed.
+No equal-compute or DD-ReBRAC(.63)/SOTA superiority is claimed. Ant/HMM late
+returns still fluctuate; value-scale control and policy stability are separate.
+
+Value-controller and ensemble rationales/limits are documented in:
+  INDEPENDENT_CRITIC_POLICY_METHOD.txt
+  logs/diagnosis/flow_iql_research_20261026/analysis/
+    independent_critic_discovery_v1/logical_review_v1.json

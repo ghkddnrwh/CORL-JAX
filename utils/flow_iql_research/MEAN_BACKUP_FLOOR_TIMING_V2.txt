@@ -1,0 +1,26 @@
+Temporal qualification of the floor-saturation explanation
+
+The controlled aggregation effect remains .4 to .617037 across allnine/seed0,
+with exact BC/moment/RNG and all1000actor-log windows. This intervention is
+established. Its causal path through floor saturation is not separately isolated.
+
+In HMM the finite minimum method already has0success at100K, even though the
+actual lower-target clipping fraction is0 and meanQ magnitude is only about
+.417of the known return bound. At300K its success is still0 and clipping0.
+Large clipping appears later as the negative value approaches its floor.
+Therefore late saturation cannot be the sole explanation of the early failure.
+In Soccer a later loss of success co-occurs with saturation; this is a temporal
+association, not an intervention that switches only clipping. In Ant, smaller
+value magnitude and less clipping under mean aggregation do not improve late
+success (.54to.46). Policy ranking and state-dependent errors remain important.
+
+Auxiliary100K/300K evaluations are used only to inspect timing. They are never
+included in the800K/900K/1M primary metric. The timing JSON stores allnine tasks;
+the figure selects HMM/Soccer/Ant as contrasting posthoc examples and is not a
+new benchmark, environment selection or hyperparameter tuning result.
+
+The preceding floor-mechanism note and allnine figure remain valid descriptive
+evidence. Interpret floor saturation as an additional instability indicator,
+not a complete measured causal explanation or an oracle estimate of B_k.
+The learned-V mean-teacher control and independent fresh confirmation are
+still required to assess the proposed mechanism and generalization.

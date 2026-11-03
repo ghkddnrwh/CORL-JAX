@@ -1,0 +1,97 @@
+Selected-action policy flow: recipe, rationale, and limits
+
+Status: CPU validation complete; three GPU pilots queued. No GPU result yet.
+
+Keep the official-style IQL V2 value learner and behavior flow. At each state
+draw nine independent actions from the old behavior flow and choose the one
+with highest old online minimum twin-Q. Treat this selected action as a target
+sample for a separate policy flow. Train that flow with ordinary conditional
+flow matching and independent Gaussian/time draws. The BC teacher still fits
+dataset actions; neither the selected target nor Q receives the policy-flow
+loss gradient. Both flow losses have coefficient one on disjoint parameter
+blocks. There is no new temperature or per-task policy coefficient.
+
+At deployment draw one action from the policy flow with ten Euler steps. This
+amortizes the best-of-nine selection distribution; it does not learn a pointwise
+MSE map from an independent latent to a random selected action. Flow matching
+is used because the selected-action distribution can remain multimodal.
+
+Q, V, target-Q and BC initialize exactly as the official IFQL control. The new
+policy-flow parameters start as a copy of BC-flow parameters. The BC FM noise
+and time keys retain the official IFQL three-way split. Extra targets/noises
+use folded-in keys. Replay, Q/V update counts and target EMA are unchanged
+mathematically; long GPU bitwise identity is not assumed.
+
+The common recipe is tau=.9, gamma=.999, nine teacher proposals, one deployed
+policy-flow sample, ten Euler steps, and the same published widths/normalization.
+V fits twice on the same frozen old target-Q batch, uses fresh next-V, and
+projects the Bellman target onto the known return interval. A single Q, BC,
+and policy-flow Adam update follows. The new actor loss does not use V, so
+an additive state-only V residual cannot directly change its ranking targets.
+Propagated V errors can still change Q rankings.
+
+Why nine proposals is a coherent common choice
+
+Here is a supporting derivation, not a novelty claim. Let X be a bounded scalar
+with CDF F, e=e_tau(X), and r=tau/(1-tau). The expectile equation gives
+  A_minus = E[(e-X)_+] = r E[(X-e)_+] = r A_plus.
+Let M_N be the maximum of N independent copies of X, and p=F(e). Then
+  E[(e-M_N)_+] = integral_{-infinity}^e F(x)^N dx
+                    <= p^(N-1) A_minus,
+  E[(M_N-e)_+] = integral_e^infinity [1-F(x)^N] dx
+                    >= (1+p+...+p^(N-1)) A_plus.
+Since the geometric sum is at least N*p^(N-1), N>=r implies
+  E[M_N]-e >= [1+p+...+p^(N-1)-r*p^(N-1)] A_plus >= 0.
+The constant-X case follows directly. Atoms/ties do not invalidate this CDF
+integral argument. For tau=.9, N=9 is sufficient in the ideal population result.
+
+If Q_tau is the exact fixed point of the behavior-expectile Bellman operator
+and the behavior generator is correct, best-of-nine yields a policy pi_9 with
+E_{pi_9} Q_tau >= e_tau(Q_tau). Thus T_{pi_9}Q_tau >= Q_tau, and monotonicity
+and discount contraction imply Q^{pi_9} >= Q_tau. A policy flow matching pi_9
+would inherit that ideal comparison. This is conditional reasoning: learned Q,
+an approximate behavior generator, imperfect flow fitting, changing targets,
+and finite Euler steps remove the guarantee in the actual neural experiment.
+
+An exact student matching a fixed teacher has the same policy distribution and
+return as that teacher. The theorem does not promise improvement over IFQL's
+own best9 selector or over FQL. Any measured gain over the current teacher
+would require explanation through target-history smoothing, generalization,
+or another actual learning/approximation difference. A reduction in inference
+work alone does not satisfy the research performance objective.
+
+The ranking target is invariant to a state-only offset and a positive rescaling
+of its Q scores in exact arithmetic. If scores have an atomless distribution,
+its action density is N*mu(a|s)*F_s(Q(s,a))^(N-1). The sampling-and-selection
+definition remains valid with ties. This is rank reweighting, not an exponential
+advantage weight whose scale or threshold depends directly on fitted V.
+
+Diagnostics needed for interpretation
+
+Training records BC FM loss, policy FM loss, selected teacher Q gain relative
+to the pool mean, winner margins, near-tie fraction, candidate Q/action spread,
+and selected-action saturation. Frozen diagnostics must compare distributions,
+not pointwise MSE between unrelated policy and teacher latents. Useful checks
+include model-Q expectation/regret, action-distribution energy distance and
+heldout selected-target FM loss. These are model-based diagnostics, not true
+Q-error measurements or guarantees of environment return.
+
+If policy-flow samples match the teacher distribution but environment success
+is poor, inspect critic/proposal quality. If teacher best-of-nine succeeds while
+the policy flow fails, inspect policy fitting, target drift, mode coverage and
+Euler discretization. Frozen behavior/critic interventions can separate these
+causes. The full 800K/900K/1M CPU50 score remains the performance criterion.
+
+Compute and scope
+
+Teacher generation costs nine ten-step BC flows during each training update,
+plus ranking and two flow losses. Deployment uses one ten-step policy flow;
+plain IFQL best9 uses nine ten-step flows and nine Q evaluations, while FQL
+deploys a one-step student. These are logical counts, not wall-clock timings.
+The method is not claimed to be compute matched to FQL or novel.
+
+The prototype files are rank_flow_core_v1.py and train_rank_flow_v2.py. The
+v2 runner explicitly pins inherited policy_core.py; the earlier v1 runner is
+retained only as a short CPU validation artifact. Existing training sources
+were not modified. New model factories require frozen_diagnostics_v4.py;
+watch_frozen_v3.py dispatches older kinds to their existing v3 helper.

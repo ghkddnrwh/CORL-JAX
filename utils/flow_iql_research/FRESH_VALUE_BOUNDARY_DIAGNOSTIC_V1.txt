@@ -1,0 +1,32 @@
+Fresh-versus-repeated V minibatch boundary diagnostic
+
+Scope: supplementary posthoc diagnosis on the existing seed3 pilots, not new
+GPU training, policy evaluation or an independent algorithm selection trial.
+Pz3 fresh800K=.84 and900K=1.00, repeated late0/.02/.04 were observed before
+registration. The original GPU sampling experiment was registered earlier.
+
+Run the existing frozen unit_value_fitting_diagnostic_v1 worker on the RAW
+fresh-minibatch models, at800K/900K/1M, Ant/Humanoid-medium/Pz3. That worker
+explicitly decodes unit models and leaves ordinary cost heads unchanged.
+For these raw sources it makes no V counterfits. It reads8192 fixed uniform
+validation rows and separately all success-boundary rows, using the same data
+hashes and query indices as the unit-return diagnostic's raw repeated controls.
+Both source families have2V/1Q/1BC updates, with actual saved clocks verified.
+
+The9 fresh outputs are new; the9 repeated raw late outputs are existing/planned
+in unit_value_fitting_diagnostic_registration_v1.json and must only be read.
+This controller NEVER dispatches those shared repeated jobs, so it cannot race
+the original owner. All existing source/config/checkpoint files stay unchanged.
+Use2nice19 CPU slots80..83 and84..87. No GPU contexts or extra policy rollouts.
+
+Compare online-Q, target-Q and V zero-boundary RMSE alongside teacher fitting
+loss. Under the installed relabelled MDP, success depends on current state,
+independently of action, so reward/mask0 implies Q(s,a)=V(s)=0 there.
+These are partial-domain labels. Uniform fitting/score moments are neither
+true nonterminal Q error, conditional expectile residual nor propagated B_k.
+Different trained Q teachers prevent a cross-model fitting-loss ordering from
+establishing true-value accuracy. Boundary improvement alone does not establish
+policy-return causality. Actual late BC/moment/RNG equality remains subject to
+the registered sampling auditor. Full3 paired pilot and later uniform9/fresh
+training-seed gates are unchanged. Do not choose checkpoints or expand an
+algorithm based on these diagnostic errors.

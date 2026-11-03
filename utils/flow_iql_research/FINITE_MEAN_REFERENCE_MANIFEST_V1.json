@@ -1,0 +1,682 @@
+{
+  "recorded_at_unix": 1793404608.8695483,
+  "user_instruction_date_KST": "2026-10-31",
+  "purpose": "Preserve successful finite-mean as the research reference; record lean equivalence without replacing original evidence.",
+  "canonical_core": "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/flow_iql_research/mean_empirical_backup_core_v1.py",
+  "canonical_runner": "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/flow_iql_research/train_mean_empirical_backup_v1.py",
+  "finite_solver": "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/flow_iql_research/selection_v2.py:empirical_expectile",
+  "frozen_original_source_sha256": {
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/flow_iql_research/mean_empirical_backup_core_v1.py": "286140aec6e07cf8ab58a1d723ad618237a6647971a502952ac42af9c2948e60",
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/flow_iql_research/train_mean_empirical_backup_v1.py": "a1984495dad23f1d06bafe9dad597b797db63e8190701ed8038b5492179af9ba",
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/propagation_research/seeded_reset.py": "71299c8d1e8e4985094c5fd80ebe4c72d1d77b6aaf43440d399ed348632347e6",
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/propagation_research/reward_bounds.py": "9f26e3ac8395cb3a8ad291d7847d03b7d418cccdafdb93616e9a21888ce603b0",
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/flow_iql_research/core.py": "c6136b093586ff20590a450f6bea83773210faa315978aafbb7a759bfe5f460e",
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/flow_iql_research/policy_core.py": "855ef5d93bd87729a9122764456792ef46254ff3bd92eab46eef6b0b6a4a4c7b",
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/flow_iql_research/selection_v2.py": "3c7c36d01d6e35fea05e846dd4dc96140c3ba2d69956dd5ff9fb4f9763cb8bc6",
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/flow_iql_research/vendor/encoders.py": "830cb84fa0f8e0c0f4c835434f3ae73c2c8f1e9647cc8890d32017e072403b57",
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/flow_iql_research/vendor/flax_utils.py": "5b6a8e9a919bf57dae0c1454f327ded4235385f9d9dcd1e62263fe4fad9fd484",
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/flow_iql_research/vendor/fql.py": "e4ff2f19705a3a219c7924d7d6da216a1d2c5bed5fedd85295d27604ebb4602c",
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/flow_iql_research/vendor/ifql.py": "1bfb9c39ad8fe1aa033a274043da824c696b78bf89ed8ff41daed7d49acfacd9",
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/flow_iql_research/vendor/iql.py": "3dbf6cc104510b41358b6dd2d91582262aa07f020b481ecc55a3af0b39259086",
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/flow_iql_research/vendor/networks.py": "3f38e3d413d573597348e31f2abb5431f54bf89e96fc76781a9471c72d6062aa",
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/flow_iql_research/vendor/rebrac.py": "33cd498007503920cf734f93b3a414df2f7f079cd6ad32b79378fae434ee9ac9"
+  },
+  "source_hashes_reverified_now": true,
+  "settings": {
+    "expectile": 0.9,
+    "discount": 0.999,
+    "backup_samples": 9,
+    "deployment_samples": 9,
+    "flow_steps": 10,
+    "target_Q_aggregation": "mean",
+    "deployment_Q_aggregation": "min",
+    "target_projection": "[-C/(1-gamma),0]",
+    "V_fits_original": 2,
+    "V_fits_lean": 0
+  },
+  "evidence_sha256": {
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/mean_backup_independent_confirmation_registration_v1.json": "bb7ab14c36a7531aa6dd00d69fae13775d604e801baa15d553ea50503250c923",
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/analysis/mean_backup_confirmation_final_reread_v1/audit.json": "9aa6fe3f1e670d13ca091c245bb95526fd70e49ef3a41b5040cb40ca2c32f7e3",
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/finite_mean_efficiency_20261030/analysis/efficiency_results_review_v2/independent_audit.json": "ec90a2b9c0e48298a0ac1f9225f4995a5509f9eff9ef943a974548e2619adbcc",
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/flow_iql_research/REPRODUCE_MEAN_FINITE_BACKUP_V2.txt": "8bcd8b4c313385d67710dc35091403288c181f7e1e2575fd4cdfe7cb0b790e12",
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/flow_iql_research/RESEARCH_MEMORY.txt": "5dd6038bff39a672ab153b2937b6bc05b1ed9493c8ae55217663e06520342d4c"
+  },
+  "confirmation_model_pins_from_prior_verified_audit": {
+    "meconfirm_s9_ant_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_ant_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "1f2857804d1872232fce0b3205716120ec98b0a210425d3a80fe13d165cc1d9c",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_ant_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_ant_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "34fb06dd01b5d5dd9cd1632c7367614d9b13f3af584f1b6b8d52e041e0cfeb59",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_ant_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_ant_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "32173c30a62af575a5d5b1ec62f378261690b74e1cf7e52474ea5d1793b8baa9",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_ant_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_ant_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "b6a9a6fe0cb4595e62d8fd3c389d0604ede74a4ce54de68ce3f2849c8e4baa6d",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_ant_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_ant_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "198b003bfeece6d1d4c0e6e743c70a0917fd713f31d1145010973b951e17d914",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_ant_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_ant_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "4db3a1b28d34ee199b03b7ffedf139398190976bb472efd10471723f56f3c366",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_ant_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_ant_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "41d124218857b76bd44f30f4b97eccc96211e4210a01cf095b426a7b8cd4e4d8",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_ant_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_ant_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "bfdc48c7e11e48efb5045eb5c821416089598ca83bb2249dc71f85d21ffd51e3",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_ant_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_ant_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "e29aaf6cac4fd3e1cae30307d420bbbf5254e0826bba32af1e944999ddee1366",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_hmmed_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_hmmed_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "3993e3a4bc36a6d7b696f0149b89a9f43defab3d36bfdb8896e0a94c03da844b",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_hmmed_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_hmmed_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "fd0e2d6ec636d4dbc13e088e2f5819eefb26bc0b6ea3b0d843d3d37423e279bb",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_hmmed_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_hmmed_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "0964b5dac0b0cb15a04418b2cf4571ec0a90baf092e29ff87190d73844317d27",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_hmmed_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_hmmed_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "2f2fe45d61d225da8d7e5d3891cdea7869c961f5f05160d9542fe1585cd279ba",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_hmmed_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_hmmed_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "c2787adb2eea61c431f9d251517cff27938842ed9f3ee5b4ae51e07092bb9f3a",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_hmmed_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_hmmed_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "ec0b7167e91440019412a12d3d767e63c9f3100605c996d774914b42dc7c9de2",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_hmmed_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_hmmed_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "69189eee14a9285ecaf200e7f4b7fd957ae75365120395990e7f1fa11a160a5f",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_hmmed_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_hmmed_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "ea53b90860e962d9eaff5c04c623763a34e4a3dcc2e587151fde1139d8b2020b",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_hmmed_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_hmmed_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "a83407dc89441eb46fc87ebd2022112d99ace7b574ff6a8c9050b93c367fd6ec",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_hmlarge_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_hmlarge_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "f8e11aab6eabc25e89d21dc2fa733481fe435fdf0e322901d00d370364ff5fa7",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_hmlarge_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_hmlarge_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "a3f01737dd37175985fd8d54aa31b66201499a6cbc7def1e2f06095dda3754dd",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_hmlarge_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_hmlarge_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "355ecc21c9e21b07e995b1bea686379796911f151a2cf7fb14bcf6c262e54779",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_hmlarge_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_hmlarge_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "f60d76e9d56f4e2f4e3e859b2c6cd129df35a6a7f34f95c4c0d86e7c73780fae",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_hmlarge_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_hmlarge_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "72f907dfcf1a46a4f504a4a036912df1787ccd4f30d641e5e388757afae96278",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_hmlarge_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_hmlarge_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "5191364c18ba1c336e8d991262444c1a281d7f29e44e582ea88a545b2bc94671",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_hmlarge_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_hmlarge_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "3c906e4f99cf29b0ae1205629a600e4dfd7ad213bbad8993e9e3bd499fd690ac",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_hmlarge_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_hmlarge_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "21c0586e5f2808c33b38b2672fffad95e401044bc801ec67adeda845265bea89",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_hmlarge_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_hmlarge_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "cc024cdba05e0ec4236f6723dd3a493d1a18517cd98c21597f7554054bf34419",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_soccer_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_soccer_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "b896f0f5fb4d9d25cb7cc57d48180eb7eb46fedbfd97fe3625b0fa09450a1d28",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_soccer_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_soccer_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "85c04bf128e39664070a878c3c0f90260c35537fdbc390b97d63fcb03d1b508c",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_soccer_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_soccer_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "546bd56412164a1b04fc03cc577a205adca3e0f347a4ccc29ea9dfc099baa58f",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_soccer_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_soccer_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "b1153482697313a45fecd2300437adb996efffa2ecd1f6791d6afb0acbab6a06",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_soccer_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_soccer_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "83ea35e65cd919f1b65ca25b68e7678ba0e2ca1628d7ed326ad0d76bf2bab767",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_soccer_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_soccer_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "f04e8fe50a370b3c3968a66cd70019c103ab9e120e8d2a35e6ab2deb30a73382",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_soccer_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_soccer_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "e10a95e402a047e65c7b5eb6709ce450ab084882c8cf4d90473235be626c8eec",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_soccer_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_soccer_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "f69e4cc5eb298b3c2d4c607270de9e73aaf91d8d134c984e52e540083de0620a",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_soccer_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_soccer_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "29d85f17f9459f4110a6f020fb0d42d2492823e78a4163f946ca02330b1576de",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_cube_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_cube_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "34d270efa03b98e5c7c63848a141f24ec5c1e174b6c9354fbaed66d582cfa3c1",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_cube_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_cube_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "7e3750986f86de5ba0ae9a937b7116e9c43db4bbb5f47467b992e72b8f5fb76c",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_cube_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_cube_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "4cd68f8e10900d5a9142b15f1f48a9d2a324b8296bf3ca0759298d66310b0855",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_cube_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_cube_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "b2e0b275d3ece8276b490f4cf4accfa96e20c61f9f7c8be5a8ba141aa5ddc02a",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_cube_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_cube_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "1a85060ece088091773c43bae3bb6f8492791ca17798689200e0eedc955da907",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_cube_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_cube_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "bbf55f54061a4b3813526e57ffabf96e8494ec38600ce49576f2035d867c02f0",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_cube_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_cube_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "99d50afc950dc409e95bbe0535a1a5d0c3589b21ba947fc38e5ea53bab7d35dd",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_cube_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_cube_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "697f8ed0e4033fa81ae2a5b5d868945a43a58c9a0855531f65cd9f2514fdded4",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_cube_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_cube_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "5d2617e4c16ae07a6c95eb35d6f86ee9d2fbb2085559618308c6cb526218caf2",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_cubed_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_cubed_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "2fbc046773f290e64b86d08f1cfd35d7ea2d38a8a1f97c001bbff9bd4e64085b",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_cubed_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_cubed_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "8dcbefabf5ba1e7aac86c8eda40317ab74153a866f06ee76211591e4f354c07c",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_cubed_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_cubed_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "8b2bf613e46949285d7d69b0e91a95478e9fe037941eaf39f4c5ed280099cc2f",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_cubed_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_cubed_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "43b33c1b63100f1a42fb2ea77ad5e57439867a2e5fb53e328e41c99c037b2e72",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_cubed_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_cubed_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "c14c63ed25ead90dc7cf7c7caddbfcd33367b42822b4390545610ab6730f93eb",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_cubed_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_cubed_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "643963d17268b93670f59068350605f8b93d626cd7373755e1857186546e1864",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_cubed_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_cubed_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "4a5f59ddbffe48d92a117b85d14d3f50084cb3ed04e7c9070d3cec0d5a0d6cf3",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_cubed_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_cubed_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "3fc3795422a2f2262a0c0164d94f51c19c8ddca03c98b0ea2712a884feb92608",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_cubed_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_cubed_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "7a9796485f77e296f9496bd03514a21c6e4d5d15c0f510533cb4495d06edbfc9",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_pz3_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_pz3_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "2599d6f67e8c269c79cff4967c03e1d8728855cdfbfe03779aa4f6d913a88d86",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_pz3_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_pz3_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "f656d12974aa8acc71a1db1f90a35dd8cba726b2eedd29c5b70c7d0ebf06e173",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_pz3_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_pz3_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "09e913cfc271456e49e273ff43ef1ea069e53b9b1ddae93cba27abef030c353e",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_pz3_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_pz3_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "d3bfd1a9115d6db6c222ade5e61e9fa2b524ae3222eb22cb2735857528157ee1",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_pz3_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_pz3_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "1c5a73b9da8929c4a044c3c3efd9da3ae73e9669648f8260bfce82d6b0bb3368",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_pz3_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_pz3_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "1d040c1457326e013f2215c4f080d8b115bec63eaed4b384805b7d145f0a87af",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_pz3_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_pz3_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "872cc3cbf23a9e5e4c09344a97a6ec68a3ff71e45e1307624a67142be322a5d8",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_pz3_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_pz3_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "d408d18356180ea4f71ecf24e6a1b64cab7a31f854f2765acbaba37bf28c8acd",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_pz3_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_pz3_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "7e84fb3e06ba41335270016cb019d2f0373cbca1d6017947e63cce1d45e0cdd1",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_pz4_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_pz4_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "c113d4a1b14fdcaf86e24d21bf0d6d2c612ce4d0f8abab099c351baaed4200e9",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_pz4_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_pz4_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "497c1970a6497a651a935ed56d9bf075063bec10d5c777d46b1abc8f5ed1b443",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_pz4_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_pz4_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "1d8437af0398fbfee2c5b005b2151330299ab748904865c2c6876b081ea34a5a",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_pz4_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_pz4_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "25cd13573391a6794920a52a4e8a53734d326d05a79352d1fe2cf9eac9ebcfcb",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_pz4_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_pz4_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "a17e0eecc7015b7a21cb35fd467f03d8208fa6e34ca3310bd22317be298402ed",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_pz4_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_pz4_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "2cc95424f3fb1d3313f03e57ee795bf8169cbff72a023847f29e57f268973ca5",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_pz4_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_pz4_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "e84530e5131b17a1dd4e4c363b2baf78dab9221bea6f63307dd9261ed1f70239",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_pz4_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_pz4_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "2480c94da0c7c1d0b0689d9f4e4f6a1f02af67357e372b8e330e64a1c78fa863",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_pz4_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_pz4_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "f6b4141bbd402bc2198ac256217523a56089357612ee73bcb204a4c021d9e4fa",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_scene_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_scene_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "d4ebf546ca8d948062fe02b2bb1cfbdf91e31bcec12de614187fd3348ebe0fda",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_scene_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_scene_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "a1b94a47843fbe9f6a63cc19e2bf03857bb75307f8dff681430378d17ccd0fb8",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s9_scene_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s9_scene_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "63220652b8263e27df2e5965af42d8919a0c8b4242f1fc92ae8e2cce96b6f355",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_scene_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_scene_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "6313251f664a4536e04f8408f886eb74a816e4f631921d6128048f84ca50a88f",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_scene_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_scene_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "8597c08e1f824f9d9fe13da080e305f540dfabda586351a1c5f7237634830ccd",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s10_scene_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s10_scene_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "889d1de7b25d7dda34676c9726d5781b0df6285c4d434f61d215e3e9fb08110e",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_scene_mean_empirical_backup_g999_t90_N9:800000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_scene_mean_empirical_backup_g999_t90_N9/checkpoint_800000.pkl",
+      "sha256": "8caf78a898285958fac2ef089771f131b05de2fc30a9f584a04d6149b2b9099d",
+      "actual_Q_Adam": 800000,
+      "actual_V_Adam": 1600000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_scene_mean_empirical_backup_g999_t90_N9:900000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_scene_mean_empirical_backup_g999_t90_N9/checkpoint_900000.pkl",
+      "sha256": "3ca0de281fdfd3d2d68adf4ead4e072ff5fb35f4664101e990f6ba057b08917b",
+      "actual_Q_Adam": 900000,
+      "actual_V_Adam": 1800000,
+      "actual_full_saved_state_finite": true
+    },
+    "meconfirm_s11_scene_mean_empirical_backup_g999_t90_N9:1000000": {
+      "path": "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/diagnosis/flow_iql_research_20261026/runs/meconfirm_s11_scene_mean_empirical_backup_g999_t90_N9/checkpoint_1000000.pkl",
+      "sha256": "d2b03e26b63f0e97963463f155b72e61a924ecfec2b3555fb9ae0fa5d0925ad2",
+      "actual_Q_Adam": 1000000,
+      "actual_V_Adam": 2000000,
+      "actual_full_saved_state_finite": true
+    }
+  },
+  "confirmation_models_exist_now": true,
+  "checkpoint_verification_scope": "81 known immutable model paths exist; hashes reproduced from previous complete audit, not rehashed in this memory-recording step.",
+  "verified_scores": {
+    "original_seed0": 0.617037037037037,
+    "original_fresh_seed9": 0.6266666666666667,
+    "original_fresh_seed10": 0.5281481481481481,
+    "original_fresh_seed11": 0.6118518518518519,
+    "original_fresh_mean": 0.5888888888888889,
+    "original_four_seed_mean": 0.595925925925926,
+    "lean_seed0": 0.6251851851851852
+  },
+  "lean_equivalence": {
+    "scope": "Mathematical critic/BC update and action-selection algorithm under matched configuration; V/control optimizer state and diagnostics differ.",
+    "actual_1M_comparisons": [
+      {
+        "environment": "antmaze-large-navigate-singletask-v0",
+        "variant": "lean",
+        "Q": {
+          "bitwise_equal": true,
+          "max_absolute_difference": 0.0
+        },
+        "target_Q": {
+          "bitwise_equal": true,
+          "max_absolute_difference": 0.0
+        },
+        "BC": {
+          "bitwise_equal": true,
+          "max_absolute_difference": 0.0
+        }
+      },
+      {
+        "environment": "cube-double-play-singletask-v0",
+        "variant": "lean",
+        "Q": {
+          "bitwise_equal": true,
+          "max_absolute_difference": 0.0
+        },
+        "target_Q": {
+          "bitwise_equal": true,
+          "max_absolute_difference": 0.0
+        },
+        "BC": {
+          "bitwise_equal": true,
+          "max_absolute_difference": 0.0
+        }
+      },
+      {
+        "environment": "humanoidmaze-medium-navigate-singletask-v0",
+        "variant": "lean",
+        "Q": {
+          "bitwise_equal": true,
+          "max_absolute_difference": 0.0
+        },
+        "target_Q": {
+          "bitwise_equal": true,
+          "max_absolute_difference": 0.0
+        },
+        "BC": {
+          "bitwise_equal": true,
+          "max_absolute_difference": 0.0
+        }
+      }
+    ],
+    "training_latency_ratio": 0.8454002978374939,
+    "CPU_action_latency_ratio": 0.9891810263069026,
+    "GPU_action_latency_ratio": 0.978908482985383,
+    "fresh_three_seed_lean_confirmation": false
+  },
+  "preservation": "Keep original registered source, models and results intact. Improvements use separate versioned files and output directories; never relabel original evidence as lean results."
+}

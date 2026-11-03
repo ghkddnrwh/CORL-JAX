@@ -1,0 +1,62 @@
+Deploying the fixed rank-mean policy
+===================================
+
+The research recipe is in REPRODUCE_RANK_MEAN_POLICY.txt. Deployment uses
+the first learner's BC flow and three independent critics' minimum twin-Q
+values, converted to midranks and averaged over critics. N9, tau.9 and
+gamma999 are common to all tasks. No additional technique is introduced here.
+
+From the repository root, with the ogbench environment, export one fixed late
+checkpoint of three COMPLETED learners, first BC provider first:
+
+  CUDA_VISIBLE_DEVICES='' OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MUJOCO_GL=egl \
+  python -m utils.flow_iql_research.export_rank_mean_bundle_v1 \
+    --critic-runs <first member directory> <second directory> <third directory> \
+    --step 1000000 --output <new bundle.pkl>
+
+The exporter checks each source/config, actual retained model, complete parent,
+Q/V Adam clocks and finite parameter/learning states. The artifact contains
+the first network parameters, the other two critics, configuration and SHA256
+provenance. Optimizer/replay states are excluded. The loader uses the repository
+definitions and verifies source hashes, but does not need the original learner
+checkpoint/config files. This is an inference artifact, not a training resume.
+
+Evaluate it with the exact CPU50 protocol:
+
+  CUDA_VISIBLE_DEVICES='' OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MUJOCO_GL=egl \
+  python -m utils.flow_iql_research.evaluate_rank_mean_bundle_v1 <bundle.pkl> \
+    --output <new result.json> --reference <existing mean-rank evaluation.json>
+
+The optional reference check requires the same environment/checkpoint/member
+SHAs and all50 success/reward/length arrays to agree EXACTLY. It is reproduction
+of the existing observation, not an additional benchmark sample or train seed.
+Without --reference, evaluation still saves all50 independent reset seeds42..91.
+
+Application interface:
+
+  from utils.flow_iql_research.rank_mean_bundle_v1 import load
+  bundle, state, policy = load('model.pkl')
+  action = policy(state.agent.network.params, observation_float32, action_key)
+
+Only the first agent supplies BC parameters. The loader holds all three critic
+parameter trees as dynamic CPU arguments to the unchanged V2 selector. Its
+state container intentionally has no trained optimizer or replay state.
+
+Concrete verification and artifacts:
+
+  logs/diagnosis/flow_iql_research_20261026/analysis/
+    rank_mean_deployment_validation_v1/validation.json
+    rank_mean_deployment_validation_v1/CubeS_1M_rank_mean.pkl
+    rank_mean_discovery_deployment_v1/status.json
+    rank_mean_discovery_deployment_v1/manifest.json  (created only after9/9)
+
+The CubeS1M bundle is8,337,746bytes. All serialized source parameter trees and
+all50 reference episode arrays matched exactly. Loading was additionally tested
+with reads of original learner/checkpoint directories forbidden. The nine-task
+manager packages the fixed1M models and repeats the same episode check per task;
+consult status/manifest for actual completion rather than assuming it finished.
+
+These fixed1M deployment files do not replace the primary800K/900K/1M average.
+The discovery0/1/2 ensemble and fresh3/4/5,6/7/8 ensembles remain distinct. No
+new training replication or independent-confirmation claim arises from export.
+Three learners cost3M Q/6M V updates at1M/member, plus three critics at inference.

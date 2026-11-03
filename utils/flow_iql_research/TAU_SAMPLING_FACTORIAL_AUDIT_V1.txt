@@ -1,0 +1,7 @@
+Analyze all15 existing seed3 pilots, no new training/evaluation.
+
+Proposed factorial: tau.9/.99 x second V fit repeated/fresh x Ant/Pz3/HMM. Nativeofficial tau.99 controls add3cases,with1V update per iteration and no separate V Adam (proposed2V). Native tau.9 seed3 controls are absent; do not claim a full3method x2tau factorial. Primary is fixedN9CPU50last3, all800K/900K/1M. N99secondary is independently registered; do not substitute it into primary results.
+
+Audit source/config identity, actual late checkpoints, exact profile-dependent optimizer clocks, numeric finite state, raw50episode arrays, and parent completion. All partial/stopped results stay missing with failure evidence. Report per-task differences for within-tau sampling, within-sampling tau, interaction, and native vsproposed at tau99. Only complete3task cells receive pilot means. No9task/winner/SOTA claims. New selected methods require all9tasks and training seeds>=9.
+
+Online loss means use800001..1M windows and their actual update counts. Probe endpoint RMS summaries remain sampled diagnostics. Cross-tau expectile losses have different weights; native targets oldV/unprojected, proposedfreshV/projected, and nativejointgradient includes V. Legacytd_rms omits target projection; score_rms is not conditional residual/B_k. Do not interpret loss reduction or finite values as guaranteed action-ranking improvement.

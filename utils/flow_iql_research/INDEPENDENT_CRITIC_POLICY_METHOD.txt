@@ -1,0 +1,70 @@
+Independent critics and common behavior-flow proposals
+======================================================
+
+This is a separate policy-extraction candidate, using the existing learned-V
+IFQLV2 value controller. It does not add finite expectile backup, boundary
+supervision, GMM, rank-flow distillation or half correction.
+
+Each base learner uses the same official-style IFQL architecture, two V Adam
+fits, fresh V bootstrap and known-return target projection. Train three such
+learners with independent initialization/replay seeds. Deploy one BC flow,
+the first learner's, to generate nine IID action candidates. Evaluate each
+candidate with each learner's minimum twin-Q head. Compare two global rules:
+
+  mean: choose the action maximizing the mean of the three scalar Q estimates;
+  median_rank: convert each critic's nine values to midranks, take the median
+               rank for each action, and choose the action with largest median.
+
+Exact ties use the first proposal, as the existing argmax selector does.
+Proposal ordering is random and exchangeable; there is no new tie parameter.
+Three learners and nine proposals are fixed across all nine environments.
+There is no task-specific choice of a winning rule or a winning critic.
+
+Why the rank rule is interpretable
+----------------------------------
+Bellman propagation can produce different state offsets and action-value
+scales across approximate critics. Mean aggregation is sensitive to relative
+scales. Midranks are invariant under any strictly increasing transformation
+applied separately to each critic at a fixed state, including positive affine
+calibration changes. This does not repair a critic's wrong within-state order.
+
+If two of the three critics agree on the same UNIQUE best candidate, its median
+rank is the maximal rank and all other candidates have a lower median rank.
+The third critic can have arbitrarily large magnitudes or an incorrect order
+without changing that choice. Without such agreement there is no guarantee of
+the best action, oracle accuracy or improved policy return. Independently
+initialized learners can still have correlated approximation errors.
+
+The motivating evidence is the failed Pz3 seed1 confirmation: its known-goal
+Q/V errors are similar in scale to successful seeds0/2, while an actual fixed
+BC critic-source swap was sufficient to change performance sharply. This
+motivates robustness to critic disagreement, rather than treating known-goal
+error or a generic fitting loss as a universal performance proxy.
+
+Discovery, cost and confirmation
+--------------------------------
+The discovery group reuses the three already observed learners0/1/2. It forms
+ONE ensemble observation. It is not three independent ensemble replications.
+At evaluation800K/900K/1M, every member has that many updates. The total critic
+update budget is3x and the total V update budget is6x the reported per-member
+step. Three base learners, including their BC fits, were trained; only the
+first BC is deployed. Extra training and inference cost must be reported.
+
+The seed0 base configuration uses32 deployment samples; this setting does not
+enter its learning update. All member configs otherwise match, and every
+ensemble evaluation explicitly uses9. A short CPU check verifies that sample
+counts9/32 give identical base learning updates; no long-GPU bitwise claim is
+made. The other BC models and all optimizer states are excluded from mixing.
+
+Both rules are registered over all9 environments and all3 late checkpoints
+before observing ensemble returns. Select the larger common9 discovery mean,
+using mean aggregation on an exact tie. A discovery mean above.47 triggers
+fresh-confirmation consideration; it does not achieve the research goal.
+Fresh ensemble groups are fixed now to learner seeds[3,4,5] and[6,7,8], with
+the first BC in each group deployed. These require54 additional base runs over
+the9 tasks. The selected rule must be locked before fresh outcomes. A final
+claim requires the two fresh groups' mean and the all-three-group mean both
+above.47, with each task evaluated at800K/900K/1MCPU50, seeds42..91.
+
+No existing primary scores are replaced. Parameter sets are combined only
+for inference; no mixed joint-optimizer resume state is saved or trained.

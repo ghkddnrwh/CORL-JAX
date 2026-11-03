@@ -1,0 +1,71 @@
+Current preferred candidate: IQLV2 + BC flow + mean critic ranks
+==============================================================
+
+The algorithm was chosen from the complete four-rule DISCOVERY comparison on
+existing learners0/1/2. Its nine-task last3 mean is.5459259259259259. Fresh
+confirmation is pending. The older median-rank candidate and its registration
+are preserved as a paired comparator; no historical results were overwritten.
+
+Training is the already registered IFQLV2 recipe, three independent learners:
+  freeze old target-minQ on a minibatch and take2 V Adam fits;
+  bootstrap Q with fresh V(s_next), projecting r+gamma*mask*V onto[L,0];
+  take one Q and one unweighted BC flow-matching update, preserving official
+  target-EMA ordering. Each learner has independent initialization/replay RNG.
+There is no Gaussian AWR actor, policy-flow student, finite expectile bootstrap,
+boundary auxiliary loss or temporal K3 component in this candidate.
+
+Deploy ONLY the first learner's BC flow. Generate9 action proposals using10
+Euler steps. Each of3 learners evaluates them with its own minimum twin-Q.
+Convert that learner's9 values to midranks, average the3 rank vectors, and
+choose the highest average. Ties choose the first IID proposal. All9 tasks use
+tau.9,gamma999,N9,3 learners and the same rule. Widths and other base settings
+follow the pinned official-style configuration by environment family.
+
+Run from the repository root with the ogbench conda environment. For each
+environment train learners3,4,5 (and then6,7,8 for the second fresh group):
+
+  CUDA_VISIBLE_DEVICES=<assigned GPU> XLA_PYTHON_CLIENT_MEM_FRACTION=0.1 \
+  OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 MUJOCO_GL=egl \
+  python -m utils.flow_iql_research.train_policy_v2 \
+    --env <OGBench environment> --output <member directory> \
+    --kind ifql --profile bounded_v2 --seed <member seed> \
+    --discount .999 --expectile .9 --samples 9 \
+    --steps 1000000 --episodes 50 --aux-eval-steps ''
+
+The current54 GPU jobs are ALREADY registered. Do not duplicate them on this
+machine. The existing scheduler runs8 learners per GPU on2 GPUs.
+
+For every800K/900K/1M checkpoint, using all3 same-step member models:
+
+  CUDA_VISIBLE_DEVICES='' OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MUJOCO_GL=egl \
+  python -m utils.flow_iql_research.evaluate_independent_critic_policy_v2 \
+    --actor-run <seed3 directory> \
+    --critic-runs <seed3 directory> <seed4 directory> <seed5 directory> \
+    --step <checkpoint step> --rule mean_rank --output <new JSON path>
+
+For group2 substitute6,7,8 and actor6. Evaluate all50 independent CPU episodes
+with seeds42..91; the evaluator does this automatically and saves every success,
+reward and length. Average the3 checkpoints per task, the9 tasks equally, and
+the2 fresh group means equally. Require fresh-group average and all3-group
+average above.47, with full actual-model/source/clock/finite/raw-episode audits.
+Never fill missing/stopped cells with zero or combine per-task winning rules.
+
+Authoritative recipe and evidence:
+  logs/diagnosis/flow_iql_research_20261026/
+    independent_critic_rank_mean_confirmation_registration_v1.json
+    independent_critic_fresh_confirmation_registration_v1.json
+    independent_critic_factorial_registration_v1.json
+    analysis/independent_critic_factorial_v1/review_v1.json
+    analysis/independent_critic_rank_mean_confirmation_v1/status.json
+
+Training costs3 base IFQLV2 learners (3M Q and6M V updates at1M/member), with
+only the first BC deployed. Comparing two policy readouts on the same trained
+members adds no GPU learners but also adds no independent training replication.
+There is no equal-compute, oracle critic correctness or DD-ReBRAC(.63)/SOTA
+superiority claim. Mean ranks ignore per-critic monotone calibrations but do
+not have median rank's two-unique-best-critics guarantee.
+
+The legacy td_rms label issue applies to OTHER finite-backup/mean-backup/anchor
+branches. This preferred candidate uses learned-V bootstrap, and all original
+raw episode success scores remain unchanged. See DIAGNOSTIC_TARGET_SEMANTICS.txt
+for the corrected interpretation of those other branches' diagnostics.

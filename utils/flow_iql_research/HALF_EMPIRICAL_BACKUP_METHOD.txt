@@ -1,0 +1,56 @@
+Half correction toward a finite conditional expectile
+=====================================================
+
+This is a single intermediate intervention between two existing value recipes.
+It is NOT combined with the new rank-flow or Gaussian-mixture policy families.
+The coefficient is fixed at 1/2 across all environments, with no environment
+specific selection. This midpoint is an ablation choice, not a proven optimum.
+
+Keep the public IFQL behavior flow, best9 deployment, old target-Q minimum,
+two fresh-V Adam fits, one Q/BC update, and known-return target projection.
+At next state s', generate nine old behavior-flow actions and solve their
+old target-minQ empirical expectile e_N(s') exactly. Set
+
+    V_backup(s') = (V_new(s') + e_N(s'))/2,
+    y = project_[L,0](r + gamma mask V_backup(s')).
+
+The proposal RNG is folded into the original update key, so it does not
+consume the official BC flow-matching random stream. V optimizer clocks
+and BC objectives match the original V2 and full empirical-backup controls.
+Production tau=.9, gamma=.999, N=9, correction=1/2 for all three pilots.
+
+Why a partial correction is interpretable
+-----------------------------------------
+Fix the current target Q and proposal law. Let v_mu be the population
+expectile under the behavior generator, e_V=V_new-v_mu, and e_N=e_Nsample-v_mu.
+For the new backup the value displacement is exactly
+
+    V_backup-v_mu = (e_V+e_N)/2.
+
+Thus its contribution before projection is gamma P(e_V+E[e_N])/2. This halves
+the coefficient of learned-V displacement while introducing only half the
+finite-sample displacement. These errors may be correlated or cancel; the
+identity does not promise lower error, return, or empirical variance. The
+generator may also differ from the data behavior policy. e_V is not necessarily
+the supplied theory's zeta/kappa because the critic reference and law matter.
+
+For a fixed finite proposal set, moving from V_new to its midpoint with the
+exact empirical expectile halves distance to that root. Convexity implies
+nonincreasing empirical expectile objective. Its signed first-order score is
+monotone, so its absolute value also cannot increase along this segment.
+The score magnitude need not be exactly halved, since its slope can change.
+Logs report objective and score before/after, distance, target projection and
+proposal spread. These are sampled-generator diagnostics, not true residuals.
+
+If learned V were replaced by the exact population expectile of a fixed scalar
+Q, the convex combination of population and expected finite expectiles would
+be monotone and 1-Lipschitz. Its Bellman operator would be a gamma contraction.
+This statement does not apply to an arbitrary learned neural V, changing
+generator or twin critics, and supplies no neural-training stability theorem.
+
+The motivating empirical contrast is heterogeneous: full finite replacement
+has Ant last3=.54, Cube-double=0, Puzzle3=1; existing learned-V IFQLV2 best9
+has a different pattern. These are reasons to test one common midpoint, not
+reasons to combine per-environment winners. Pilots must finish all three late
+CPU50 evaluations. Any promising recipe still needs all nine environments
+and independent training-seed confirmation against FQL=.47/ReBRAC=.44.

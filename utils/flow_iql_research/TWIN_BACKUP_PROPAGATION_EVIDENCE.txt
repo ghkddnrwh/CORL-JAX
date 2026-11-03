@@ -1,0 +1,97 @@
+Twin-head aggregation, fitting residuals and propagated error
+===========================================================
+
+Actual completed Cube-double intervention, seed0
+------------------------------------------------
+Both methods use tau.9/gamma999, nine BC proposals, an exact finite expectile
+root, projected targets, two unused auxiliary V fits, and min-head deployment.
+Change ONLY the target-proposal head reducer from min to mean.
+
+                            BC from min run   BC from mean run
+  Q from min-backup run           .0000             .0000
+  Q from mean-backup run          .3200             .3200
+
+Each cell averages CPU50 at800K/900K/1M. The actual BC parameters, replay RNG
+and agent RNG are EXACTLY equal across the two runs at all3 checkpoints. The
+crossed evaluations reproduce all50 episode successes/rewards/lengths of the
+corresponding same-critic diagonal exactly. This identifies the deployed
+critic-source effect in this case; it does not add a training seed or identify
+the precise first harmful SGD update.
+
+Corrected fixed-train1024 snapshot at1M:
+                                      min backup       mean backup
+  projected actual-target TD RMS       1.106353          4.083723
+  finite-proposal score abs mean       9.20e-6           2.53e-6
+  proposal-root mean                 -1996.365          -292.789
+  within-state proposal SD                .0483            1.7055
+  lower target projection fraction        .6289            .0000
+  heldout known-goal Q RMS             1608.071            61.478
+
+The target range is[-2000,0]. The failed method fits a near-floor target with a
+small dataset TD residual. The successful method has MORE TD error on this
+probe but far less error at the known zero boundary. Neither method's tiny
+finite-proposal score is the unknown population residual zeta. Small training
+RMS cannot control rare heldout states or the sup-norm assumptions of a
+Bellman error bound. Even the improved goal error61 is not zero.
+
+Exact finite-operator facts
+--------------------------
+For frozen twin heads Q1,Q2 on the SAME action proposals, define
+  Q_min = min(Q1,Q2), Q_mean = (Q1+Q2)/2,
+  h(a) = Q_mean(a)-Q_min(a) = |Q1(a)-Q2(a)|/2 >=0.
+Monotonicity and translation equivariance of the empirical expectile imply
+  min_i h(a_i) <= e_tau(Q_mean(a_1:N))-e_tau(Q_min(a_1:N)) <= max_i h(a_i).
+Thus the mean-root target is at least the min-root target before projection.
+Projection is monotone and nonexpansive, so its target displacement lies
+between0 and gamma*mask*the unprojected root displacement. This is a statement
+about frozen learned predictions, not a label for true critic error.
+
+For a FIXED behavior generator, let F be the expected finite-N scalar Bellman
+operator. For either reducer A=min or mean, the ideal synchronous twin operator
+is T_A(Q1,Q2)=(F(A(Q1,Q2)),F(A(Q1,Q2))). Both are gamma-contracting in sup norm.
+After one exact synchronous application both output heads are equal. At a
+fixed point A(Q,Q)=Q, so BOTH reducers have the SAME unique scalar finite-N
+fixed point. This fixed point need not equal population-expectile IQL's value.
+
+Therefore the observed min-versus-mean performance difference is not explained
+by a superior ideal fixed point. It concerns persistent head disagreement,
+approximation/optimization/sampling errors, target clipping and their learning
+path interactions. Extra V fits do not remove those errors; V is unused in
+these two finite backups anyway. The ideal proof does not establish neural
+SGD/EMA convergence or oracle action-ranking correctness.
+
+A persistent added Bellman perturbation d can accumulate geometrically with
+scale d/(1-gamma). This provides a reason to investigate small systematic
+head-reduction displacements when gamma is high. Actual logged head gaps are
+state-dependent and not oracle bias labels. Do not substitute a fixed-data
+RMS or one frozen root gap into a sup-norm bound and claim a measured B_k.
+Clipping and changing states can also cancel or truncate contributions.
+
+Independent exact count-enumeration checks in twin_backup_operator_checks_v1
+cover24 small MDPs, gamma.9/.99/.999, tau.9/.99, N9; the two fixed points agree
+within9.6e-11. Added-bias geometric-sum examples are checked separately. These
+are mathematical implementation checks, not OGBench performance experiments.
+
+Legacy diagnostic correction
+------------------------------
+The old empirical_backup_core_v1, mean_empirical_backup_core_v1, and anchored
+core import the generic learned-V probe. Their td_rms is Q-r-gamma*mask*V,
+which is COUNTERFACTUAL when the training target uses a finite proposal root.
+The registered training targets and window critic/critic_loss remain correct.
+Use explicit actual-target snapshot fields for Bellman-residual interpretation.
+Half, boundary-auxiliary and next-boundary cores have dedicated target probes.
+Do not edit pinned active/resumable training sources to rename old fields.
+
+External snapshotV2 reconstructs fixed indices and actual operator targets,
+retains old learned-V numbers, and records CPU/graph numerical controls. The
+first V1 min-model audit rejected an overly strict relative TD reproduction
+check at1M. V2 retains that failure, reports legacy GPU1.222606 vs same-probe
+CPU1.219972, verifies marginal predictions, and checks a triangle-inequality
+bound between two CPU graph residuals. No CUDA kernel or precision fault is
+identified. Reconstructed formula arithmetic uses float64 from float32 network
+predictions, not bitwise replay of original GPU minibatch updates.
+
+This is one environment and seed. Mean-backup Ant and two new Humanoid pilots
+remain necessary; a nine-task mean and fresh training-seed confirmation are
+still required for superiority claims. This branch is separate from the
+selected3-independent-critic median-rank policy candidate.

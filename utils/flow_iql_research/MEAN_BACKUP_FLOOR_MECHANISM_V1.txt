@@ -1,0 +1,58 @@
+What the controlled finite-min/mean traces establish
+
+Both finite methods directly solve the same tau.9 empirical expectile equation
+on9behavior-flow actions and project Bellman targets to known cost bounds.
+Nine-task seed0 success is .4000 for min heads and .617037 for mean heads.
+Actual54late checkpoints have identical BC weights/moments/replay/agent RNG.
+The new allnine online-log analysis additionally checks every1000-update
+actor-loss window and finds all shared actor metrics exact over all1Mupdates.
+This is evidence for a target-aggregation effect, not environment-wise tuning.
+
+Late Humanoid-medium, Humanoid-large and Cube-double min-backup critics are
+nearly at the negative return floor on fixed queries. Roughly55-62percent of
+their actual online targets are clipped to that floor. Mean-backup clipping
+is near0 on those tasks, with higher last3 success. Ant has less saturation
+and its score decreases from.54 to.46; the effect is not universal per task.
+Allnine task traces, including exceptions, are stored and plotted.
+
+Why tiny finite residual is insufficient
+The solver score is around numerical precision for either aggregation. That
+only certifies an expectile of the9sampled learned-Q values. A systematically
+shifted or poorly ranked critic can have an exact empirical root. It is not
+a statement that population-behavior residual, true-Q error or propagated B_k
+is zero. Bounded target values can also coexist with a useless saturated
+critic, so numerical finiteness is not a sufficient definition of stability.
+
+Mathematical mechanism and its assumptions
+For two numbers, mean(Q1,Q2)-min(Q1,Q2)=abs(Q1-Q2)/2 pointwise. If two scalar
+errors have zero conditional means, taking their minimum introduces a negative
+expected error of half their expected absolute difference; the arithmetic
+mean removes that explicit minimum. Learned heads need not be unbiased, so
+their observed gap is not a measured true-Q bias.
+Expectiles are monotone and translation-equivariant. Under a FIXED teacher,
+the mean-head empirical root is therefore at least its minimum-head root,
+apart from floating-point effects. This does not order independently trained
+critics or prove that a more optimistic root is closer to true action value.
+In an ideal unprojected scalar fixed operator, a constant per-backup shift can
+accumulate geometrically. Multiplying an observed mean root gap by1/(1-gamma)
+does not estimate B_k for these changing nonlinear neural networks. Projection
+can saturate at the lower bound; it does not guarantee useful action ranking.
+
+Logging distinctions
+Clipping/loss/root metrics are averages of actual1000-update minibatch windows.
+Fixed-query Q/V statistics are instantaneous on1024sampled states; their time
+means are descriptive and are not full-replay population averages.
+The learned V retained in BOTH finite implementations is a min-teacher clock
+control and never enters the bootstrap. root_mean - V_min combines a head
+aggregation effect, density/finite-sampling effects and V fitting; it is not
+a pure residual measurement. Subtracting mean root_mean-root_min from mean
+root_mean-V_min gives a mean root_min-V_min discrepancy, but RMS quantities
+cannot be subtracted this way. No teacher is a nonterminal Q oracle here.
+
+Remaining comparison
+Three learned-V/mean-teacher pilots are registered after all27fresh mean-backup
+confirmation jobs. This completes a descriptive learned/finite x min/mean
+factorial on Ant/HMM/CubeD. It tests whether finite estimation contributes
+beyond changing the V teacher. Its results are not assumed and do not alter
+the locked candidate or its fresh9/10/11 validation. New alternate candidates
+would need uniform9 and fresh unused training seeds>=12.

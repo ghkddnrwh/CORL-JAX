@@ -1,0 +1,75 @@
+Finite mean-head expectile backup: statements and their scope
+
+Implemented target
+Given a frozen behavioral flow at an update, drawN=9actions a_j at s'. Define
+x_j=(Q_target,1(s',a_j)+Q_target,2(s',a_j))/2. The finite expectilee_tau(x)
+is the unique root of
+  tau*sum_j max(x_j-v,0) - (1-tau)*sum_j max(v-x_j,0) = 0.
+The code solves this piecewise linear scalar equation by sorting and checking
+allN+1intervals, with centering for numerical conditioning. The implemented
+target is projection_[L,0](r+gamma*mask*e_tau(x)), L=-C/(1-gamma).
+The empirical root is exact up to floating-point arithmetic; the logged score
+is a numerical check on those sameNproposals, not an independent oracle test.
+
+Removal of one fitting path
+A learnedV need not minimize even this finite conditional objective exactly.
+Using the root directly removes the learnedV fitting approximation from this
+particular target. The sampled flow distribution need not equal the unknown
+behavior distribution. Nine sampled actions are not an exact population
+expectile, and Q_target remains estimated. This intervention does not remove
+critic, coverage, density, transition-sampling or function-approximation errors.
+
+What twin mean changes exactly
+For two real numbersq1,q2,
+  (q1+q2)/2-min(q1,q2)=abs(q1-q2)/2.
+Thus, with the same target heads and same candidate actions, every mean-head
+proposal is at least the minimum-head proposal. Monotonicity of the expectile
+implies root_mean>=root_min; translation equivariance also gives
+  0<=root_mean-root_min<=max_j abs(Q1_j-Q2_j)/2.
+This is a same-update deterministic comparison, not the eventual difference
+between separately trained neural trajectories. Calling this difference a
+known true-Q bias requires assumptions on the heads' calibration. For example,
+conditionally unbiased heads imply the min is pessimistic in expectation,
+whereas the mean preserves that unbiasedness before the nonlinear expectile.
+Neither unbiasedness assumption was established by these offline logs.
+
+An ideal operator statement
+For0<tau<1, e_tau is monotone in every component and translation equivariant.
+If max_j|x_j-y_j|<=d, then y-d<=x<=y+d componentwise, so
+  e_tau(y)-d<=e_tau(x)<=e_tau(y)+d.
+Therefore the scalar expectile is1-Lipschitz in the sup norm. Averaging two
+heads and interval projection are also1-Lipschitz. For fixed proposals at each
+next state, or a fixed proposal distribution with the appropriate population
+expectile, the resulting exact Bellman operatorT consequently satisfies
+  ||TQ-TQ'||_infinity<=gamma*||Q-Q'||_infinity,
+using0<=mask<=1 and coupled proposals in the finite comparison. Its fixed point
+belongs to that expectile/proposal operator, not necessarily optimaltrueQ.
+
+How errors can accumulate under additional assumptions
+If an approximate iteration can be written as Q_(k+1)=TQ_k+epsilon_k for one
+fixed operatorT, the ideal sup-norm recursion is
+  ||Q_k-Q_*||<=gamma^k||Q_0-Q_*||
+               +sum_(i=0)^(k-1) gamma^(k-1-i)||epsilon_i||.
+Uniformepsilon yields epsilon/(1-gamma). A constant signed scalar discrepancy
+can similarly accumulate geometrically. These equations explain why persistent
+local errors matter atlargegamma. They are not observed estimates of B_k.
+
+Limits of transferring this statement to the actual learner
+The real flow changes during training, proposals are resampled, target heads
+use EMA, regression uses offline minibatches and neural optimization, and the
+training data do not cover allstate-actions. Projection bounds targets rather
+than allnetwork outputs. The ideal contraction does not prove neural training
+stability, eliminate population residuals, or ensure good deployed action
+rankings. Even finite-min with numerical root scores~1e-6 failed on several
+tasks. The deployment also uses best9byminimumonlineQ rather than the backup
+expectile policy, so improved backup control and final success remain distinct.
+
+Code and experimental anchors
+utils/flow_iql_research/mean_empirical_backup_core_v1.py
+utils/flow_iql_research/selection_v2.py:empirical_expectile
+utils/propagation_research/reward_bounds.py
+analysis/mean_min_backup_full9_components_v1.json: actual commonBC/moments/RNG
+analysis/mean_backup_online_mechanism_v1.json: actual onlineclip/root-score logs
+analysis/mean_backup_floor_timing_v1.json: early failure before floor saturation
+The latter analysis paths are relative to the research root. No novelty claim
+or attribution to a fully identified oracle error follows from these statements.

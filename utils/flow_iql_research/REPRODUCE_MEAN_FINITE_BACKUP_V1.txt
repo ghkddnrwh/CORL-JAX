@@ -1,0 +1,83 @@
+Mean-head finite expectile backup: current reproducible research method
+
+Observed result and confirmation status
+Discovery seed0: nine-task800K/900K/1M CPU50 average .6170370370.
+Plain FQL criterion .47, plain ReBRAC .44; DD-ReBRAC .63 is a separate row.
+Fresh seeds9/10/11 were registered before their training/outcomes and are
+running. Discovery alone does not complete the goal. No SOTA, matched-compute,
+or matched-seed FQL superiority claim is established by this number.
+
+Actual implementation
+Core: utils/flow_iql_research/mean_empirical_backup_core_v1.py
+Runner: utils/flow_iql_research/train_mean_empirical_backup_v1.py
+Exact finite root: utils/flow_iql_research/selection_v2.py:empirical_expectile
+All active/resumable sources are frozen; preserve the original files.
+
+At each Q update, train the behavioral flow with the ordinary unweighted
+official IFQL flow-matching loss on dataset actions. Draw nine actions from
+that flow at each next state, using an independent folded-in key. Evaluate
+both old target-Q heads and take their arithmetic mean per candidate. Solve
+the tau-expectile of those nine values exactly, then form r+gamma*mask*root
+and project it to the declared return interval[-C/(1-gamma),0]. Regress both
+online Q heads to that same target, update BC once, and keep the official
+old-online-Q EMA convention. Deploy best9 BC candidates according to the
+minimum of the online twin Q heads. There is one learner, not an ensemble
+of independently trained critics, and no environment-specific winner mixture.
+
+Shared settings
+tau=.9, gamma=.999, backup/deployment candidates=9, ten Euler flow steps,
+Adam .0003, batch256, EMA .005, four GELU hidden layers, Q/V LayerNorm,
+no actor LayerNorm, public navigation512/manipulation256 widths.
+C is the declared reward component count, not a fitted performance constant.
+Other inherited public config fields are recorded verbatim in each config.json.
+
+Important unused control
+The validated runner retains two learned-V Adam fits per Q update for its
+existing research clock control and diagnostics. That V does not enter this
+backup or deployed action selection. Its fitting loss/legacy learned-V TD RMS
+is not this finite target's residual. Do not present the extra V work as a
+necessary algorithm component or silently remove it from this frozen runner.
+
+Example, using a NEW output directory
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.1 CUDA_VISIBLE_DEVICES=0 \
+  /home/ukjo1/anaconda3/envs/ogbench/bin/python -u -m \
+  utils.flow_iql_research.train_mean_empirical_backup_v1 \
+  --output NEW_OUTPUT_DIRECTORY --env antmaze-large-navigate-singletask-v0 \
+  --kind ifql --profile bounded_v2_mean_empirical_backup --seed 0 \
+  --discount 0.999 --expectile 0.9 --samples 9 --steps 1000000 \
+  --episodes 50 --aux-eval-steps ''
+For independent reproduction use the same command and all settings, changing
+only seed and output directory. Never overwrite existing registered runs.
+The managed queue already runs eight learners/GPU on both GPUs; do not launch
+extra processes onto those occupied slots. scheduler_v20 manages completion
+and replenishment. The empty aux schedule matches fresh confirmation and does
+not remove800K/900K/1M primary evaluations.
+
+Nine environments
+antmaze-large-navigate-singletask-v0
+humanoidmaze-medium-navigate-singletask-v0
+humanoidmaze-large-navigate-singletask-v0
+antsoccer-arena-navigate-singletask-v0
+cube-single-play-singletask-v0
+cube-double-play-singletask-v0
+puzzle-3x3-play-singletask-v0
+puzzle-4x4-play-singletask-v0
+scene-play-singletask-v0
+
+Evidence and remaining attribution limits
+mean_backup_full9_expansion_v1.json fixes the uniform nine discovery jobs.
+analysis/mean_backup_discovery_root_audit_v2.json independently verifies all27
+actual finite late checkpoints and raw CPU50 arrays. Independent criteria and
+jobs are in mean_backup_independent_confirmation_registration_v1.json.
+Only a full9 seed mean counts; average those across the three fresh seeds.
+Missing or stopped results are not0, and highest checkpoints are never selected.
+
+The finite root removes the learned-V fitting approximation from this empirical
+backup, not population-behavior/model/finite-sample or critic approximation
+error. The twin mean removes the explicit recurrent minimum, not all bias.
+Finite-min full9 scored.4, so eliminating learned-V fitting alone was insufficient
+in that version. A learned-V/mean-head control is still needed to isolate the
+two components. Projection and an ideal fixed-flow operator's contraction do
+not guarantee stable neural optimization or improved policy ranking.
+The installed library stack differs from the original paper requirements;
+this is an aligned equation/config implementation, not bitwise paper replication.

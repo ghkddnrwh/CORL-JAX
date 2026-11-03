@@ -1,0 +1,54 @@
+Preferred discovery candidate after the complete aggregation factorial
+====================================================================
+
+Use the same three independent official-style IFQLV2 learners, tau.9/gamma999,
+two V Adam fits/fresh V backup/known-return target projection, and first BC
+flow's9 action proposals. Each member takes its minimum twin-Q head. Convert
+each member's9 values to midranks and AVERAGE the3 rank vectors. Choose the
+largest average rank, first proposal on exact ties. This replaces the median
+rank step in the previously selected candidate. No other technique is added.
+
+The four global rules, on exactly the same existing learners0/1/2 and BC0:
+                      mean          median
+  raw Q               .485926       .477037
+  midranks            .545926       .505926
+
+All cells are complete9-task means over800K/900K/1MCPU50. Their108 raw
+evaluations and81 unique actual late member checkpoints were audited. The
+rank-mean macro values are.548889/.493333/.595556; all3 checkpoints contribute
+equally. This ONE discovery ensemble is not3 independent ensemble replications.
+
+This factorial supports the rank-coordinate transform in this discovery
+cohort, and does not support adding the median reducer. Rank mean is simpler
+and its discovery mean is higher. Every task uses the same rule,3 learners,N9,
+tau.9 and gamma999. No environment-specific parameters or winning-rule mixture.
+
+Mean ranks are invariant to independent strictly increasing transformations of
+the critics at a state, including offsets and relative positive scales. Their
+per-member contribution is bounded by the finite rank range. They do NOT have
+the median's two-unique-best-critics majority guarantee; the unit counterexample
+is retained. Neither rule certifies true action ranking or fixes shared errors.
+Raw Q mean already ignores per-critic state offsets, so additive offsets alone
+are not the reason to rank-transform its inputs.
+
+Fresh confirmation
+-------------------
+The preferred rank-mean method is frozen AFTER this discovery comparison and
+BEFORE any fresh learner policy-evaluation outcomes. It reuses the already
+registered54 learners, with groups[3,4,5]and[6,7,8], and first BC3/6. There is
+no new GPU training. Training identities and all source digests stay fixed.
+The older median-rank method remains a separately reported paired comparator;
+the registration and promotion receipt are preserved. Reporting both avoids
+hiding the history or interpreting them as independent training replications.
+
+Each fixed method is evaluated at every task and all3 late checkpoints with
+CPU50, independent reset seeds42..91. For rank mean, require the two fresh
+groups' average and the all-three-group average to exceed.47. Missing/stopped
+learners do not get zeros. No selection by fresh per-environment scores and
+no further hyperparameter tuning on these groups. Final scientific review is
+required before claiming the research goal achieved.
+
+Cost remains3 base IFQLV2 learners, total3M Q and6M V updates at1M/member.
+This is not an equal-compute win over FQL/ReBRAC, and DD-ReBRAC.63 precludes a
+SOTA claim. Independent training-seed confirmation and stability assessment
+remain incomplete until the fresh groups finish.

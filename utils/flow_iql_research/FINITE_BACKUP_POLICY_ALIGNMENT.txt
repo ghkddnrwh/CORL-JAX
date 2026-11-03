@@ -1,0 +1,146 @@
+Finite-proposal expectile backup versus best-N deployment
+========================================================
+
+This derivation distinguishes an objective mismatch from expectile fitting
+error. It is not a novelty claim, a convergence theorem for neural training,
+or evidence that increasing tau will improve the benchmark.
+
+Assumptions and operators
+-------------------------
+Let rewards be bounded, gamma<1, and the behavior generator mu(.|s) be FIXED.
+Use one exact scalar Q function. Draw N independent actions from mu at the next
+state. Define
+
+  F_tau,N(Q)(s) = E_draw[ empirical_expectile_tau(Q(s,a1),...,Q(s,aN)) ],
+  F_max,N(Q)(s) = E_draw[ max_i Q(s,ai) ],
+  T_tau,N Q = r + gamma P F_tau,N(Q).
+
+The empirical expectile is monotone, translation equivariant and1-Lipschitz
+in the sample sup norm. Thus T_tau,N is a gamma contraction, with unique fixed
+point Q_tau,N. The max operator has the same properties. Known-return target
+projection is monotone/nonexpansive and is inactive at a valid bounded fixed
+point. Learned/twin critics, generator drift and function approximation are
+additional errors absent from these assumptions.
+For episodic data incorporate the bootstrap mask in P. Its rows may then sum
+to less than one; the same contraction and resolvent bounds still hold.
+
+A finite-operator policy guarantee does not need N>=tau/(1-tau)
+---------------------------------------------------------------
+Let pi_N(Q) generate N actions from mu and select one maximizing Q. For every
+realized proposal set, max Q >= empirical_expectile_tau Q. Therefore
+
+  T_{pi_N(Q_tau,N)} Q_tau,N
+    = r + gamma P F_max,N(Q_tau,N)
+    >= T_tau,N Q_tau,N = Q_tau,N.
+
+Policy Bellman monotonicity/contraction implies
+
+  Q^{pi_N(Q_tau,N)} >= Q_tau,N.
+
+This holds for every N>=1 and tau in(0,1), because the backup and deployed
+policy use the SAME FINITE proposal law. It does NOT imply that Q_tau,N equals
+the population IQL expectile fixed point Q_tau, even if the generator is exact:
+E[empirical_expectile_tau(X1,...,XN)] generally differs from expectile_tau(X).
+For N=1 the finite backup is simply behavior-policy evaluation, independent of
+tau, and best1 is just behavior sampling.
+
+By contrast, RANK_FLOW_METHOD.txt compares E[max_N X] with the POPULATION
+expectile_tau(X), for which N>=tau/(1-tau) is a sufficient general condition.
+Nine satisfies that condition at .9 and not at .99. There is no contradiction:
+the finite and population fixed points are different reference objects.
+
+An exact propagated gap can remain when fitting error is zero
+------------------------------------------------------------
+Let pi=pi_N(Q_tau,N) and d(s)=F_max,N(Q_tau,N)(s)-F_tau,N(Q_tau,N)(s)>=0.
+Then the exact difference from the deployed policy's value is
+
+  Q^pi - Q_tau,N = (I-gamma P^pi)^(-1) gamma P d,
+  ||Q^pi-Q_tau,N||_infinity <= gamma/(1-gamma) ||d||_infinity.
+
+This can be nonzero with exact Q_tau,N and zero learned-V fitting error.
+It is NOT estimation error relative to Q_tau,N, and must not be relabeled as
+the supplied theory's critic epsilon or residual zeta without changing the
+reference value function. It explains why repairing a fitting error does not
+by itself calibrate the critic to an extracted policy's return.
+
+For a one-state MDP with rewards-1/0, uniform behavior and N9, the selected
+policy chooses reward0 whenever any candidate offers it. Its action law is the
+same for tau .9 and .99. The finite-expectile fixed point changes with tau, but
+the actual policy return is identical. Hence even a smaller exact value gap
+need not produce a return improvement.
+
+An identity connecting value fitting and policy extraction
+----------------------------------------------------------
+For any approximate scalar Qhat, Vhat and deployed policy pihat, keep the same
+fixed proposal law and define
+
+  b_train = r + gamma P Vhat - Qhat,
+  e(s) = Vhat(s) - F_tau,N(Qhat)(s),
+  delta(s) = F_max,N(Qhat)(s) - E_{a~pihat}[Qhat(s,a)],
+  d(s) = F_max,N(Qhat)(s) - F_tau,N(Qhat)(s).
+
+P maps a state function to its next-state expectation at each current(s,a).
+Then the policy Bellman equation gives the exact identity
+
+  Q^pihat - Qhat
+    = (I-gamma P^pihat)^(-1) [ b_train + gamma P(d-e-delta) ].
+
+This follows by adding/subtracting the two backup state values in
+T^pihat Qhat-Qhat, then using the policy Bellman resolvent. The terms are
+signed and can cancel. Reducing one norm need not reduce the resulting value
+discrepancy, and a smaller discrepancy is not a return-improvement theorem.
+
+In particular, e is NOT automatically the supplied theory's zeta/kappa.
+It also includes target-critic lag, generator mismatch, finite/population
+expectile differences and approximation effects. The expectations in b_train
+use the true transition law, so a minibatch TD loss is not an oracle b_train.
+Delta is signed if the learned policy is not constrained to the random
+candidate set. Qhat-based delta on dataset states is not true-Q regret along
+deployed trajectories.
+
+If the training target is projected, let
+  c=E[project(r+gamma mask*Vhat(next))-(r+gamma mask*Vhat(next))],
+  b_projected=E[project(r+gamma mask*Vhat(next))]-Qhat.
+Then b_train=b_projected-c. Projection supplies another signed term in this
+identity; clipped TD loss cannot silently substitute for b_train. These are
+analytical references, not measured oracle errors in the OGBench logs.
+
+How tau controls the finite backup/extraction difference
+--------------------------------------------------------
+For N sample values in[L,U], write m=max sample. Monotonicity of expectiles
+shows the smallest possible expectile with this maximum occurs with one value
+m and N-1 values at L. Solving its score equation gives
+
+  0 <= m - empirical_expectile_tau
+    <= c(tau,N)*(m-L),
+  c(tau,N) = (N-1)(1-tau) / [tau+(N-1)(1-tau)].
+
+The extreme sample attains this bound. With N9, c is .470588 at tau .9 and
+.074766 at tau .99. At a FIXED Q/proposal law, raising tau brings the finite
+backup closer to best9 evaluation. The ideal finite fixed points also increase
+pointwise with tau. These properties do not establish monotonic return gains
+for the resulting policies, especially with learned Q/generator errors.
+
+The coefficient concerns a finite sample's range, not true Q error or measured
+benchmark bias. Multiplying it by gamma/(1-gamma) is only an ideal sup-norm
+bound; it is not a prediction of actual value scale or success rate. A flat
+learned critic has a small d regardless of whether it is useful, so this is
+not a diagnosis of the observed CubeD failure by itself.
+
+Implications for the registered experiments
+-------------------------------------------
+The existing tau .99/N9 finite-backup pilots can be interpreted as testing
+backup/extraction alignment for the practical best9 policy. They must not be
+described as an accurate population .99 expectile method or as satisfying the
+population N99 sufficient condition. No experiment is changed by this note.
+
+The mean-target versus min-target experiment concerns another bias source.
+Matching the deployed reducer to the target reducer is tested separately by
+the frozen head-aggregation comparison. Actor-flow approximation and numerical
+integration are further separate factors. None is added to all the others by
+default; the benchmark still requires one common recipe across all nine tasks.
+
+check_finite_policy_alignment_v1.py verifies the sample bound by independent
+bisection and exact small-MDP linear solves, including the resolvent identity
+and the one-state no-return-change example. These mathematical simulations
+contain no OGBench episodes and are excluded from every benchmark mean.

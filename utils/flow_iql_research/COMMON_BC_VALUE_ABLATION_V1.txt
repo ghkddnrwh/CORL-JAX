@@ -1,0 +1,46 @@
+Common actual behavior policy for native versus corrected IQL critics
+Registered before any new crossed outcome. One exploratory seed0, nine tasks.
+
+Question
+The native IFQL and V2 IFQL behavior flow parameters and Adam moments are not
+bitwise equal at the retained checkpoints, despite identical configurations,
+agent RNGs, and replay RNGs. Their own-policy difference therefore cannot be
+attributed solely to the value-update bundle. The origin of the BC differences
+has not been diagnosed. Equal terminal RNG states do not prove equal arrays or
+equal compiled numerical trajectories throughout training.
+
+Fixed protocol
+Use the already retained native and V2 checkpoints at 800K, 900K, and 1M,
+all tasks, seed0. No training or GPU jobs. Freeze the actual V2 behavior-flow
+parameters, moments, and action RNG at each checkpoint. Compare native Q with
+this common V2 BC against existing V2 Q with exactly that same V2 BC. Use max
+of twin-min Q across nine flow proposals, 50 CPU episodes, reset seeds42..91.
+All scores use equal means across three checkpoints and all nine tasks.
+No winning-checkpoint or per-task recipe mixtures and no missing-as-zero.
+
+Validation gate
+First reproduce V2 self-compositions on Ant/Humanoid-medium/Puzzle-3x3 at1M.
+Require equality of the whole dynamic state and all 50 success/reward/length
+arrays against retained V2 N9 evaluations. Only after all three pass may the
+27 native-Q/common-V2-BC evaluations start. Check source/config/checkpoint SHA,
+finite state and the actual Adam counts (native V1M, V2 separate V2M at1M).
+Use the existing frozen factorized-policy V3 evaluator without editing any
+checkpoint, primary evaluation, training source or optimizer trajectory.
+
+Interpretation
+V2 Q/common V2 BC minus native Q/common V2 BC is a value-bundle contrast
+conditional on this specific common BC source. It does not separately identify
+extra V fitting, fresh bootstrap order or target projection, nor imply a
+universal value improvement. Common-BC native Q minus native-own-BC native Q
+is a policy-extraction contrast conditional on the native critic.
+Both contrasts are secondary exploratory ablations. They do not provide
+independent training confirmation, qualify a newly selected policy or complete
+the goal. They cannot establish why the native BC weights differed.
+
+Resources and evidence
+Thirty additional CPU50 evaluations: three self-sanity plus27 crosses.
+Two nice10 CPU slots:56..59 and60..63. Zero new GPU learners.
+All eighteen parent identities, training sources and54 checkpoint hashes are
+inherited from the preregistered matched N9 native reference audit. Existing
+V2 N9 outcomes are pinned by hash. The new controller and note are frozen at
+registration. All output episode arrays and failed sanity evidence persist.

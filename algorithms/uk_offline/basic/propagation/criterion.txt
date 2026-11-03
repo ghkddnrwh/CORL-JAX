@@ -1,0 +1,102 @@
+\begin{table*}[t]
+    \centering
+    \caption{
+        Performance on OGBench navigation tasks under the original discount-factor
+        settings and the bias-stress setting ($\gamma = 0.999$).
+        Results are mean $\pm$ standard deviation over the training seeds.
+    }
+    \label{tab:discount_factor_results}
+    \footnotesize
+    \setlength{\tabcolsep}{3.5pt}
+    \renewcommand{\arraystretch}{1.1}
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{lcccccccccc}
+        \toprule
+        & AM-L & HM-M & HM-L & AS-A & Cube-S & Cube-D
+        & Pz-3x3 & Pz-4x4 & Scene & Avg \\
+        \midrule
+
+        \multicolumn{11}{c}{\textit{Original discount-factor settings ($\gamma = 0.99$ or $\gamma = 0.995$)}} \\
+        \midrule
+        IQL ($\tau = 0.9$)
+        & 0.14 $\pm$ 0.03 & 0.44 $\pm$ 0.05 & 0.05 $\pm$ 0.02
+        & 0.06 $\pm$ 0.03 & 0.84 $\pm$ 0.07 & 0.00 $\pm$ 0.00
+        & 0.01 $\pm$ 0.00 & 0.04 $\pm$ 0.01 & 0.11 $\pm$ 0.09 & 0.19 \\
+
+        IQL ($\tau = 0.99$)
+        & 0.00 $\pm$ 0.00 & 0.25 $\pm$ 0.05 & 0.03 $\pm$ 0.01
+        & 0.03 $\pm$ 0.01 & 0.00 $\pm$ 0.00 & 0.00 $\pm$ 0.00
+        & 0.00 $\pm$ 0.00 & 0.01 $\pm$ 0.00 & 0.00 $\pm$ 0.00 & 0.04 \\
+
+        ReBRAC
+        & 0.97 $\pm$ 0.02 & 0.16 $\pm$ 0.05 & 0.03 $\pm$ 0.02
+        & 0.01 $\pm$ 0.01 & 0.87 $\pm$ 0.05 & 0.08 $\pm$ 0.03
+        & 0.04 $\pm$ 0.02 & 0.08 $\pm$ 0.04 & 0.49 $\pm$ 0.07 & 0.30 \\
+
+        FQL
+        & 0.83 $\pm$ 0.03 & 0.26 $\pm$ 0.20 & 0.00 $\pm$ 0.00
+        & 0.37 $\pm$ 0.03 & 0.95 $\pm$ 0.01 & 0.28 $\pm$ 0.05
+        & 0.12 $\pm$ 0.05 & 0.11 $\pm$ 0.02 & 0.77 $\pm$ 0.14 & 0.41 \\
+
+        % \addlinespace
+        \midrule
+        \textbf{DD-IQL} ($\tau = 0.9$)
+        & 0.28 $\pm$ 0.03 & 0.49 $\pm$ 0.00 & 0.07 $\pm$ 0.03
+        & 0.05 $\pm$ 0.01 & 0.88 $\pm$ 0.06 & 0.00 $\pm$ 0.00
+        & 0.01 $\pm$ 0.00 & 0.05 $\pm$ 0.03 & 0.03 $\pm$ 0.00 & 0.21 \\
+
+        \textbf{DD-IQL} ($\tau = 0.99$)
+        & 0.50 $\pm$ 0.00 & 0.52 $\pm$ 0.02 & 0.13 $\pm$ 0.03
+        & 0.04 $\pm$ 0.00 & 0.93 $\pm$ 0.01 & 0.00 $\pm$ 0.00
+        & 0.00 $\pm$ 0.00 & 0.02 $\pm$ 0.01 & 0.38 $\pm$ 0.18 & 0.28 \\
+
+        \textbf{DD-ReBRAC}
+        & 0.98 $\pm$ 0.01 & 0.39 $\pm$ 0.12 & 0.39 $\pm$ 0.10
+        & 0.43 $\pm$ 0.05 & 0.91 $\pm$ 0.02 & 0.32 $\pm$ 0.05
+        & 0.04 $\pm$ 0.02 & 0.10 $\pm$ 0.02 & 0.76 $\pm$ 0.05 & 0.48 \\
+
+        \midrule
+        \multicolumn{11}{c}{\textit{Bias-stress setting ($\gamma = 0.999$)}} \\
+        \midrule
+
+        IQL ($\tau = 0.9$)
+        & 0.09 $\pm$ 0.00 & 0.46 $\pm$ 0.03 & 0.09 $\pm$ 0.02
+        & 0.02 $\pm$ 0.01 & 0.52 $\pm$ 0.38 & 0.00 $\pm$ 0.00
+        & 0.00 $\pm$ 0.00 & 0.04 $\pm$ 0.01 & 0.10 $\pm$ 0.17 & 0.15 \\
+
+        IQL ($\tau = 0.99$)
+        & 0.06 $\pm$ 0.03 & 0.23 $\pm$ 0.05 & 0.04 $\pm$ 0.02
+        & 0.01 $\pm$ 0.01 & 0.07 $\pm$ 0.12 & 0.00 $\pm$ 0.00
+        & 0.00 $\pm$ 0.00 & 0.00 $\pm$ 0.00 & 0.00 $\pm$ 0.00 & 0.05 \\
+
+        ReBRAC
+        & 0.87 $\pm$ 0.07 & 0.50 $\pm$ 0.28 & 0.02 $\pm$ 0.01
+        & 0.08 $\pm$ 0.09 & 0.91 $\pm$ 0.03 & 0.00 $\pm$ 0.00
+        & 0.92 $\pm$ 0.02 & 0.00 $\pm$ 0.00 & 0.69 $\pm$ 0.09 & 0.44 \\
+
+        FQL
+        & 0.87 $\pm$ 0.12 & 0.22 $\pm$ 0.28 & 0.00 $\pm$ 0.00
+        & 0.18 $\pm$ 0.11 & 0.93 $\pm$ 0.02 & 0.28 $\pm$ 0.10
+        & 0.90 $\pm$ 0.06 & 0.00 $\pm$ 0.01 & 0.85 $\pm$ 0.04 & 0.47 \\
+
+        % \addlinespace
+        \midrule
+        \textbf{DD-IQL} ($\tau = 0.9$)
+        & 0.37 $\pm$ 0.03 & 0.63 $\pm$ 0.03 & 0.17 $\pm$ 0.00
+        & 0.03 $\pm$ 0.01 & 0.91 $\pm$ 0.00 & 0.01 $\pm$ 0.01
+        & 0.05 $\pm$ 0.01 & 0.09 $\pm$ 0.03 & 0.96 $\pm$ 0.03 & 0.36 \\
+
+        \textbf{DD-IQL} ($\tau = 0.99$)
+        & 0.57 $\pm$ 0.04 & 0.63 $\pm$ 0.04 & 0.35 $\pm$ 0.01
+        & 0.09 $\pm$ 0.02 & 0.93 $\pm$ 0.03 & 0.00 $\pm$ 0.00
+        & 0.03 $\pm$ 0.01 & 0.07 $\pm$ 0.01 & 0.48 $\pm$ 0.18 & 0.35 \\
+
+        \textbf{DD-ReBRAC}
+        & 0.83 $\pm$ 0.15 & 0.90 $\pm$ 0.05 & 0.51 $\pm$ 0.28
+        & 0.40 $\pm$ 0.03 & 0.93 $\pm$ 0.01 & 0.32 $\pm$ 0.06
+        & 0.94 $\pm$ 0.03 & 0.01 $\pm$ 0.01 & 0.83 $\pm$ 0.03 & 0.63 \\
+
+        \bottomrule
+    \end{tabular}%
+    }
+\end{table*}

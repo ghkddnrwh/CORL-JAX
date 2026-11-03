@@ -1,0 +1,43 @@
+연구 기준 알고리즘 기억 — 사용자 명시 요청, 2026-10-31
+
+기준: 성능이 검증된 기존 finite-mean을 보존한다.
+향후 개선 실험은 새 버전/출력 경로에서 진행한다. 원본 코드/저장 모델/로그/등록 결과를 덮어쓰지 않는다.
+
+원본 알고리즘: utils/flow_iql_research/mean_empirical_backup_core_v1.py
+원본 학습: utils/flow_iql_research/train_mean_empirical_backup_v1.py
+Finite expectile solver: utils/flow_iql_research/selection_v2.py:empirical_expectile
+재현 문서: utils/flow_iql_research/REPRODUCE_MEAN_FINITE_BACKUP_V2.txt
+원본 소스 SHA/실제 모델 경로: utils/flow_iql_research/FINITE_MEAN_REFERENCE_MANIFEST_V1.json
+원본 연구 결과: logs/diagnosis/flow_iql_research_20261026/analysis/mean_backup_final_review_v2/RESEARCH_REPORT_KO.txt
+
+학습 및 배포의 의미
+tau=0.9, gamma=0.999, N_backup=N_deploy=9, BC flow10Euler단계.
+next state의 unweighted BC flow 행동9개마다 old target twin-Q의 평균을 계산한다.
+그9개 값의 finite expectile을 풀고 y=r+gamma*mask*root를 알려진 반환 경계[-C/(1-gamma),0]로 제한한다.
+Twin critic과 unweighted BC flow matching을 각1회 학습한다. 기존 old-online-Q EMA를 유지한다.
+배포는 BC flow의9개 후보를 min online twin-Q로 평가하여 최선 행동을 선택한다.
+원본의 learned-V Adam2회 fitting은 역사적 진단/계산량 대조로 남아 있으며 backup이나 배포 결정에 쓰이지 않는다.
+
+원본 검증 성능 — 세 평가800K/900K/1M, 각CPU50episode/reset seeds42..91, 환경/학습시드 동일 가중 평균
+9환경 discovery seed0: 0.617037037.
+독립 확인 seed9/10/11의 9환경 평균: 0.626666667 / 0.528148148 / 0.611851852.
+새3시드 평균: 0.588888889. 전체4시드 평균: 0.595925926.
+Plain FQL/ReBRAC 제공 기준0.47/0.44보다 높았다. DD-ReBRAC0.63보다 높다는 결과는 아니다.
+
+lean과의 관계 — 같은 학습/배포 알고리즘의 계산 최적화
+새 구현: utils/flow_iql_research/efficient_mean_core_v1.py, variant=lean.
+새 학습: utils/flow_iql_research/train_efficient_v1.py --variant lean.
+미사용 learned-V2회 fitting과 관련 불필요한 진단 계산을 제거한다.
+Finite expectile, mean target-Q aggregation, target 경계, BC 학습, EMA,10-step flow/best9 배포는 동일하다.
+V 파라미터/독립V Adam상태/카운터와 진단 로그는 다르다. V 자체는 lean 상태에도 초기화돼 남아 있다.
+Ant-large/Cube-double/Humanoid-medium, seed0: 실제1M Q/target-Q/BC 파라미터가 원본과 bitwise동일했다.
+세 환경에서800K/900K/1M 평가도 각각 동일했다. 평균 성공률0.533333333.
+3환경 격리 학습 시간 비율0.845400(약15.46% 감소), CPU배포0.989181/GPU배포0.978908(거의 동일).
+lean9환경 seed0 평균0.625185185. 이것을 미사용V 제거가 성능을 높였다는 증거로 해석하지 않는다.
+lean 새3시드 확인은 아직 수행하지 않았다. 원본의 새3시드 성적을 lean으로 재표기하지 않는다.
+근거: logs/diagnosis/finite_mean_efficiency_20261030/analysis/efficiency_results_review_v2/independent_audit.json
+
+실패한 효율 후보를 이 기준과 혼동하지 않는다
+Euler5/2, BC student, anchor student, Q-guided one-step actor, combined student는 별도 알고리즘 변경이다.
+이번3환경/1시드 실험에서 성능 유지와 학습/배포 가속을 모두 만족한 후보는 없었다.
+기준 알고리즘 finite-mean과 lean에는 이 실패한 student/guided/Euler축소 변경이 포함되지 않는다.

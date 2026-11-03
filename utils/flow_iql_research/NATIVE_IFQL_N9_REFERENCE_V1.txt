@@ -1,0 +1,9 @@
+Native IFQL with the same N9 policy extraction budget as the V2 candidate.
+
+The existing native IFQL reference uses N32, while V2 N9 uses fewer proposals. Comparing only those rows confounds value correction with policy extraction. Evaluate the canonical completed seed0 ifql_control models at N9 using every 800K,900K,1M checkpoint, CPU50 independent resets42..91, on all nine default tasks. No GPU training or primary result changes.
+
+The native models were trained with num_samples32. Official IFQL actor training is unweighted behavior flow matching and does not query inference num_samples. Verify actual BC parameters, BC Adam moments, agent RNG and replay RNG against each corresponding completed V2 parent at each late step; report any differences before making a value-only attribution. The source/clock/finite preaudit covers all54 actual native/V2 late checkpoints. Native has one V fit in the joint optimizer and no separate V Adam; V2 has two separate V Adam fits. This remains a bundle comparison of V fit count, fresh bootstrap order and projected target.
+
+The global N9 choice was selected in prior V2 discovery experiments; this is a posthoc matched-budget reference on one training seed, not new independent confirmation. The existing V2 N9 results were seen. Only exact same-model/source/protocol previously saved N9 results may be reused. No task-wise winner or peak selection. Native9 macros require all nine tasks and all three late steps. Never zero-fill missing results or substitute the reference for a confirmed new algorithm.
+
+Two low-priority CPU workers use existing immutable models. All new outputs remain auxiliary; the original N32 evaluations stay unchanged. Goal completion still requires the requested uniform9 and independent confirmation beyond the provided FQL/ReBRAC thresholds.

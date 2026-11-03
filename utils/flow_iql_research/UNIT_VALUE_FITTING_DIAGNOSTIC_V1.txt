@@ -1,0 +1,11 @@
+Posthoc mechanism diagnostic for the registered raw/unit-MSE/unit-KL pilots.
+
+45actualmodel points:3tasks(Ant,HMM,Pz3) x3existingprofiles x5retainedsteps100K/300K/800K/900K/1M. Two Pz3at100K developmentjobs(rawandunitMSE) were seen before this broader registration and are reused;43futurejobs are prospective. This is not independent benchmark confirmation. No GPU jobs or new policy rollout episodes. Two nice19 CPU workers yield to primary evaluations/training.
+
+Use currentshared validation data afterfloat32/actionclip preprocessing: fixed8192uniformindices, separately ALLvalidation successful absorbing-state indices(masks0,reward0). Save fullvalidationfieldSHA,query/trainingindexSHA,actualCP/config/sourceSHA and predictionNPZ. Different models must use identicalcurrentvalidationmetadata for eachenvironment. InputSHA is not retrospectiveproof of allhistorical in-memorytrainingarrays.
+
+At the labelled absorbing-successboundary, the Bellmantarget is exactly0 in originalcostunits. Report online min/mean Q, targetQ and V calibration there; this is not an oracle for general nonterminal actionvalues. Separate teacher-Q error from V fitting to that teacher. All unit-return outputs are inverse-transformed fromsigmoidusingknownC/gamma; rawbaselineheadsremainlinear costvalues. Manipulation shaping remains unchanged.
+
+For UNIT models only, freeze each actual targetcritic and privately copy its V parameters. RESETaPRIVATE Adam for EACH of MSE/asymmetricBernoulliKL; take2/8/32updates withidenticalfreshrealtrainingminibatches256,lr.0003. Save all V prediction arrays, evaluate heldout fittedexpectileMSE/sample-score moments and truezero-boundaryerror. No live/checkpoint/actor/Qparams or optimizerstate changes. The resetcounterfits are NOT livecontinuations or recommendations to add8/32Vfits. Rawbaselines receive no Bernoullicounterfit.
+
+Compare objectivecounterfits WITHIN ONE sourceQ, not across differentteachers. Uniformvalidationandoversampledboundaryareseparatestrata;neverpooltheirlosstoestimatepopulationrisk. LoweroverallfittedMSE can coexistwithworseboundarycalibration. Nonmonotoniccounterfits mustallbereported;noextra-stepwinnerselectionorautomaticpromotion. SamplewisescoresareNOTconditionalexpectileresidualsorB_k. Only the alreadyregisteredlast3CPU50returns and independentuniform9confirmation canestablishperformance.

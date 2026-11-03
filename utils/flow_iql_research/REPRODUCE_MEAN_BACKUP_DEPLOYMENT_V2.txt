@@ -1,0 +1,64 @@
+Validated actor/Q exports: first fresh seed9, fixed1M, allnine environments
+
+Directory, relative to repository root
+logs/diagnosis/flow_iql_research_20261026/analysis/mean_backup_compact_deployment_v1/
+Files: ant.pkl, hmmed.pkl, hmlarge.pkl, soccer.pkl, cube.pkl, cubed.pkl,
+pz3.pkl, pz4.pkl, scene.pkl. manifest.json records SHA256 and source provenance.
+All9bundles together contain52,625,256bytes. The independent root audit is
+analysis/mean_backup_compact_deployment_root_audit_v1.json in the research root.
+
+Each bundle contains only trained BCflow and online twin-Q parameters, plus
+configuration/dimensions, relative inference code hashes, framework versions,
+and provenance. V, targetQ, Adam, replay and training RNG are absent. It cannot
+resume training. The loader does not open any original learner directory.
+Repository code and the recorded Python environment remain required.
+
+CPU inference in a new process
+Set these variables before importing JAX, matching the validated replay:
+  CUDA_VISIBLE_DEVICES=''
+  OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+  TF_NUM_INTRAOP_THREADS=1 TF_NUM_INTEROP_THREADS=1
+  XLA_PYTHON_CLIENT_MEM_FRACTION=0.1
+Use6logicalCPUs, e.g. taskset -c 72-77. The managed primary GPU learners used
+96logicalCPUs/16slots=6CPUs each. Do not launch extra GPU workers into fullslots.
+
+from utils.flow_iql_research.mean_backup_bundle_v1 import load
+import jax
+import numpy as np
+metadata, state, policy = load('PATH_TO_BUNDLE.pkl')
+key = jax.random.PRNGKey(42)
+# For each environment step:
+key, action_key = jax.random.split(key)
+action = np.asarray(policy(state.agent.network.params,
+    np.asarray(observation, np.float32), action_key)).copy()
+# observation, reward, terminated, truncated, info = env.step(action)
+
+This is the official single-observation IFQL forward pass:9BCproposals,
+10Eulerflow steps, argmax of minimum online twin-Q. The mean-head expectile
+is the training target rule, not the deployed candidate scoring rule.
+
+Verify a fresh fixed1M replay without overwriting evidence
+env CUDA_VISIBLE_DEVICES='' OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+  MKL_NUM_THREADS=1 TF_NUM_INTRAOP_THREADS=1 TF_NUM_INTEROP_THREADS=1 \
+  XLA_PYTHON_CLIENT_MEM_FRACTION=0.1 MUJOCO_GL=egl \
+  taskset -c 72-77 /home/ukjo1/anaconda3/envs/ogbench/bin/python -m \
+  utils.flow_iql_research.evaluate_mean_backup_bundle_v2 PATH_TO_BUNDLE.pkl \
+  --reference-run ORIGINAL_FIXED_SEED9_RUN --output NEW_REPLAY_RESULT.json
+Reference run names are listed in the manifest/root audit. The evaluator blocks
+original learner/checkpoint reads and optimizer updates throughout load/rollout,
+then reads original config/evaluation JSON to compare all50success/reward/length
+arrays. V2 saves every attempted raw array before raising on mismatch.
+
+The first developmentAntV1replay used4CPUs without explicitly matching bothTF
+thread flags, and failed. That failure is preserved. The same artifact under
+the original6CPU/threadsettings reproduced all50arrays exactly. A controlled
+300query same-observation forward check also found all4full/pruned variants
+bitwise exact. These tests do not isolate one particular flag as the cause.
+Allnine final artifacts passed exactCPU50replay and root18parameter-tree checks.
+
+These are serialization replays of predefined1Mmodels, not9new training
+replicates or a replacement for the800K/900K/1M metric. Primary performance
+comes from all27fresh learners and81late models, with equal9task/3seed means.
+Batch observations, GPU inference and other hardware/library versions are
+outside this equivalence check. Framework/source hashes are intentionally
+checked by the loader; changing them requires a new validation.

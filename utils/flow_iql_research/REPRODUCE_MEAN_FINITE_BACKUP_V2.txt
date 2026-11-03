@@ -1,0 +1,95 @@
+Validated mean-head finite expectile backup with a BC flow
+
+Result and evaluation
+Fresh, previously registered training seeds9/10/11: .626666667, .528148148,
+.611851852. Equal-seed, equal-nine-task average .588888889; descriptive sample
+SD across the3seed macro averages .053122009. Each task/seed score is the mean
+of CPU50success rates at exactly800K,900K,1M, episode reset seeds42..91.
+Discovery seed0 .617037037 is reported separately. All4seed average .595925926.
+Plain FQL/ReBRAC provided criteria .47/.44 are exceeded. DD-ReBRAC .63 is not.
+These are3fresh training replicates, not81or4050independent replicates.
+
+Implementation
+Core: utils/flow_iql_research/mean_empirical_backup_core_v1.py
+Runner: utils/flow_iql_research/train_mean_empirical_backup_v1.py
+Finite root: utils/flow_iql_research/selection_v2.py:empirical_expectile
+Official agents and architectures: utils/flow_iql_research/vendor/
+Original user algorithm files remain intact. All registered sources are frozen.
+
+At every Q update
+1. Draw9actions at each next state from the unweighted behavioral flow.
+2. Average the2old target-Q heads for each action. Solve the tau-expectile of
+   these9scalar values exactly, up to floating-point arithmetic.
+3. Form y=r+gamma*mask*root and project to[-C/(1-gamma),0]. Fit both online
+   Q heads once to this target; fit BC once with ordinary flow matching.
+4. Keep the official old-online-Q EMA. Deployment draws9BC candidates with
+   10Euler flow steps and chooses by minimum online twin-Q, as in IFQL.
+The frozen implementation also performs2learned-VAdam fits for historical
+clock/diagnostic controls. That V enters neither the bootstrap nor deployment.
+Do not claim these extra fits are necessary or remove them silently from this
+validated runner. The method has one learner, not independently trained ensembles.
+
+Shared settings
+tau=.9, gamma=.999, N_backup=N_deploy=9, 10Euler flow steps, Adam3e-4,
+batch256, EMA.005. Public4GELU layers: navigation512, manipulation256;
+Q/VLayerNorm on, actor LayerNorm off. Other inherited public config fields
+are stored in config.json. Reward component countC is environment semantics,
+not a value fitted to evaluation returns. No per-task method/seed/step selection.
+Legacy alpha (including the inherited Puzzle4value3), flow_temperature,
+distill_coefficient and normalize_advantage fields remain in config.json but
+are inactive in the selected officialIFQL unweightedBC/best9path. They are not
+per-environment tuned coefficients of this final algorithm.
+
+Fresh reproduction
+Use a NEW output directory, outside any active run directory. Do not launch
+additional GPU learners onto occupied slots. Existing scheduler_v21 owns16slots.
+
+env XLA_PYTHON_CLIENT_MEM_FRACTION=0.1 CUDA_VISIBLE_DEVICES=0 \
+  OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  TF_NUM_INTRAOP_THREADS=1 TF_NUM_INTEROP_THREADS=1 MUJOCO_GL=egl \
+  taskset -c 0-5 /home/ukjo1/anaconda3/envs/ogbench/bin/python -u -m \
+  utils.flow_iql_research.train_mean_empirical_backup_v1 \
+  --output NEW_OUTPUT_DIRECTORY --env antmaze-large-navigate-singletask-v0 \
+  --kind ifql --profile bounded_v2_mean_empirical_backup --seed 12 \
+  --discount 0.999 --expectile 0.9 --samples 9 --steps 1000000 \
+  --episodes 50 --aux-eval-steps ''
+
+The evaluated fresh seeds are9/10/11;12is an example of an unused reproduction
+seed, not a reported observation. The original96logicalCPUs/16learner slots
+gave6CPUs per learner. CPU affinity and numerical library versions can matter
+for replay; this command includes the original thread flags.
+
+Nine dataset/environment names
+antmaze-large-navigate-singletask-v0
+humanoidmaze-medium-navigate-singletask-v0
+humanoidmaze-large-navigate-singletask-v0
+antsoccer-arena-navigate-singletask-v0
+cube-single-play-singletask-v0
+cube-double-play-singletask-v0
+puzzle-3x3-play-singletask-v0
+puzzle-4x4-play-singletask-v0
+scene-play-singletask-v0
+
+Evidence, relative to logs/diagnosis/flow_iql_research_20261026/
+mean_backup_independent_confirmation_registration_v1.json
+analysis/mean_backup_confirmation_final_reread_v1/audit.json
+analysis/mean_backup_final_review_v1/review.json
+analysis/mean_backup_final_review_v1/task_results.csv
+analysis/mean_min_backup_full9_components_v1.json
+analysis/reproduction_environment_v1/official_vendor_translation.json
+analysis/reproduction_environment_v1/runtime.json
+analysis/reproduction_environment_v1/datasets.json
+
+Scientific scope
+The finite root removes the learned-V fitting approximation from the sampled
+backup. It does not remove behavior-density, finite-sample, critic or model
+errors. Mean heads remove the explicit repeated minimum; no true-Q bias oracle
+was measured. Target projection does not guarantee stable neural optimization.
+Known-bound scalar ideal operators and the actual evolving neural learner are
+different objects. Small fitting/finite-root scores alone did not ensure returns.
+The original2V-fit Gaussian recipe did not improve the original-gamma nine-task
+average (.188889 before and after). The selected finite-flow method is a later
+algorithm, not a claim that this first modification suffices for every setting.
+High tau=.99 remains unsolved; final finite-mean results reported here use.9.
+No equal-compute, paper-bitwise-reproduction, statistical multi-seed superiority
+over matched FQL, universal stability, or SOTA claim is made.
