@@ -133,6 +133,7 @@ class TrainConfig:
     actor_n_hiddens: int = 4
     critic_n_hiddens: int = 4
     num_critics: int = 2
+    critic_aggregation: str = "min"  # "min" (default) or "mean" for TD targets and actor Q
     discount: float = 0.99
     tau: float = 5e-3
     actor_bc_coef: float = 0.0
@@ -184,7 +185,9 @@ def normalize_config_aliases(config: TrainConfig) -> None:
 def refresh_algorithm_names(config: TrainConfig) -> None:
     config.project = "ORL-SMOOTH"
     config.group = f"{ALGORITHM_NAME}-JAX-FQL"
-    config.name = f"{ALGORITHM_NAME}-JAX-FQL-{config.env}"
+    # Keep legacy run names for "min", while separating "mean" checkpoints/logs.
+    aggregation_suffix = "-QMEAN" if config.critic_aggregation == "mean" else ""
+    config.name = f"{ALGORITHM_NAME}-JAX-FQL-{config.env}{aggregation_suffix}"
 
 
 def validate_config(config: TrainConfig) -> None:
@@ -196,6 +199,7 @@ def validate_config(config: TrainConfig) -> None:
     assert config.log_every > 0
     assert config.checkpoint_freq > 0
     assert config.num_critics > 0
+    assert config.critic_aggregation in ("min", "mean"), "critic_aggregation must be min or mean"
     assert config.discount >= 0.0 and config.discount <= 1.0
     assert config.tau >= 0.0 and config.tau <= 1.0
     assert config.actor_bc_coef >= 0.0
@@ -682,6 +686,18 @@ class FQLTrainState(flax.struct.PyTreeNode):
         return self.apply_gradients(grads=grads), info
 
 
+def aggregate_critic_qs(qs: jnp.ndarray, aggregation: str) -> jnp.ndarray:
+    """Reduce the critic ensemble axis, leaving one Q-value per batch item."""
+    # A single critic emits (batch,); ensembles emit (num_critics, batch).
+    if qs.ndim == 1:
+        return qs
+    if aggregation == "min":
+        return jnp.min(qs, axis=0)
+    if aggregation == "mean":
+        return jnp.mean(qs, axis=0)
+    raise ValueError(f"Unsupported critic_aggregation: {aggregation}")
+
+
 class ReBRACAgent(flax.struct.PyTreeNode):
     rng: Any
     network: Any
@@ -698,7 +714,7 @@ class ReBRACAgent(flax.struct.PyTreeNode):
         )
         next_actions = jnp.clip(next_actions + noise, -1, 1)
         next_qs = self.network.select("target_critic")(batch["next_observations"], actions=next_actions)
-        next_q = next_qs.min(axis=0)
+        next_q = aggregate_critic_qs(next_qs, self.config["critic_aggregation"])
         mse = jnp.square(next_actions - batch["next_actions"]).sum(axis=-1)
         next_q = next_q - self.config["alpha_critic"] * mse
         target_q = batch["rewards"] + self.config["discount"] * batch["masks"] * next_q
@@ -715,7 +731,7 @@ class ReBRACAgent(flax.struct.PyTreeNode):
         dist = self.network.select("actor")(batch["observations"], params=grad_params)
         actions = dist.mode()
         qs = self.network.select("critic")(batch["observations"], actions=actions)
-        q = jnp.min(qs, axis=0)
+        q = aggregate_critic_qs(qs, self.config["critic_aggregation"])
         mse = jnp.square(actions - batch["actions"]).sum(axis=-1)
         if self.config.get("normalize_q", True):
             lam = jax.lax.stop_gradient(1 / jnp.abs(q).mean())
@@ -1227,6 +1243,7 @@ def fql_config_from_train_config(config: TrainConfig) -> Dict[str, Any]:
         "encoder": config.encoder,
         "normalize_q": config.normalize_q,
         "num_critics": config.num_critics,
+        "critic_aggregation": config.critic_aggregation,
     }
 
 
@@ -1292,6 +1309,7 @@ class ReBRACFQLJAX:
         actor_tx = self.actor_tx
         alpha_actor = self.fql_config["alpha_actor"]
         normalize_q = self.fql_config.get("normalize_q", True)
+        critic_aggregation = self.fql_config["critic_aggregation"]
         network = self.agent.network
 
         @jax.jit
@@ -1304,7 +1322,7 @@ class ReBRACFQLJAX:
                 dist = agent.network.select("actor")(batch["observations"], params=full_params)
                 actions = dist.mode()
                 qs = agent.network.select("critic")(batch["observations"], actions=actions)
-                q = jnp.min(qs, axis=0)
+                q = aggregate_critic_qs(qs, critic_aggregation)
                 mse = jnp.square(actions - batch["actions"]).sum(axis=-1)
                 lam = jax.lax.stop_gradient(1 / jnp.abs(q).mean()) if normalize_q else 1.0
                 actor_loss = -(lam * q).mean()
@@ -1704,7 +1722,11 @@ def _train_impl(config: TrainConfig):
 
 
     if actor_refit_only:
-        actor_refit_dir = loaded_run_dir / config.actor_refit_dir_name
+        # Allow both Q reductions to refit the same checkpoint without overwriting each other.
+        actor_refit_dir_name = config.actor_refit_dir_name
+        if config.critic_aggregation == "mean" and actor_refit_dir_name == "actor_refit":
+            actor_refit_dir_name = "actor_refit_QMEAN"
+        actor_refit_dir = loaded_run_dir / actor_refit_dir_name
         actor_refit_dir.mkdir(parents=True, exist_ok=True)
         actor_state = trainer.make_initial_actor_state()
         refit_actor_state, refit_log = trainer.fit_actor(

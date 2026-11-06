@@ -1,13 +1,19 @@
 # JAX/Flax Delayed IQL implementation with CDAF_JAX-style experiment plumbing.
 #
-# Delayed IQL = original IQL + delayed Q/V snapshots used ONLY to determine
-# the asymmetric expectile weight in the value loss. There is no decoupling,
-# no Q/V ensemble, and no cross-member filtering. The original Twin-Q min,
-# Q backup, actor advantage, and actor update are preserved.
+# The expectile-weight sign has two selectable sources:
+#   expectile_weight_mode="delayed": original Delayed IQL (default).
+#   expectile_weight_mode="target": Polyak-averaged Q_target/V_target.
+# Only the asymmetric expectile weight in the value loss changes. There is no
+# decoupling, no Q/V ensemble, and no cross-member filtering. The original
+# Twin-Q min, Q backup, actor advantage, and actor update are preserved.
 #
-# delayed_update_period <= 1: exact IQL-style weighting (no delayed snapshots used).
-# delayed_update_period > 1: snapshot q_target/v every N steps and compute the
-# expectile sign from min(Q1_delayed, Q2_delayed) - V_delayed.
+# In "delayed" mode:
+#   delayed_update_period <= 1: exact IQL-style weighting (no snapshots used).
+#   delayed_update_period > 1: snapshot q_target/v every N steps; weight sign
+#       from min(Q1_delayed, Q2_delayed) - V_delayed.
+# In "target" mode (independent of delayed_update_period):
+#   weight sign from min(Q1_target, Q2_target) - V_target; V_target is updated
+#   by Polyak averaging with the same tau as Q_target, after each training step.
 #
 # Current plumbing:
 #   - Explicit mode switch: mode="train" or mode="refit".
@@ -126,7 +132,7 @@ class TrainConfig:
     checkpoints_path: Optional[str] = None
     load_model: str = ""
     mode: str = "train"  # one of: train, refit. refit loads Q/V and trains only pi.
-    # Reuse the original IQL hyperparameter file; delayed_update_period can be overridden by CLI/YAML.
+    # Reuse the original IQL hyperparameter file; weight mode/period can be overridden by CLI/YAML.
     hyperparams_path: Optional[str] = "hyperparams/iql_jax.yml"
     use_hyperparams: bool = True
 
@@ -154,7 +160,12 @@ class TrainConfig:
     hidden_dim: int = 256
     n_hidden: int = 2
 
-    # Delayed expectile weighting.
+    # The source of the expectile weight's advantage sign:
+    #   delayed: use periodic Q/V snapshots (or standard IQL when period <= 1).
+    #   target:  use Polyak-averaged Q_target/V_target, independent of period.
+    expectile_weight_mode: str = "delayed"  # one of: delayed, target
+
+    # Used only when expectile_weight_mode="delayed".
     # <= 1: disabled and behaves like original IQL.
     # > 1: delayed Q/V parameter snapshots are refreshed every N training steps.
     delayed_update_period: int = 1
@@ -183,9 +194,16 @@ class TrainConfig:
 
 
 def refresh_algorithm_names(config: TrainConfig) -> None:
+    # Keep legacy delayed runs at their original checkpoint path. Give the
+    # target-weight variant its own path so the two experiments cannot collide.
+    algorithm_label = (
+        f"{ALGORITHM_NAME}-TargetWeight"
+        if config.expectile_weight_mode == "target"
+        else ALGORITHM_NAME
+    )
     config.project = "ORL-SMOOTH"
-    config.group = f"{ALGORITHM_NAME}-JAX"
-    config.name = f"{ALGORITHM_NAME}-JAX-{config.env}"
+    config.group = f"{algorithm_label}-JAX"
+    config.name = f"{algorithm_label}-JAX-{config.env}"
 
 
 def validate_config(config: TrainConfig) -> None:
@@ -201,6 +219,9 @@ def validate_config(config: TrainConfig) -> None:
     assert config.tau >= 0.0 and config.tau <= 1.0
     assert config.beta >= 0.0
     assert config.iql_tau >= 0.0 and config.iql_tau <= 1.0
+    assert config.expectile_weight_mode in ("delayed", "target"), (
+        "expectile_weight_mode must be delayed or target"
+    )
     assert config.delayed_update_period > 0
     if config.actor_dropout is not None:
         assert config.actor_dropout >= 0.0 and config.actor_dropout < 1.0
@@ -697,6 +718,7 @@ class DelayedIQLState:
     q_delayed_params: Any
     q_opt_state: Any
     v_params: Any
+    v_target_params: Any
     v_delayed_params: Any
     v_opt_state: Any
     actor_params: Any
@@ -712,7 +734,7 @@ class ActorState:
 
 
 class DelayedIQLJAX:
-    """Delayed IQL in JAX/Flax without decoupling.
+    """IQL with selectable delayed or Polyak-target expectile weights.
 
     The base algorithm remains standard IQL with Twin-Q:
 
@@ -720,13 +742,20 @@ class DelayedIQLJAX:
         V target: min(Q1_target(s, a), Q2_target(s, a))
         actor advantage: min(Q1_target, Q2_target) - V(s)
 
-    Only the expectile weight can be delayed. If delayed_update_period > 1:
+    In "delayed" mode with delayed_update_period > 1:
 
         delayed_adv = min(Q1_delayed(s,a), Q2_delayed(s,a)) - V_delayed(s)
         weight = |iql_tau - 1[delayed_adv < 0]|
 
-    The V residual itself still uses the current IQL target/current V.
-    No ensemble or cross-network decoupling is introduced.
+    In "target" mode:
+
+        target_adv = min(Q1_target(s,a), Q2_target(s,a)) - V_target(s)
+        weight = |iql_tau - 1[target_adv < 0]|
+
+    Q_target and V_target are Polyak-averaged with tau at each train step.
+    In either mode the V residual still uses the standard IQL target/current V.
+    No ensemble or cross-network decoupling is introduced. The actor update
+    still uses the standard IQL advantage, not the selected weight advantage.
     """
 
     def __init__(
@@ -749,6 +778,7 @@ class DelayedIQLJAX:
         n_hidden: int = 2,
         seed: int = 0,
         device: Any = None,
+        expectile_weight_mode: str = "delayed",
     ):
         self.max_action = max_action
         self.state_dim = state_dim
@@ -758,8 +788,12 @@ class DelayedIQLJAX:
         self.tau = tau
         self.beta = beta
         self.iql_tau = iql_tau
+        self.expectile_weight_mode = expectile_weight_mode
         self.delayed_update_period = int(delayed_update_period)
-        self.use_delayed = self.delayed_update_period > 1
+        self.use_delayed = (
+            self.expectile_weight_mode == "delayed" and self.delayed_update_period > 1
+        )
+        self.use_target_weight = self.expectile_weight_mode == "target"
         self.iql_deterministic = iql_deterministic
         self.actor_dropout = actor_dropout
         self.hidden_dim = int(hidden_dim)
@@ -768,6 +802,8 @@ class DelayedIQLJAX:
 
         if self.delayed_update_period <= 0:
             raise ValueError("delayed_update_period must be > 0")
+        if self.expectile_weight_mode not in ("delayed", "target"):
+            raise ValueError("expectile_weight_mode must be delayed or target")
         if self.hidden_dim <= 0:
             raise ValueError("hidden_dim must be > 0")
         if self.n_hidden <= 0:
@@ -814,6 +850,7 @@ class DelayedIQLJAX:
 
         q_target_params = copy.deepcopy(q_params)
         q_delayed_params = copy.deepcopy(q_target_params) if self.use_delayed else None
+        v_target_params = copy.deepcopy(v_params) if self.use_target_weight else None
         v_delayed_params = copy.deepcopy(v_params) if self.use_delayed else None
 
         self.state = DelayedIQLState(
@@ -823,6 +860,7 @@ class DelayedIQLJAX:
             q_delayed_params=q_delayed_params,
             q_opt_state=self.q_tx.init(q_params),
             v_params=v_params,
+            v_target_params=v_target_params,
             v_delayed_params=v_delayed_params,
             v_opt_state=self.v_tx.init(v_params),
             actor_params=actor_params,
@@ -859,6 +897,7 @@ class DelayedIQLJAX:
         iql_tau = self.iql_tau
         delayed_update_period = self.delayed_update_period
         use_delayed = self.use_delayed
+        use_target_weight = self.use_target_weight
         iql_deterministic = self.iql_deterministic
         use_dropout = self.actor_dropout is not None
         actor_apply_fn = self.actor_def.apply
@@ -892,9 +931,15 @@ class DelayedIQLJAX:
             adv = target_q_for_v - old_v
             exp_adv = jnp.minimum(jnp.exp(beta * jax.lax.stop_gradient(adv)), EXP_ADV_MAX)
 
-            # Delayed is used ONLY for the expectile weight sign.
+            # The selected network source determines ONLY the expectile weight.
+            # Read the old parameters here, before either target network update.
             # The V regression target/residual below remains standard IQL.
-            if use_delayed:
+            if use_target_weight:
+                target_v_for_weight = v_apply(
+                    {"params": state.v_target_params}, observations
+                )
+                weight_adv = target_q_for_v - target_v_for_weight
+            elif use_delayed:
                 delayed_q1, delayed_q2 = q_apply(
                     {"params": state.q_delayed_params}, observations, actions
                 )
@@ -902,7 +947,7 @@ class DelayedIQLJAX:
                 delayed_v_for_weight = v_apply({"params": state.v_delayed_params}, observations)
                 weight_adv = delayed_q_for_weight - delayed_v_for_weight
             else:
-                # With period=1 we intentionally reduce to the original IQL weighting.
+                # Delayed mode with period=1 reduces to original IQL weighting.
                 weight_adv = adv
 
             expectile_weight = jnp.abs(
@@ -920,6 +965,10 @@ class DelayedIQLJAX:
             (value_loss, v), v_grads = jax.value_and_grad(v_loss_fn, has_aux=True)(state.v_params)
             v_updates, v_opt_state = v_tx.update(v_grads, state.v_opt_state, state.v_params)
             v_params = optax.apply_updates(state.v_params, v_updates)
+            if use_target_weight:
+                v_target_params = soft_update(v_params, state.v_target_params, tau)
+            else:
+                v_target_params = state.v_target_params
 
             def q_loss_fn(q_params):
                 q1, q2 = q_apply({"params": q_params}, observations, actions)
@@ -991,6 +1040,7 @@ class DelayedIQLJAX:
                 q_delayed_params=q_delayed_params,
                 q_opt_state=q_opt_state,
                 v_params=v_params,
+                v_target_params=v_target_params,
                 v_delayed_params=v_delayed_params,
                 v_opt_state=v_opt_state,
                 actor_params=actor_params,
@@ -1018,6 +1068,7 @@ class DelayedIQLJAX:
                 ),
                 "delayed_enabled": jnp.asarray(use_delayed, dtype=jnp.float32),
                 "delayed_update": should_update_delayed.astype(jnp.float32),
+                "target_weight_enabled": jnp.asarray(use_target_weight, dtype=jnp.float32),
                 "actor_loss": actor_loss,
                 "bc_loss_mean": jnp.mean(bc_losses),
                 "policy_mean": jnp.mean(policy_mean),
@@ -1314,16 +1365,25 @@ class DelayedIQLJAX:
             "initial_actor_key": serialization.to_state_dict(self.initial_actor_key),
             "iql_deterministic": self.iql_deterministic,
             "delayed_update_period": self.delayed_update_period,
+            "expectile_weight_mode": self.expectile_weight_mode,
         }
 
     def load_state_dict(self, state_dict: Dict[str, Any]):
         iql_state = dict(copy.deepcopy(state_dict["iql_state"]))
 
         # Backward/transfer compatibility:
-        # - Original IQL checkpoints have no delayed fields.
+        # - Original IQL checkpoints have neither delayed fields nor V_target.
         # - A period=1 checkpoint may contain None delayed fields.
         # - A delayed checkpoint can also be loaded with period=1; delayed fields
         #   are then discarded because they are not used.
+        # - Target mode initializes V_target from V when an older checkpoint
+        #   has no target; switching weight modes resets unused snapshots.
+        if self.use_target_weight:
+            if iql_state.get("v_target_params") is None:
+                iql_state["v_target_params"] = copy.deepcopy(iql_state["v_params"])
+        else:
+            iql_state["v_target_params"] = None
+
         if self.use_delayed:
             if iql_state.get("q_delayed_params") is None:
                 iql_state["q_delayed_params"] = copy.deepcopy(iql_state["q_target_params"])
@@ -1606,8 +1666,9 @@ def _train_impl(config: TrainConfig):
     run_mode_name = "Actor refit" if refit_only else "Training"
     print(f"{run_mode_name} {ALGORITHM_NAME}-JAX, Env: {config.env}, Seed: {seed}")
     print(
+        f"expectile_weight_mode={config.expectile_weight_mode}, "
         f"delayed_update_period={config.delayed_update_period} "
-        f"(enabled={config.delayed_update_period > 1})"
+        f"(delayed_enabled={config.expectile_weight_mode == 'delayed' and config.delayed_update_period > 1})"
     )
     print("---------------------------------------")
 
@@ -1624,6 +1685,7 @@ def _train_impl(config: TrainConfig):
         beta=config.beta,
         iql_tau=config.iql_tau,
         delayed_update_period=config.delayed_update_period,
+        expectile_weight_mode=config.expectile_weight_mode,
         iql_deterministic=config.iql_deterministic,
         actor_dropout=config.actor_dropout,
         hidden_dim=config.hidden_dim,
