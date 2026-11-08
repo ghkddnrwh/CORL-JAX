@@ -136,6 +136,8 @@ class TrainConfig:
     # IQL
     discount: float = 0.99
     tau: float = 0.005
+    target_update_mode: str = "soft"  # "soft" (Polyak) or "hard" (periodic copy)
+    hard_target_update_freq: int = 100  # Q updates between hard target copies
     beta: float = 3.0
     iql_tau: float = 0.7
     iql_deterministic: bool = False
@@ -176,7 +178,11 @@ def refresh_algorithm_names(config: TrainConfig) -> None:
     config.group = f"{ALGORITHM_NAME}-JAX"
     # Preserve legacy names for min runs; separate mean-run checkpoints and logs.
     aggregation_suffix = "-QMEAN" if config.critic_aggregation == "mean" else ""
-    config.name = f"{ALGORITHM_NAME}-JAX-{config.env}{aggregation_suffix}"
+    target_suffix = (
+        f"-HARD{config.hard_target_update_freq}"
+        if config.target_update_mode == "hard" else ""
+    )
+    config.name = f"{ALGORITHM_NAME}-JAX-{config.env}{aggregation_suffix}{target_suffix}"
 
 
 def validate_config(config: TrainConfig) -> None:
@@ -190,6 +196,10 @@ def validate_config(config: TrainConfig) -> None:
     assert config.checkpoint_freq > 0
     assert config.discount >= 0.0 and config.discount <= 1.0
     assert config.tau >= 0.0 and config.tau <= 1.0
+    assert config.target_update_mode in ("soft", "hard"), "target_update_mode must be soft or hard"
+    assert isinstance(config.hard_target_update_freq, int) and config.hard_target_update_freq > 0, (
+        "hard_target_update_freq must be a positive integer"
+    )
     assert config.beta >= 0.0
     assert config.iql_tau >= 0.0 and config.iql_tau <= 1.0
     if config.actor_dropout is not None:
@@ -743,6 +753,8 @@ class IQLJAX:
         actor_lr: float = 3e-4,
         discount: float = 0.99,
         tau: float = 0.005,
+        target_update_mode: str = "soft",
+        hard_target_update_freq: int = 100,
         beta: float = 3.0,
         iql_tau: float = 0.7,
         iql_deterministic: bool = False,
@@ -760,6 +772,8 @@ class IQLJAX:
         self.max_steps = max(int(max_steps), 1)
         self.discount = discount
         self.tau = tau
+        self.target_update_mode = target_update_mode
+        self.hard_target_update_freq = hard_target_update_freq
         self.beta = beta
         self.iql_tau = iql_tau
         self.iql_deterministic = iql_deterministic
@@ -776,6 +790,10 @@ class IQLJAX:
             raise ValueError("n_hidden must be > 0")
         if self.num_critics <= 0:
             raise ValueError("num_critics must be > 0")
+        if self.target_update_mode not in ("soft", "hard"):
+            raise ValueError("target_update_mode must be 'soft' or 'hard'")
+        if not isinstance(self.hard_target_update_freq, int) or self.hard_target_update_freq <= 0:
+            raise ValueError("hard_target_update_freq must be a positive integer")
         if self.critic_aggregation not in ("min", "mean"):
             raise ValueError("critic_aggregation must be 'min' or 'mean'")
 
@@ -859,6 +877,8 @@ class IQLJAX:
         actor_tx = self.actor_tx
         discount = self.discount
         tau = self.tau
+        target_update_mode = self.target_update_mode
+        hard_target_update_freq = self.hard_target_update_freq
         beta = self.beta
         iql_tau = self.iql_tau
         iql_deterministic = self.iql_deterministic
@@ -919,7 +939,17 @@ class IQLJAX:
             (q_loss, qs), q_grads = jax.value_and_grad(q_loss_fn, has_aux=True)(state.q_params)
             q_updates, q_opt_state = q_tx.update(q_grads, state.q_opt_state, state.q_params)
             q_params = optax.apply_updates(state.q_params, q_updates)
-            q_target_params = soft_update(q_params, state.q_target_params, tau)
+            if target_update_mode == "soft":
+                q_target_params = soft_update(q_params, state.q_target_params, tau)
+            else:
+                # Copy the *updated* online Q parameters every N train steps.
+                # total_it is checkpointed, so resumed training keeps the cadence.
+                q_target_params = jax.lax.cond(
+                    total_it % hard_target_update_freq == 0,
+                    lambda _: q_params,
+                    lambda _: state.q_target_params,
+                    operand=None,
+                )
 
             actor_key, dropout_key = jax.random.split(state.actor_key)
 
@@ -1559,6 +1589,8 @@ def _train_impl(config: TrainConfig):
         actor_lr=config.actor_lr,
         discount=config.discount,
         tau=config.tau,
+        target_update_mode=config.target_update_mode,
+        hard_target_update_freq=config.hard_target_update_freq,
         beta=config.beta,
         iql_tau=config.iql_tau,
         iql_deterministic=config.iql_deterministic,
