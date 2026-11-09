@@ -133,7 +133,9 @@ class TrainConfig:
     actor_n_hiddens: int = 4
     critic_n_hiddens: int = 4
     num_critics: int = 2
-    critic_aggregation: str = "min"  # "min" (default) or "mean" for TD targets and actor Q
+    critic_aggregation: str = "min"  # "min" or "mean" for TD targets
+    # None follows critic_aggregation, preserving the existing min/min or mean/mean behavior.
+    actor_critic_aggregation: Optional[str] = None  # "min" or "mean" for actor Q
     discount: float = 0.99
     tau: float = 5e-3
     actor_bc_coef: float = 0.0
@@ -185,8 +187,15 @@ def normalize_config_aliases(config: TrainConfig) -> None:
 def refresh_algorithm_names(config: TrainConfig) -> None:
     config.project = "ORL-SMOOTH"
     config.group = f"{ALGORITHM_NAME}-JAX-FQL"
-    # Keep legacy run names for "min", while separating "mean" checkpoints/logs.
-    aggregation_suffix = "-QMEAN" if config.critic_aggregation == "mean" else ""
+    # Preserve existing min/min and mean/mean names; isolate mixed-aggregation runs.
+    target_aggregation = config.critic_aggregation
+    actor_aggregation = config.actor_critic_aggregation or target_aggregation
+    if (target_aggregation, actor_aggregation) == ("min", "min"):
+        aggregation_suffix = ""
+    elif (target_aggregation, actor_aggregation) == ("mean", "mean"):
+        aggregation_suffix = "-QMEAN"
+    else:
+        aggregation_suffix = f"-T{target_aggregation.upper()}-A{actor_aggregation.upper()}"
     config.name = f"{ALGORITHM_NAME}-JAX-FQL-{config.env}{aggregation_suffix}"
 
 
@@ -200,6 +209,9 @@ def validate_config(config: TrainConfig) -> None:
     assert config.checkpoint_freq > 0
     assert config.num_critics > 0
     assert config.critic_aggregation in ("min", "mean"), "critic_aggregation must be min or mean"
+    assert config.actor_critic_aggregation in (None, "min", "mean"), (
+        "actor_critic_aggregation must be None, min or mean"
+    )
     assert config.discount >= 0.0 and config.discount <= 1.0
     assert config.tau >= 0.0 and config.tau <= 1.0
     assert config.actor_bc_coef >= 0.0
@@ -731,7 +743,7 @@ class ReBRACAgent(flax.struct.PyTreeNode):
         dist = self.network.select("actor")(batch["observations"], params=grad_params)
         actions = dist.mode()
         qs = self.network.select("critic")(batch["observations"], actions=actions)
-        q = aggregate_critic_qs(qs, self.config["critic_aggregation"])
+        q = aggregate_critic_qs(qs, self.config["actor_critic_aggregation"])
         mse = jnp.square(actions - batch["actions"]).sum(axis=-1)
         if self.config.get("normalize_q", True):
             lam = jax.lax.stop_gradient(1 / jnp.abs(q).mean())
@@ -1244,6 +1256,7 @@ def fql_config_from_train_config(config: TrainConfig) -> Dict[str, Any]:
         "normalize_q": config.normalize_q,
         "num_critics": config.num_critics,
         "critic_aggregation": config.critic_aggregation,
+        "actor_critic_aggregation": config.actor_critic_aggregation or config.critic_aggregation,
     }
 
 
@@ -1309,7 +1322,7 @@ class ReBRACFQLJAX:
         actor_tx = self.actor_tx
         alpha_actor = self.fql_config["alpha_actor"]
         normalize_q = self.fql_config.get("normalize_q", True)
-        critic_aggregation = self.fql_config["critic_aggregation"]
+        actor_critic_aggregation = self.fql_config["actor_critic_aggregation"]
         network = self.agent.network
 
         @jax.jit
@@ -1322,7 +1335,7 @@ class ReBRACFQLJAX:
                 dist = agent.network.select("actor")(batch["observations"], params=full_params)
                 actions = dist.mode()
                 qs = agent.network.select("critic")(batch["observations"], actions=actions)
-                q = aggregate_critic_qs(qs, critic_aggregation)
+                q = aggregate_critic_qs(qs, actor_critic_aggregation)
                 mse = jnp.square(actions - batch["actions"]).sum(axis=-1)
                 lam = jax.lax.stop_gradient(1 / jnp.abs(q).mean()) if normalize_q else 1.0
                 actor_loss = -(lam * q).mean()
@@ -1722,9 +1735,10 @@ def _train_impl(config: TrainConfig):
 
 
     if actor_refit_only:
-        # Allow both Q reductions to refit the same checkpoint without overwriting each other.
+        # Refit outputs depend on the actor's Q aggregation, not the TD target aggregation.
         actor_refit_dir_name = config.actor_refit_dir_name
-        if config.critic_aggregation == "mean" and actor_refit_dir_name == "actor_refit":
+        actor_aggregation = config.actor_critic_aggregation or config.critic_aggregation
+        if actor_aggregation == "mean" and actor_refit_dir_name == "actor_refit":
             actor_refit_dir_name = "actor_refit_QMEAN"
         actor_refit_dir = loaded_run_dir / actor_refit_dir_name
         actor_refit_dir.mkdir(parents=True, exist_ok=True)

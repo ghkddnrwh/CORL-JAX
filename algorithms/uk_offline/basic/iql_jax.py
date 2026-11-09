@@ -148,7 +148,9 @@ class TrainConfig:
     hidden_dim: int = 256
     n_hidden: int = 2
     num_critics: int = 2
-    critic_aggregation: str = "min"  # "min" (default) or "mean" for V targets and actor advantages
+    critic_aggregation: str = "min"  # "min" or "mean" for the V expectile target
+    # None follows critic_aggregation, preserving existing min/min and mean/mean behavior.
+    actor_critic_aggregation: Optional[str] = None  # "min" or "mean" for actor advantages
 
     # Standalone actor refit output directory.
     # Refit reuses the shared training schedule fields above:
@@ -176,8 +178,15 @@ class TrainConfig:
 def refresh_algorithm_names(config: TrainConfig) -> None:
     config.project = "ORL-SMOOTH"
     config.group = f"{ALGORITHM_NAME}-JAX"
-    # Preserve legacy names for min runs; separate mean-run checkpoints and logs.
-    aggregation_suffix = "-QMEAN" if config.critic_aggregation == "mean" else ""
+    # Preserve legacy min/min and mean/mean names; separate mixed-aggregation runs.
+    value_aggregation = config.critic_aggregation
+    actor_aggregation = config.actor_critic_aggregation or value_aggregation
+    if (value_aggregation, actor_aggregation) == ("min", "min"):
+        aggregation_suffix = ""
+    elif (value_aggregation, actor_aggregation) == ("mean", "mean"):
+        aggregation_suffix = "-QMEAN"
+    else:
+        aggregation_suffix = f"-V{value_aggregation.upper()}-A{actor_aggregation.upper()}"
     target_suffix = (
         f"-HARD{config.hard_target_update_freq}"
         if config.target_update_mode == "hard" else ""
@@ -208,6 +217,9 @@ def validate_config(config: TrainConfig) -> None:
     assert config.n_hidden > 0
     assert config.num_critics > 0
     assert config.critic_aggregation in ("min", "mean"), "critic_aggregation must be min or mean"
+    assert config.actor_critic_aggregation in (None, "min", "mean"), (
+        "actor_critic_aggregation must be None, min or mean"
+    )
     assert config.actor_refit_dir_name != ""
     if config.mode == "refit":
         assert config.load_model != "", "mode='refit' requires --load_model"
@@ -765,6 +777,7 @@ class IQLJAX:
         seed: int = 0,
         device: Any = None,
         critic_aggregation: str = "min",
+        actor_critic_aggregation: Optional[str] = None,
     ):
         self.max_action = max_action
         self.state_dim = state_dim
@@ -782,6 +795,7 @@ class IQLJAX:
         self.n_hidden = int(n_hidden)
         self.num_critics = int(num_critics)
         self.critic_aggregation = critic_aggregation
+        self.actor_critic_aggregation = actor_critic_aggregation or critic_aggregation
         self.device = device if device is not None else jax.devices()[0]
 
         if self.hidden_dim <= 0:
@@ -796,6 +810,8 @@ class IQLJAX:
             raise ValueError("hard_target_update_freq must be a positive integer")
         if self.critic_aggregation not in ("min", "mean"):
             raise ValueError("critic_aggregation must be 'min' or 'mean'")
+        if self.actor_critic_aggregation not in ("min", "mean"):
+            raise ValueError("actor_critic_aggregation must be 'min' or 'mean'")
 
         if iql_deterministic:
             self.actor_def = DeterministicPolicy(
@@ -884,6 +900,7 @@ class IQLJAX:
         iql_deterministic = self.iql_deterministic
         num_critics = self.num_critics
         critic_aggregation = self.critic_aggregation
+        actor_critic_aggregation = self.actor_critic_aggregation
         use_dropout = self.actor_dropout is not None
         actor_apply_fn = self.actor_def.apply
 
@@ -912,8 +929,10 @@ class IQLJAX:
             target_q_for_backup = rewards + (1.0 - dones) * discount * next_v
             target_qs = q_apply({"params": state.q_target_params}, observations, actions)
             target_q_for_v = aggregate_critic_qs(target_qs, critic_aggregation)
+            target_q_for_actor = aggregate_critic_qs(target_qs, actor_critic_aggregation)
             old_v = v_apply({"params": state.v_params}, observations)
-            adv = target_q_for_v - old_v
+            # The actor advantage can use a different Q reduction from the V loss.
+            adv = target_q_for_actor - old_v
             exp_adv = jnp.minimum(jnp.exp(beta * jax.lax.stop_gradient(adv)), EXP_ADV_MAX)
 
             def v_loss_fn(v_params):
@@ -998,6 +1017,7 @@ class IQLJAX:
                 "q_max_mean": jnp.mean(jnp.max(qs, axis=0)),
                 "target_q_mean": jnp.mean(target_q_for_backup),
                 "target_q_for_v_mean": jnp.mean(target_q_for_v),
+                "target_q_for_actor_mean": jnp.mean(target_q_for_actor),
                 "value_loss": value_loss,
                 "v_mean": jnp.mean(v),
                 "adv_mean": jnp.mean(adv),
@@ -1058,7 +1078,7 @@ class IQLJAX:
         v_apply = self.v_def.apply
         actor_tx = self.actor_tx
         beta = self.beta
-        critic_aggregation = self.critic_aggregation
+        actor_critic_aggregation = self.actor_critic_aggregation
         iql_deterministic = self.iql_deterministic
         use_dropout = self.actor_dropout is not None
         actor_apply_fn = self.actor_def.apply
@@ -1079,9 +1099,9 @@ class IQLJAX:
             actions = batch["actions"]
 
             qs = q_apply({"params": iql_state.q_target_params}, observations, actions)
-            target_q = aggregate_critic_qs(qs, critic_aggregation)
+            actor_q = aggregate_critic_qs(qs, actor_critic_aggregation)
             v = v_apply({"params": iql_state.v_params}, observations)
-            adv = target_q - v
+            adv = actor_q - v
             exp_adv = jnp.minimum(jnp.exp(beta * jax.lax.stop_gradient(adv)), EXP_ADV_MAX)
 
             actor_key, dropout_key = jax.random.split(actor_state.key)
@@ -1124,7 +1144,8 @@ class IQLJAX:
                 "adv_max": jnp.max(adv),
                 "exp_adv_mean": jnp.mean(exp_adv),
                 "exp_adv_max": jnp.max(exp_adv),
-                "target_q_mean": jnp.mean(target_q),
+                "target_q_mean": jnp.mean(actor_q),  # Preserve the existing refit metric name.
+                "actor_q_mean": jnp.mean(actor_q),
                 "v_mean": jnp.mean(v),
                 "policy_mean": jnp.mean(policy_mean),
                 "policy_log_std_mean": log_std_mean,
@@ -1599,6 +1620,7 @@ def _train_impl(config: TrainConfig):
         n_hidden=config.n_hidden,
         num_critics=config.num_critics,
         critic_aggregation=config.critic_aggregation,
+        actor_critic_aggregation=config.actor_critic_aggregation,
         seed=seed,
         device=jax_device,
     )
@@ -1674,9 +1696,10 @@ def _train_impl(config: TrainConfig):
         if loaded_run_dir is None:
             raise ValueError("refit mode requires --load_model")
 
-        # Separate min/mean actor-refit artifacts when the default directory is used.
+        # Keep refit runs with different actor Q reductions in distinct directories.
         actor_refit_dir_name = config.actor_refit_dir_name
-        if config.critic_aggregation == "mean" and actor_refit_dir_name == "actor_refit":
+        actor_aggregation = config.actor_critic_aggregation or config.critic_aggregation
+        if actor_aggregation == "mean" and actor_refit_dir_name == "actor_refit":
             actor_refit_dir_name = "actor_refit_QMEAN"
         actor_refit_dir = loaded_run_dir / actor_refit_dir_name
         actor_refit_dir.mkdir(parents=True, exist_ok=True)
