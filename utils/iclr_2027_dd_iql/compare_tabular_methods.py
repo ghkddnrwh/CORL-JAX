@@ -1,20 +1,35 @@
-"""Tabular GridWorld: noise-mode ablations + generalized N-member Double Q.
+"""Tabular GridWorld: noise ablations, Q baselines, and DD-IQL with learned V.
 
 Noise modes:
     shared_target         : per-step shared noisy Q view
     table_additive        : permanent iid noise added to online Q tables after TD
     nn_like_field         : BOTH temporal and spatial approximation-error correlation
-    nn_like_field_spatial : ONLY spatial approximation-error correlation (rho forced to 0)
-    nn_like_field_temporal: ONLY temporal approximation-error correlation (independent state-actions)
-    nn_like_field_iid     : NEITHER spatial nor temporal approximation-error correlation
+    nn_like_field_spatial : ONLY spatial error correlation (rho forced to 0)
+    nn_like_field_temporal: ONLY temporal correlation (independent state-actions)
+    nn_like_field_iid     : NEITHER spatial nor temporal error correlation
 
 Change only NOISE_MODE in section 5 to select an ablation.
 """
 
-import os
 import csv
-import numpy as np
+import json
+import os
+
 import matplotlib.pyplot as plt
+import numpy as np
+
+try:
+    from utils.iclr_2027_dd_iql.tabular_dd_iql import (
+        dd_iql_filter_indices,
+        dd_iql_update,
+        validate_dd_iql_config,
+    )
+except ModuleNotFoundError:
+    from tabular_dd_iql import (
+        dd_iql_filter_indices,
+        dd_iql_update,
+        validate_dd_iql_config,
+    )
 
 
 # ============================================================
@@ -91,7 +106,9 @@ def get_optimal_q(
             elif gamma == 1.0:
                 V_star[r, c] = step_reward * (distance - 1) + goal_reward
             else:
-                step_return = step_reward * (1.0 - gamma ** (distance - 1)) / (1.0 - gamma)
+                step_return = (
+                    step_reward * (1.0 - gamma ** (distance - 1)) / (1.0 - gamma)
+                )
                 V_star[r, c] = step_return + (gamma ** (distance - 1)) * goal_reward
 
     Q_star = np.zeros((grid_height, grid_width, 4))
@@ -200,13 +217,15 @@ class NNLikeErrorField:
     def __init__(self, n, height, width, sigma, rho, feature_dim,
                  shared_fraction, lengthscale, action_scale, seed,
                  innovation="gaussian", student_df=5.0,
-                 spatial_correlation=True):
+                 spatial_correlation=True, num_actions=4):
         if not 0 <= rho < 1:
             raise ValueError("field_rho must be in [0, 1)")
         if not 0 <= shared_fraction <= 1:
             raise ValueError("field_shared_fraction must be in [0, 1]")
         if feature_dim < 2 or lengthscale <= 0:
             raise ValueError("feature_dim must be >=2 and lengthscale > 0")
+        if num_actions < 1:
+            raise ValueError("num_actions must be >=1")
         if innovation not in ("gaussian", "student_t", "rademacher"):
             raise ValueError("field_innovation: gaussian, student_t, rademacher")
         if innovation == "student_t" and student_df <= 2:
@@ -214,6 +233,7 @@ class NNLikeErrorField:
         self.innovation = innovation
         self.student_df = student_df
         self.n, self.h, self.w = n, height, width
+        self.num_actions = num_actions
         self.sigma = sigma
         self.rho = rho
         self.shared_fraction = shared_fraction
@@ -224,19 +244,20 @@ class NNLikeErrorField:
             # ONLY along time. shared_fraction=0 also gives independence across
             # ensemble members before learning-induced correlations arise.
             self.phi = None
-            self.shared = self.rng.standard_normal((height, width, 4))
-            self.private = self.rng.standard_normal((n, height, width, 4))
+            self.shared = self.rng.standard_normal((height, width, num_actions))
+            self.private = self.rng.standard_normal((n, height, width, num_actions))
             return
         # Fixed nonlinear random Fourier feature map, shared across estimators:
         # similar (state,action) -> correlated errors, as with shared NN weights.
-        coords = np.empty((height, width, 4, 6), dtype=float)
+        input_dim = 2 + num_actions
+        coords = np.empty((height, width, num_actions, input_dim), dtype=float)
         for r in range(height):
             for c in range(width):
-                for a in range(4):
+                for a in range(num_actions):
                     coords[r, c, a, :2] = (r / max(height - 1, 1),
                                            c / max(width - 1, 1))
-                    coords[r, c, a, 2:] = np.eye(4)[a] * action_scale
-        w = self.rng.normal(0., 1. / lengthscale, size=(6, feature_dim - 1))
+                    coords[r, c, a, 2:] = np.eye(num_actions)[a] * action_scale
+        w = self.rng.normal(0., 1. / lengthscale, size=(input_dim, feature_dim - 1))
         b = self.rng.uniform(0., 2. * np.pi, size=(feature_dim - 1,))
         phi = np.concatenate((
             np.full((*coords.shape[:-1], 1), 0.25),
@@ -258,8 +279,12 @@ class NNLikeErrorField:
 
     def step(self):
         scale = np.sqrt(1. - self.rho * self.rho)
-        self.shared = self.rho * self.shared + scale * self._innovation(self.shared.shape)
-        self.private = self.rho * self.private + scale * self._innovation(self.private.shape)
+        self.shared = (
+            self.rho * self.shared + scale * self._innovation(self.shared.shape)
+        )
+        self.private = (
+            self.rho * self.private + scale * self._innovation(self.private.shape)
+        )
 
     def _latent(self):
         c = self.shared_fraction
@@ -302,7 +327,9 @@ class StepQView:
     accesses to this view occur BEFORE that update changes the Q parameters.
     """
 
-    def __init__(self, tables, noise_mode, noise_sigma, num_candidates, rng, noise_field=None):
+    def __init__(
+        self, tables, noise_mode, noise_sigma, num_candidates, rng, noise_field=None,
+    ):
         self.tables = tables  # shape [N, H, W, 4]
         self.noise_mode = noise_mode
         self.noise_sigma = noise_sigma
@@ -361,6 +388,9 @@ def train(
     dd_delay_steps=1,
     log_every=500,
     seed=0,
+    expectile_tau=0.7,
+    alpha_v=None,
+    q_target_tau=0.005,
 ):
     """Train one tabular algorithm with the requested noise mechanism.
 
@@ -399,6 +429,32 @@ def train(
     Generalized Clipped Double Q when N>2:
       For each candidate, take the MIN over all N estimators; then MAX over
       candidates; apply that shared target to each of the N estimators.
+
+    method='dd_iql' (tabular DD-IQL, default cross filtering):
+      Q_i(s,a) <- (1-alpha) Q_i(s,a) + alpha [r + gamma V_i(s')].
+      V_i(s) <- V_i(s) + alpha_v w_j [Q_i_target(s,a) - V_i(s)],
+      where w_j=tau if delayed Q_j(s,a)-V_j(s)>=0, else 1-tau.
+      Both updates read OLD tables. Target Q uses a q_target_tau EMA;
+      delayed target-Q and V snapshots refresh together every D steps.
+      Approximation errors perturb Q observations only (including target Q);
+      V learns their effect through regression. NN-field snapshots freeze
+      the Q error too; shared_target retains its per-step read-noise model.
+      At D=1 the delayed parameters equal current target-Q/V, so filtering
+      reuses the CURRENT Q observation, with the selected self/peer index.
+      K must be 1. Behavior and final greedy policy use mean Q, not learned V.
+      History V/v_bias retain max_a mean_i Q_i for baseline comparisons;
+      value_table/value_bias report the separate learned expectile V.
+      method='dd_q' retains the previous delayed-argmax algorithm unchanged.
+
+    method='sd_iql':
+      Same estimator-wise losses as DD-IQL, with j(i)=i (self-delayed gate).
+
+    method='df_iql' (paper Appendix D.3):
+      Two Q critics bootstrap a single shared V. V regresses the CURRENT
+      min_i Q_i_target using a delayed min_i Q_i_target - V gate. At D=1,
+      the gate uses current observations, matching standard IQL and the JAX
+      DF implementation. All three IQL variants share this D=1 observation
+      convention. For D>1, the observed noisy function is frozen at refresh.
     """
     if noise_mode not in NOISE_MODES:
         raise ValueError(f"noise_mode must be one of {NOISE_MODES}")
@@ -414,12 +470,20 @@ def train(
         raise ValueError("Double/Clipped Double Q require double_num_q >= 2")
     if method == "dd_q" and (dd_num_q < 2 or dd_delay_steps < 1):
         raise ValueError("DD-Q requires dd_num_q >= 2 and dd_delay_steps >= 1")
+    if alpha_v is None:
+        alpha_v = alpha
+    if method in ("dd_iql", "sd_iql", "df_iql"):
+        if dd_num_q < 1 or dd_delay_steps < 1 or max_dim_multiplier != 1:
+            raise ValueError("IQL variants require N>=1, D>=1, and K=1")
+        if method == "df_iql" and dd_num_q != 2:
+            raise ValueError("DF-IQL uses exactly two critics and one shared V")
+        validate_dd_iql_config(alpha, alpha_v, expectile_tau, q_target_tau)
 
     if method == "q_learning":
         n = 1
     elif method in ("double_q", "clipped_double_q"):
         n = double_num_q
-    elif method == "dd_q":
+    elif method in ("dd_q", "dd_iql", "sd_iql", "df_iql"):
         n = dd_num_q
     else:
         raise ValueError(f"Unknown method: {method}")
@@ -457,6 +521,16 @@ def train(
         # Past NN output is a snapshot of both table and error field.
         Q_delayed_noisy = Q_delayed + field.full() if field is not None else None
         peer_shift = 1
+    elif method in ("dd_iql", "sd_iql", "df_iql"):
+        value_count = 1 if method == "df_iql" else n
+        Vs = np.zeros((value_count, grid_height, grid_width), dtype=float)
+        Q_target = Qs.copy()
+        Q_delayed = Q_target.copy()
+        V_delayed = Vs.copy()
+        Q_delayed_noisy = Q_delayed + field.full() if field is not None else None
+        filter_indices = (
+            dd_iql_filter_indices(n, 0) if method == "dd_iql" else np.arange(n)
+        )
 
     history = {
         "step": [],
@@ -469,6 +543,8 @@ def train(
         "probe_q_error": [],
         "probe_hat_error": [],
     }
+    if method in ("dd_iql", "sd_iql", "df_iql"):
+        history.update(value_table=[], value_bias=[], value_rmse=[])
     mask = np.ones((grid_height, grid_width), dtype=bool)
     mask[goal] = False
     state = start
@@ -510,7 +586,41 @@ def train(
             goal_reward=goal_reward,
         )
 
-        if done:
+        if method in ("dd_iql", "sd_iql", "df_iql"):
+            r, c = state
+            nr, nc = next_state
+            # Read all inputs before either Q or V changes, also for self-loops.
+            observed_target_q = Q_target[:, r, c, action] + (
+                current_candidates[:, action, 0] - Qs[:, r, c, action]
+            )
+            delayed_view = StepQView(
+                Q_delayed_noisy if field is not None else Q_delayed,
+                "table_additive" if field is not None else noise_mode,
+                noise_sigma, 1, rng,
+            )
+            if method == "df_iql":
+                observed_target_q = np.min(observed_target_q, keepdims=True)
+                # D=1 follows delayed_iql_jax.py: ordinary IQL's current gate.
+                delayed_advantage = (
+                    observed_target_q - Vs[:, r, c]
+                    if dd_delay_steps == 1
+                    else np.min(delayed_view.at(state)[:, action, 0], keepdims=True)
+                    - V_delayed[:, r, c]
+                )
+            else:
+                delayed_advantage = (
+                    observed_target_q - Vs[:, r, c]
+                    if dd_delay_steps == 1
+                    else delayed_view.at(state)[:, action, 0] - V_delayed[:, r, c]
+                )[filter_indices]
+            q_new, v_new, _ = dd_iql_update(
+                Qs[:, r, c, action], Vs[:, r, c], Vs[:, nr, nc],
+                observed_target_q, delayed_advantage,
+                reward, done, gamma, alpha, alpha_v, expectile_tau,
+            )
+            Qs[:, r, c, action] = q_new
+            Vs[:, r, c] = v_new
+        elif done:
             # No bootstrap/noise on terminal targets.
             targets = np.full(n, reward, dtype=float)
         else:
@@ -556,14 +666,25 @@ def train(
                     # Own CURRENT online member evaluates the peer's choice.
                     targets[i] = reward + gamma * online_next[i][selected]
 
-        # All Q_i updated on the SAME actual transition (s,a,r,s').
-        r, c = state
-        Qs[:, r, c, action] += alpha * (targets - Qs[:, r, c, action])
+        if method not in ("dd_iql", "sd_iql", "df_iql"):
+            # All Q_i updated on the SAME actual transition (s,a,r,s').
+            r, c = state
+            Qs[:, r, c, action] += alpha * (targets - Qs[:, r, c, action])
 
         # Mode 2: after learning, perturb EVERY trainable table entry with
         # independent fresh noise.  No extra noise on behavior/TD reads.
         if noise_mode == "table_additive":
             Qs += rng.normal(0.0, noise_sigma, size=Qs.shape)
+
+        if method in ("dd_iql", "sd_iql", "df_iql"):
+            Q_target = (1.0 - q_target_tau) * Q_target + q_target_tau * Qs
+            if t % dd_delay_steps == 0:
+                Q_delayed = Q_target.copy()
+                V_delayed = Vs.copy()
+                if field is not None:
+                    Q_delayed_noisy = Q_delayed + field.full()
+                if method == "dd_iql":
+                    filter_indices = dd_iql_filter_indices(n, t // dd_delay_steps)
 
         # Delayed snapshots are refreshed only on D-step boundaries.
         # In table_additive mode the snapshot includes noise already written
@@ -589,6 +710,13 @@ def train(
                 np.sqrt(np.mean((V_est[mask] - V_star[mask]) ** 2))
             )
             history["v_bias"].append(np.mean(V_est[mask] - V_star[mask]))
+            if method in ("dd_iql", "sd_iql", "df_iql"):
+                learned_v = np.mean(Vs, axis=0)
+                history["value_table"].append(learned_v.copy())
+                history["value_bias"].append(np.mean(learned_v[mask] - V_star[mask]))
+                history["value_rmse"].append(
+                    np.sqrt(np.mean((learned_v[mask] - V_star[mask]) ** 2))
+                )
             initial_error = V_est[start] - V_star[start]
             history["initial_v_error"].append(initial_error)
             history["initial_v_squared_error"].append(initial_error ** 2)
@@ -619,10 +747,16 @@ def train(
         history["Q2_final"] = Qs[1].copy()
     if field is not None:
         history["Q_observed_final"] = Qs + field.full()
-    if method == "dd_q":
+    if method in ("dd_q", "dd_iql", "sd_iql", "df_iql"):
         history["Q_delayed_final"] = Q_delayed.copy()
         if field is not None:
             history["Q_delayed_observed_final"] = Q_delayed_noisy.copy()
+    if method in ("dd_iql", "sd_iql", "df_iql"):
+        history["value_ensemble_final"] = Vs.copy()
+        history["value_delayed_final"] = V_delayed.copy()
+        history["Q_target_final"] = Q_target.copy()
+        history["greedy_policy_final"] = history["Q_final"].argmax(axis=-1)
+        history["filter_indices_final"] = filter_indices.copy()
 
     return history
 
@@ -634,11 +768,14 @@ def train(
 # Grid size
 # A long, thin rectangle increases bootstrap depth with few states.
 GRID_HEIGHT = 2
-GRID_WIDTH = 150
+GRID_WIDTH = 10
 
-NUM_UPDATES = 100_000
+NUM_UPDATES = 20_000
 
 ALPHA = 0.1
+ALPHA_V = 0.1
+EXPECTILE_TAU = 0.7
+Q_TARGET_TAU = 0.005  # Q_target <- (1-tau_target) Q_target + tau_target Q
 GAMMA = 0.99
 EPSILON = 0.1
 
@@ -649,8 +786,9 @@ EPSILON = 0.1
 #   "nn_like_field_spatial"  : ONLY spatial correlation; time is iid
 #   "nn_like_field_temporal" : ONLY temporal correlation; (state, action) independent
 #   "nn_like_field_iid"      : NEITHER spatial nor temporal correlation
-NOISE_MODE = "nn_like_field"
-NOISE_SIGMA = 0.3
+# NOISE_MODE = "nn_like_field"
+NOISE_MODE = "nn_like_field_iid"
+NOISE_SIGMA = 1.0
 
 # Reward shaping controls action gaps.
 # More negative WALL_REWARD makes wrong wall selections much more costly,
@@ -686,21 +824,21 @@ FIELD_STUDENT_DF = 5.0
 
 # Generalized Double / Clipped Double ensemble sizes.
 # N=2 preserves the original Double Q update rule.
-DOUBLE_Q_CONFIGS = [2, 5, 10]
-CLIPPED_DOUBLE_Q_CONFIGS = [2, 3]
+DOUBLE_Q_CONFIGS = [2,]
+CLIPPED_DOUBLE_Q_CONFIGS = [2,]
 
-# DD-Q configurations
+# DD-IQL (or legacy DD-Q) configurations
 # Each tuple is (N, D):
-#   N = number of online/delayed Q tables
-#   D = delayed refresh / peer-cycle period
+#   N = number of Q/V ensemble members (legacy DD-Q has no V)
+#   D = joint delayed Q_target/V refresh and peer-cycle period
 #
 DD_Q_CONFIGS = [
     (2, 1),
-    (5, 1),
-    (10, 1),
-    (2, 100),
-    (5, 100),
-    (10, 100),
+    # (5, 1),
+    # (10, 1),
+    # (2, 100),
+    # (5, 100),
+    # (10, 100),
     # (2, 10),
     # (2, 100),
     # (2, 1000),
@@ -719,10 +857,12 @@ STD_DDOF = 1  # sample standard deviation across seeds
 # ============================================================
 
 RUN_METHODS = [
-    # "Q-learning",
+    "Q-learning",
     "Double Q",
-    # "Clipped Double Q",
-    "DD-Q-learning",
+    "Clipped Double Q",
+    "DD-IQL (tabular)",  # Use "DD-Q-learning" for the legacy delayed-argmax method.
+    "DF-IQL (tabular)",
+    "SD-IQL (tabular)",
 ]
 
 
@@ -738,10 +878,18 @@ SAVE_DIR = os.path.join(
     f"sigma{NOISE_SIGMA:g}",
     (f"K{MAX_DIM_MULTIPLIER}_behavior_" + ("allK" if BEHAVIOR_USE_ALL_K else "k0"))
     if NOISE_MODE == "shared_target" else (
-        f"rho{resolve_field_correlation(NOISE_MODE, FIELD_RHO)[0]:g}_shared{FIELD_SHARED_FRACTION:g}_features{FIELD_FEATURES}_{FIELD_INNOVATION}"
+        f"rho{resolve_field_correlation(NOISE_MODE, FIELD_RHO)[0]:g}"
+        f"_shared{FIELD_SHARED_FRACTION:g}_features{FIELD_FEATURES}_{FIELD_INNOVATION}"
         if NOISE_MODE in NN_LIKE_NOISE_MODES else "real_actions_only"
     ),
 )
+
+if "DD-IQL (tabular)" in RUN_METHODS:
+    SAVE_DIR = os.path.join(
+        SAVE_DIR,
+        f"dd_iql_H{GRID_HEIGHT}_W{GRID_WIDTH}_expectile{EXPECTILE_TAU:g}"
+        f"_alphaQ{ALPHA:g}_alphaV{ALPHA_V:g}_target{Q_TARGET_TAU:g}",
+    )
 
 FIGURE_DIR = os.path.join(SAVE_DIR, "figures")
 TABLE_DIR = os.path.join(SAVE_DIR, "tables")
@@ -759,6 +907,12 @@ METRIC_KEYS = [
     "initial_v_error",
     "initial_v_squared_error",
 ]
+VALUE_METRIC_KEYS = ["value_bias", "value_rmse"]
+OPTIONAL_TABLE_KEYS = (
+    "Q1_final", "Q2_final", "Q_ensemble_final", "Q_delayed_final",
+    "Q_observed_final", "Q_delayed_observed_final", "Q_target_final",
+    "value_table", "value_ensemble_final", "value_delayed_final",
+)
 
 
 def safe_result_name(name):
@@ -793,7 +947,9 @@ def aggregate_seed_histories(seed_histories, seeds, std_ddof=1):
     }
 
     # Scalar learning-curve metrics: [seed, log_step]
-    for key in METRIC_KEYS:
+    for key in METRIC_KEYS + [
+        key for key in VALUE_METRIC_KEYS if key in seed_histories[0]
+    ]:
         values = np.stack([history[key] for history in seed_histories], axis=0)
         aggregated[f"{key}_all"] = values
         aggregated[f"{key}_mean"] = np.mean(values, axis=0)
@@ -819,14 +975,7 @@ def aggregate_seed_histories(seed_histories, seeds, std_ddof=1):
     aggregated["Q_final_std"] = np.std(q_final_values, axis=0, ddof=effective_ddof)
 
     # Keep method-specific final tables when available.
-    for optional_key in (
-        "Q1_final",
-        "Q2_final",
-        "Q_ensemble_final",
-        "Q_delayed_final",
-        "Q_observed_final",
-        "Q_delayed_observed_final",
-    ):
+    for optional_key in OPTIONAL_TABLE_KEYS:
         if optional_key in seed_histories[0]:
             values = np.stack(
                 [history[optional_key] for history in seed_histories],
@@ -838,6 +987,12 @@ def aggregate_seed_histories(seed_histories, seeds, std_ddof=1):
                 axis=0,
                 ddof=effective_ddof,
             )
+            if "value_ensemble_final" in seed_histories[0]:
+                aggregated[f"{optional_key}_all"] = values
+    if "greedy_policy_final" in seed_histories[0]:
+        aggregated["greedy_policy_final_all"] = np.stack(
+            [h["greedy_policy_final"] for h in seed_histories], axis=0,
+        )
 
     return aggregated
 
@@ -880,6 +1035,9 @@ def save_plot(results, metric, ylabel, title, filename, figure_dir, zero_line=Fa
 def save_seed_aggregate(name, history, table_dir, numpy_dir):
     """Save aggregated curves plus the raw per-seed metric curves."""
     safe_name = safe_result_name(name)
+    metric_keys = METRIC_KEYS + [
+        key for key in VALUE_METRIC_KEYS if f"{key}_all" in history
+    ]
 
     # Aggregated V/Q tables.
     np.save(
@@ -900,7 +1058,7 @@ def save_seed_aggregate(name, history, table_dir, numpy_dir):
     )
 
     # Raw metric arrays have shape [num_seeds, num_log_points].
-    for key in METRIC_KEYS:
+    for key in metric_keys:
         np.save(
             os.path.join(numpy_dir, f"{safe_name}_{key}_all_seeds.npy"),
             history[f"{key}_all"],
@@ -941,14 +1099,7 @@ def save_seed_aggregate(name, history, table_dir, numpy_dir):
                                     paired_corr(history["probe_hat_error_all"])])
 
     # Optional method-specific mean/std final tables.
-    for optional_key in (
-        "Q1_final",
-        "Q2_final",
-        "Q_ensemble_final",
-        "Q_delayed_final",
-        "Q_observed_final",
-        "Q_delayed_observed_final",
-    ):
+    for optional_key in OPTIONAL_TABLE_KEYS:
         mean_key = f"{optional_key}_mean"
         std_key = f"{optional_key}_std"
         if mean_key in history:
@@ -960,6 +1111,14 @@ def save_seed_aggregate(name, history, table_dir, numpy_dir):
                 os.path.join(numpy_dir, f"{safe_name}_{std_key}.npy"),
                 history[std_key],
             )
+        all_key = f"{optional_key}_all"
+        if all_key in history:
+            np.save(
+                os.path.join(numpy_dir, f"{safe_name}_{all_key}.npy"), history[all_key],
+            )
+    if "greedy_policy_final_all" in history:
+        np.save(os.path.join(numpy_dir, f"{safe_name}_greedy_policy_all_seeds.npy"),
+                history["greedy_policy_final_all"])
 
     # Final V mean/std as CSV tables.
     np.savetxt(
@@ -980,13 +1139,13 @@ def save_seed_aggregate(name, history, table_dir, numpy_dir):
     with open(metric_path, "w", newline="") as f:
         writer = csv.writer(f)
         header = ["step"]
-        for key in METRIC_KEYS:
+        for key in metric_keys:
             header.extend([f"{key}_mean", f"{key}_std"])
         writer.writerow(header)
 
         for idx, step in enumerate(history["step"]):
             row = [step]
-            for key in METRIC_KEYS:
+            for key in metric_keys:
                 row.extend([
                     history[f"{key}_mean"][idx],
                     history[f"{key}_std"][idx],
@@ -997,7 +1156,7 @@ def save_seed_aggregate(name, history, table_dir, numpy_dir):
     raw_path = os.path.join(table_dir, f"{safe_name}_metrics_all_seeds.csv")
     with open(raw_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["seed", "step", *METRIC_KEYS])
+        writer.writerow(["seed", "step", *metric_keys])
         for seed_idx, seed in enumerate(history["seeds"]):
             for log_idx, step in enumerate(history["step"]):
                 writer.writerow([
@@ -1005,7 +1164,7 @@ def save_seed_aggregate(name, history, table_dir, numpy_dir):
                     step,
                     *[
                         history[f"{key}_all"][seed_idx, log_idx]
-                        for key in METRIC_KEYS
+                        for key in metric_keys
                     ],
                 ])
 
@@ -1027,7 +1186,7 @@ def run_method_over_seeds(
         args["seed"] = int(seed)
         if method in ("double_q", "clipped_double_q"):
             args["double_num_q"] = int(double_num_q)
-        if method == "dd_q":
+        if method in ("dd_q", "dd_iql", "sd_iql", "df_iql"):
             args["dd_num_q"] = int(dd_num_q)
             args["dd_delay_steps"] = int(dd_delay_steps)
         seed_histories.append(train(method, **args))
@@ -1053,6 +1212,9 @@ def main():
         grid_width=GRID_WIDTH,
         num_updates=NUM_UPDATES,
         alpha=ALPHA,
+        alpha_v=ALPHA_V,
+        expectile_tau=EXPECTILE_TAU,
+        q_target_tau=Q_TARGET_TAU,
         gamma=GAMMA,
         epsilon=EPSILON,
         noise_mode=NOISE_MODE,
@@ -1092,16 +1254,36 @@ def main():
                     common_args=common_args, seeds=SEEDS,
                     double_num_q=n,
                 )
-        elif name == "DD-Q-learning":
+        elif name in (
+            "DD-Q-learning", "DD-IQL (tabular)", "SD-IQL (tabular)", "DF-IQL (tabular)"
+        ):
+            method = {
+                "DD-Q-learning": "dd_q", "DD-IQL (tabular)": "dd_iql",
+                "SD-IQL (tabular)": "sd_iql", "DF-IQL (tabular)": "df_iql",
+            }[name]
+            label = (
+                "DD-Q" if method == "dd_q" else name.replace(" (tabular)", " tabular")
+            )
             for n, delay in DD_Q_CONFIGS:
-                result_name = f"DD-Q (N={n}, D={delay})"
+                result_name = f"{label} (N={n}, D={delay})"
                 results[result_name] = run_method_over_seeds(
-                    result_name=result_name, method="dd_q",
+                    result_name=result_name, method=method,
                     common_args=common_args, seeds=SEEDS,
                     dd_num_q=n, dd_delay_steps=delay,
                 )
         else:
             raise ValueError(f"Unknown method in RUN_METHODS: {name}")
+
+    with open(os.path.join(SAVE_DIR, "config.json"), "w") as f:
+        json.dump(dict(
+            **common_args, seeds=SEEDS, run_methods=RUN_METHODS,
+            double_q_configs=DOUBLE_Q_CONFIGS,
+            clipped_double_q_configs=CLIPPED_DOUBLE_Q_CONFIGS,
+            dd_configs=DD_Q_CONFIGS,
+            dd_iql_filter="cross (delayed peer Q_target - V)",
+            v_metrics="V/v_bias=max_a mean_i Q_i; value_table/value_bias=mean_i V_i",
+            greedy_policy="argmax_a mean_i Q_i; no learned actor",
+        ), f, indent=2)
 
     Q_star, V_star = get_optimal_q(
         GRID_HEIGHT,
@@ -1143,8 +1325,8 @@ def main():
     save_plot(
         results,
         "v_rmse",
-        "V RMSE",
-        f"V RMSE ({band_label})",
+        "RMSE(max_a mean_i Q_i, V*)",
+        f"Max-Q value RMSE ({band_label})",
         f"v_rmse_{suffix}.png",
         FIGURE_DIR,
     )
@@ -1161,8 +1343,8 @@ def main():
     save_plot(
         results,
         "v_bias",
-        "Mean(V - V*)",
-        f"Global V Bias ({band_label})",
+        "Mean(max_a mean_i Q_i - V*)",
+        f"Max-Q value bias ({band_label})",
         f"v_bias_{suffix}.png",
         FIGURE_DIR,
         zero_line=True,
@@ -1171,8 +1353,8 @@ def main():
     save_plot(
         results,
         "initial_v_error",
-        "V(s0) - V*(s0)",
-        f"Initial State Value Error ({band_label})",
+        "max_a mean_i Q_i(s0,a) - V*(s0)",
+        f"Initial state max-Q value error ({band_label})",
         f"initial_v_error_{suffix}.png",
         FIGURE_DIR,
         zero_line=True,
@@ -1181,11 +1363,19 @@ def main():
     save_plot(
         results,
         "initial_v_squared_error",
-        "(V(s0) - V*(s0))^2",
-        f"Initial State Squared Error ({band_label})",
+        "(max_a mean_i Q_i(s0,a) - V*(s0))^2",
+        f"Initial state squared max-Q value error ({band_label})",
         f"initial_v_squared_error_{suffix}.png",
         FIGURE_DIR,
     )
+
+    value_results = {name: h for name, h in results.items() if "value_bias_all" in h}
+    if value_results:
+        save_plot(
+            value_results, "value_bias", "Mean(learned V - V*)",
+            f"Learned expectile V bias ({band_label})",
+            f"learned_value_bias_{suffix}.png", FIGURE_DIR, zero_line=True,
+        )
 
     # --------------------------------------------------------
     # Print final mean +/- std
@@ -1220,6 +1410,10 @@ def main():
     print("Std ddof                 :", STD_DDOF)
     if "DD-Q-learning" in RUN_METHODS:
         print("DD-Q configurations      :", DD_Q_CONFIGS)
+    if "DD-IQL (tabular)" in RUN_METHODS:
+        print("DD-IQL configurations    :", DD_Q_CONFIGS)
+        print("Expectile tau / alpha V  :", (EXPECTILE_TAU, ALPHA_V))
+        print("Target-Q EMA tau         :", Q_TARGET_TAU)
     print("Initial state            :", start)
     print("True V*(initial state)   :", V_star[start])
 
@@ -1227,10 +1421,13 @@ def main():
         print("\n========================================")
         print(name)
         print("========================================")
-        print("Final V mean table:")
+        print("Final max-Q value mean table:")
         print(np.round(history["V_mean"][-1], 4))
-        print("Final V std table:")
+        print("Final max-Q value std table:")
         print(np.round(history["V_std"][-1], 4))
+        if "value_table_mean" in history:
+            print("Final learned expectile V mean table:")
+            print(np.round(history["value_table_mean"][-1], 4))
 
         for metric, label in (
             ("q_rmse", "Final Q RMSE"),

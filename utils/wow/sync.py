@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Synchronize selected environment/seed folders from a remote host.
+"""Synchronize directories with selected exact names from a remote host.
 
 Performance:
 - Discover ALL requested depths with ONE find on each host (not one find/depth).
@@ -29,15 +29,15 @@ SRC_HOST = "166.104.28.73"
 # SRC_ROOT = "/home/ukjo1/work/fed_rl/moderate-rl/logs/action_robust/sam/exclude_critic/ver2/single"
 
 # DST_ROOT = "/home/ukjo2/work/fed_rl/expectile-rl/logs/action_robust/sam/exclude_critic/ver2/single"
-SRC_ROOT = "/home/ext_jsy/work/offline_rl/CORL-JAX/logs/iclr2027/iql_based/ogbench/diagnostics2"
+SRC_ROOT = "/home/ext_jsy/work/offline_rl/CORL-JAX/logs/iclr2027_tuning/basic/rebrac_jax/fql_implementation/ogbench/mean_ablation/"
 
 
-DST_ROOT = "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/iclr2027/iql_based/ogbench/diagnostics_dd_iql"
+DST_ROOT = "/home/ext_ukjo/work/offline_rl/CORL-JAX/logs/iclr2027_tuning/basic/rebrac_jax/fql_implementation/ogbench/mean_ablation/"
 
 # SRC_ROOT 상대 경로 기준 깊이. 예) SRC_ROOT/Ant-v4_1 이면 depth=1.
 DEFAULT_LEAF_DEPTHS = [4]
 
-# 실제 폴더는 "{아래 이름}_{숫자로 된 seed}" 형태로 정확히 일치해야 함.
+# 실제 폴더 이름이 아래 값(예: "0", "1", "2", "3")과 정확히 일치해야 함.
 DEFAULT_TARGET_FOLDERS = [
     "0", "1", "2", "3",
 ]
@@ -91,7 +91,7 @@ def make_target_regex(target_folders: Sequence[str]) -> re.Pattern:
     if not target_folders or any(not name or "/" in name for name in target_folders):
         raise ValueError("target folders must be nonempty directory basenames")
     names = "|".join(re.escape(name) for name in target_folders)
-    return re.compile(rf"(?:{names})_[0-9]+\Z")
+    return re.compile(rf"(?:{names})\Z")
 
 
 def find_command(root: str, depths: Sequence[int], target_folders: Sequence[str]) -> List[str]:
@@ -106,8 +106,8 @@ def find_command(root: str, depths: Sequence[int], target_folders: Sequence[str]
     for i, name in enumerate(target_folders):
         if i:
             cmd.append("-o")
-        # find glob is only a prefilter; a full regex below enforces digits-only.
-        cmd.extend(["-name", f"{name}_[0-9]*"])
+        # Match only the directory basename itself (e.g. "0", not "0_1").
+        cmd.extend(["-name", name])
     cmd.extend([")", "-print0"])
     return cmd
 
@@ -233,7 +233,7 @@ def save_report(report: Dict[str, Any]) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Sync named environment/seed folders at one or more depths."
+        description="Sync directories with exact target names at one or more depths."
     )
     parser.add_argument(
         "--leaf-depths", nargs="+", type=int, default=DEFAULT_LEAF_DEPTHS,
@@ -241,7 +241,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--target-folders", nargs="+", default=DEFAULT_TARGET_FOLDERS,
-        metavar="NAME", help="Base environment names, without the _seed suffix",
+        metavar="NAME", help="Exact directory names (default: 0 1 2 3)",
     )
     # 안전한 기본 동작: --apply가 명시되지 않으면 검증만 수행합니다.
     mode_group = parser.add_mutually_exclusive_group()
