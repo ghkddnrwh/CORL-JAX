@@ -6,6 +6,9 @@ Performance:
 - Discover ALL requested depths with ONE find on each host (not one find/depth).
 - Filter folder basenames within find to reduce SSH output.
 - Compare remote fingerprints in batches (instead of 1 SSH call/leaf).
+
+Optional --delete-source removes selected remote leaf directories only after
+every copy and a checksum-based rsync dry-run verification have succeeded.
 """
 
 import argparse
@@ -223,6 +226,57 @@ def rsync_copy(rel_dir: str, dry_run: bool = False) -> None:
     run_cmd(cmd, capture_stdout=False)
 
 
+def rsync_verify_identical(rel_dir: str) -> bool:
+    """Check actual file contents and directory entries before source deletion.
+
+    --checksum checks file contents even if size and mtime happen to match.
+    --delete is used ONLY with --dry-run here to detect extra destination entries.
+    """
+    src = f"{SRC_USER}@{SRC_HOST}:{os.path.join(SRC_ROOT, rel_dir)}/"
+    dst_path = Path(DST_ROOT) / rel_dir
+    if not dst_path.is_dir():
+        print(f"[VERIFY FAILED] Destination missing: {dst_path}", file=sys.stderr)
+        return False
+
+    cmd = [
+        "rsync", "-a", "--checksum", "--dry-run", "--itemize-changes",
+        "--delete",  # dry-run only: detect destination differences; never delete there
+        "-e", "ssh " + shlex.join(SSH_OPTS),
+        src, str(dst_path) + "/",
+    ]
+    output = run_cmd(cmd).stdout or b""
+    if output.strip():
+        lines = output.decode("utf-8", errors="replace").splitlines()
+        print(f"[VERIFY FAILED] {rel_dir}: {len(lines)} differences", file=sys.stderr)
+        for line in lines[:5]:
+            print(f"  {line}", file=sys.stderr)
+        return False
+    print(f"[VERIFIED] {rel_dir}")
+    return True
+
+
+def delete_remote_leaf_dir(rel_dir: str) -> None:
+    """Remove only one explicitly selected source leaf, never SRC_ROOT itself."""
+    remote_py = '''import os
+import shutil
+import sys
+
+root = os.path.realpath(sys.argv[1])
+rel = sys.argv[2]
+if (not rel or os.path.isabs(rel) or
+        any(part in ("", ".", "..") for part in rel.split("/"))):
+    raise ValueError("Unsafe relative source directory")
+target = os.path.join(root, rel)
+if (os.path.realpath(target) == root or
+        os.path.commonpath([root, os.path.realpath(target)]) != root):
+    raise ValueError("Source directory escapes SRC_ROOT")
+if os.path.islink(target) or not os.path.isdir(target):
+    raise ValueError("Source directory missing or is a symlink")
+shutil.rmtree(target)
+'''
+    ssh(shlex.join(["python3", "-c", remote_py, SRC_ROOT, rel_dir]))
+
+
 def save_report(report: Dict[str, Any]) -> Path:
     timestamp = report["generated_at"]
     path = Path(f"logs/sync_report/sync_report_{timestamp}.json")
@@ -237,7 +291,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--leaf-depths", nargs="+", type=int, default=DEFAULT_LEAF_DEPTHS,
-        metavar="N", help="SRC_ROOT-relative directory depths (default: 1..10)",
+        metavar="N", help=f"SRC_ROOT-relative directory depths (default: {DEFAULT_LEAF_DEPTHS})",
     )
     parser.add_argument(
         "--target-folders", nargs="+", default=DEFAULT_TARGET_FOLDERS,
@@ -258,6 +312,10 @@ def main() -> None:
         help="--apply와 함께 사용 시 복사/이동/삭제 없이 실행 계획만 출력",
     )
     parser.add_argument(
+        "--delete-source", action="store_true",
+        help="모든 대상 폴더의 복사 및 체크섬 검증에 성공한 후 원격 원본 폴더 삭제 (SRC_ROOT는 유지)",
+    )
+    parser.add_argument(
         "--conflict", choices=["skip", "rename", "overwrite"], default="skip",
         help="같은 경로에 내용이 다른 경우 (기본 skip)",
     )
@@ -269,6 +327,11 @@ def main() -> None:
         "--limit", type=int, default=0, help="앞에서 N개 폴더만 처리 (0=전체)",
     )
     args = parser.parse_args()
+
+    if args.delete_source and not args.apply:
+        parser.error("--delete-source requires --apply (optionally with --dry-run)")
+    if args.delete_source and args.fast:
+        parser.error("--delete-source cannot be combined with --fast")
 
     try:
         depths = normalize_depths(args.leaf_depths)
@@ -357,6 +420,7 @@ def main() -> None:
         "dry_run": bool(args.dry_run),
         "verify_only": not args.apply,
         "apply": bool(args.apply),
+        "delete_source": bool(args.delete_source),
         "fast": bool(args.fast),
         "generated_at": timestamp,
     }
@@ -385,12 +449,64 @@ def main() -> None:
                     shutil.rmtree(dst_path)
         to_copy = sorted(set(to_copy + conflicts))
 
+    copy_failures: List[str] = []
     for rel in to_copy:
         try:
             rsync_copy(rel, dry_run=args.dry_run)
         except subprocess.CalledProcessError as exc:
             print(f"[ERROR] rsync failed for {rel}: {exc}", file=sys.stderr)
+            copy_failures.append(rel)
+
+    report["copy_failures"] = copy_failures
+    if args.delete_source:
+        if args.dry_run:
+            if conflicts and args.conflict == "skip":
+                print("[DRY-RUN] Source deletion blocked: unresolved conflicts (policy=skip).")
+            else:
+                for rel in remote_leaf:
+                    print(f"[DRY-RUN DELETE SOURCE, after verification] {SRC_ROOT.rstrip('/')}/{rel}")
+        elif copy_failures or (conflicts and args.conflict == "skip"):
+            print("[DELETE SOURCE SKIPPED] Copy errors or unresolved conflicts; no source directories removed.")
+            report["source_deletion_blocked"] = True
+        else:
+            # Check ALL selected folders first. If any differs, delete NONE.
+            verify_failures: List[str] = []
+            print(f"[DELETE SOURCE] Verifying all {len(remote_leaf)} directories with rsync checksums...")
+            for rel in remote_leaf:
+                try:
+                    if not rsync_verify_identical(rel):
+                        verify_failures.append(rel)
+                except subprocess.CalledProcessError as exc:
+                    print(f"[VERIFY ERROR] {rel}: {exc}", file=sys.stderr)
+                    verify_failures.append(rel)
+            report["source_verify_failures"] = verify_failures
+
+            if verify_failures:
+                print("[DELETE SOURCE SKIPPED] Verification failed; no source directories removed.")
+                report["source_deletion_blocked"] = True
+            else:
+                deleted: List[str] = []
+                deletion_failures: List[str] = []
+                # Descendants before ancestors if multiple depths overlap.
+                ordered = sorted(remote_leaf, key=lambda rel: (len(Path(rel).parts), rel), reverse=True)
+                for rel in ordered:
+                    try:
+                        delete_remote_leaf_dir(rel)
+                        deleted.append(rel)
+                        print(f"[DELETE SOURCE] {SRC_ROOT.rstrip('/')}/{rel}")
+                    except subprocess.CalledProcessError as exc:
+                        print(f"[DELETE SOURCE ERROR] {rel}: {exc}", file=sys.stderr)
+                        deletion_failures.append(rel)
+                report["source_deleted"] = deleted
+                report["source_deletion_failures"] = deletion_failures
+
+    # Update the initial report with actual operation results.
+    save_report(report)
     print("\nDone.")
+    if args.delete_source and not args.dry_run and (
+        report.get("source_deletion_blocked") or report.get("source_deletion_failures")
+    ):
+        sys.exit(1)
 
 
 if __name__ == "__main__":
