@@ -7,17 +7,18 @@ from unittest.mock import patch
 
 import numpy as np
 
-from utils.iclr_2027_dd_iql import compare_tabular_methods as grid
-from utils.iclr_2027_dd_iql.stress_iid_min_ddq_bias import (
+from utils.iclr2027_dd_iql import compare_tabular_methods as grid
+from utils.iclr2027_dd_iql.stress_iid_min_ddq_bias import (
     check_against_original,
     make_noise,
     run_batch,
 )
-from utils.iclr_2027_dd_iql.tabular_dd_iql import (
+from utils.iclr2027_dd_iql.tabular_dd_iql import (
     dd_iql_filter_indices,
     dd_iql_update,
     validate_dd_iql_config,
 )
+from utils.iclr2027_dd_iql.tabular_q_backups import clipped_q_bootstrap
 
 class TabularDDIQLTests(unittest.TestCase):
     def test_peer_weight_is_independent_of_own_residual_sign(self):
@@ -355,7 +356,9 @@ class TabularDDIQLTests(unittest.TestCase):
         noise = rng.normal(size=(2, steps, 2, states, actions_count))
         actions = rng.integers(actions_count, size=(2, steps))
         explore = rng.random((2, steps)) < 0.4
-        for method in ("df_iql", "sd_iql"):
+        for method, reduction in (
+            ("df_iql", "min"), ("df_iql", "mean"), ("sd_iql", "min")
+        ):
             for delay in (1, 7, steps + 1):
                 for behavior in ("uniform", "epsilon_greedy"):
                     with self.subTest(method=method, delay=delay, behavior=behavior):
@@ -372,6 +375,7 @@ class TabularDDIQLTests(unittest.TestCase):
                             0.82,
                             0.37,
                             0.41,
+                            df_reduction=reduction,
                         )
                         for seed in range(2):
                             q = np.zeros((2, states, actions_count))
@@ -406,12 +410,19 @@ class TabularDDIQLTests(unittest.TestCase):
                                         + noise[seed, t, :, state, action]
                                     )
                                     if method == "df_iql":
-                                        regression_target = min(current)
+                                        regression_target = (
+                                            min(current) if reduction == "min"
+                                            else sum(current) / len(current)
+                                        )
+                                        delayed_target = (
+                                            min(snapshot[:, state, action])
+                                            if reduction == "min"
+                                            else sum(snapshot[:, state, action]) / 2
+                                        )
                                         advantage = (
                                             regression_target - old_v[0, state]
                                             if delay == 1
-                                            else min(snapshot[:, state, action])
-                                            - snapshot_v[0, state]
+                                            else delayed_target - snapshot_v[0, state]
                                         )
                                     else:
                                         regression_target = current[k]
@@ -452,7 +463,9 @@ class TabularDDIQLTests(unittest.TestCase):
             noise = rng.normal(size=(2, 39, 2, size, size))
             actions = rng.integers(size, size=(2, 39))
             explore = rng.random((2, 39)) < 0.3
-            for method in ("df_iql", "sd_iql"):
+            for method, reduction in (
+                ("df_iql", "min"), ("df_iql", "mean"), ("sd_iql", "min")
+            ):
                 for delay in (1, 10):
                     with self.subTest(size=size, method=method, delay=delay):
                         checks = check_against_original(
@@ -467,6 +480,7 @@ class TabularDDIQLTests(unittest.TestCase):
                             behavior="epsilon_greedy",
                             explore_mask=explore,
                             expectile_tau=0.99,
+                            df_reduction=reduction,
                         )
                         self.assertTrue(all(c["passed"] for c in checks))
 
@@ -487,6 +501,78 @@ class TabularDDIQLTests(unittest.TestCase):
                     expectile_tau=0.9, alpha_v=0.5,
                 )
                 np.testing.assert_allclose(h["value_final"][0, :, 0], expected)
+
+    def test_min_q_reductions_use_the_correct_critic_and_action_axes(self):
+        values = np.array([[6.0, 0.0], [0.0, 2.0]])
+        for reduction, expected in (
+            ("max_min", 0.0),
+            ("min_max", 2.0),
+            ("max_mean", 3.0),
+        ):
+            with self.subTest(reduction=reduction):
+                self.assertEqual(clipped_q_bootstrap(values, reduction), expected)
+                np.testing.assert_array_equal(
+                    clipped_q_bootstrap(np.stack([values, values + 10]), reduction),
+                    [expected, expected + 10],
+                )
+        with self.assertRaises(ValueError):
+            clipped_q_bootstrap(values, "unknown")
+
+    def test_min_q_variants_match_independent_scalar_updates_and_grid(self):
+        path = Path(grid.__file__)
+        rng = np.random.default_rng(231)
+        noise = rng.normal(size=(2, 61, 2, 4, 4))
+        actions = rng.integers(4, size=(2, 61))
+        for reduction in ("max_min", "min_max", "max_mean"):
+            with self.subTest(reduction=reduction):
+                h = run_batch(
+                    "clipped_double_q",
+                    noise,
+                    actions,
+                    0.97,
+                    0.23,
+                    1,
+                    clipped_q_backup=reduction,
+                )
+                for seed in range(2):
+                    q = np.zeros((2, 4, 4))
+                    state = 0
+                    for t in range(61):
+                        action = actions[seed, t]
+                        successor = action % 4
+                        view = [
+                            [
+                                q[i, successor, a] + noise[seed, t, i, successor, a]
+                                for a in range(4)
+                            ]
+                            for i in range(2)
+                        ]
+                        if reduction == "max_min":
+                            target = max(
+                                min(view[i][a] for i in range(2)) for a in range(4)
+                            )
+                        elif reduction == "min_max":
+                            target = min(max(view[i]) for i in range(2))
+                        else:
+                            target = max(
+                                sum(view[i][a] for i in range(2)) / 2 for a in range(4)
+                            )
+                        for i in range(2):
+                            q[i, state, action] += 0.23 * (
+                                0.97 * target - q[i, state, action]
+                            )
+                        state = successor
+                    np.testing.assert_allclose(h["q_final"][seed], q, atol=1e-14)
+                checks = check_against_original(
+                    path.read_text(),
+                    path,
+                    noise,
+                    actions,
+                    0.97,
+                    0.23,
+                    clipped_q_backup=reduction,
+                )
+                self.assertTrue(all(check["passed"] for check in checks))
 
 if __name__ == "__main__":
     unittest.main()

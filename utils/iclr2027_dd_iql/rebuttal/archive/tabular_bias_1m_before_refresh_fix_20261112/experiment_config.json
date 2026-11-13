@@ -1,0 +1,79 @@
+{
+  "sizes": [
+    2,
+    4,
+    8,
+    16
+  ],
+  "delays": [
+    1,
+    10,
+    100,
+    1000
+  ],
+  "tau_values": [
+    0.9,
+    0.99
+  ],
+  "noise_modes": [
+    "nn_like_field_iid",
+    "nn_like_field"
+  ],
+  "updates": 1000000,
+  "seeds": [
+    200,
+    201,
+    202,
+    203,
+    204,
+    205,
+    206,
+    207,
+    208,
+    209,
+    210,
+    211,
+    212,
+    213,
+    214,
+    215,
+    216,
+    217,
+    218,
+    219
+  ],
+  "gamma": 0.999,
+  "alpha_q": 0.1,
+  "alpha_v": 0.1,
+  "q_target_tau": 0.005,
+  "sigma": 1.0,
+  "field_rho": 0.99,
+  "field_features": 64,
+  "field_lengthscale": 0.35,
+  "field_action_scale": 1.0,
+  "shared_fraction": 0.0,
+  "behavior": "uniform",
+  "transition": "s_next = action % num_states; all rewards zero; no termination; Q*=V*=0",
+  "noise_convention": "All IQL variants at D=1 use current target-Q observation (epsilon_t), current V and the self/peer index to construct the gate. At D>1 all freeze the observed target-Q plus V after each D updates, as before. The earlier SD/DD used epsilon_(t-1) in D=1 filters; that mismatch is corrected.",
+  "metric": "mean_s max_a mean_i clean Q_i(s,a), true Q*=0; sample SD across 20 seeds; checkpoints at 100000 and 1000000",
+  "comparison": "Matched S=A=2,4,8,16 sweeps at 100000 and 1000000 total updates. Expected Q(s,a) visits at 100k: 25000,6250,1562.5,390.625; at 1M: 250000,62500,15625,3906.25. State/action sizes grow together. Two-action noise retains the original first two of four field outputs.",
+  "initialization": "All clean Q, V, Q-target tables start at zero; delayed observed Q initially includes the first noise field.",
+  "methods": [
+    "max_min",
+    "double_q",
+    "df_min",
+    "df_mean",
+    "sd_iql",
+    "dd_iql"
+  ],
+  "ensemble_size": 2,
+  "conditions": 272,
+  "log_every": 1000,
+  "checkpoint_updates": 100000,
+  "reference_hashes": {
+    "compare_tabular_methods.py": "9b697e8782f771465ca2b012760a8a2e6cf12b71cb99619786e1a2e6afe87c2d",
+    "stress_iid_min_ddq_bias.py": "c6db31c098a881006f049f10a8c97de24f6857d6db4dfc4428a0c4a02ecd6a5b",
+    "tabular_dd_iql.py": "1ffa870fa9cec34e47df34910f6b8640e78af752ab18e8787c80bac2927f2186",
+    "tabular_q_backups.py": "66faa2494bfaec4fa7a8da642429b00bb41d063b13cd9a79b38d62fa539ff653"
+  }
+}

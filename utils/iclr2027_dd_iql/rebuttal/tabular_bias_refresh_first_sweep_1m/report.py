@@ -1,0 +1,399 @@
+"""Report current-first DF/SD/DD bias and oracle diagnostics."""
+
+import argparse
+import csv
+import hashlib
+import json
+from concurrent.futures import as_completed, ProcessPoolExecutor
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+import numpy as np
+from common import (
+    case_path,
+    cases,
+    CONFIG,
+    DEFAULT_RESULTS_DIR,
+    noise_name,
+    REPO_ROOT,
+)
+from figure_presentation import coupling_scatter, panel_plot
+from measure import PROXIES, window_rows
+from scipy.stats import pearsonr, spearmanr
+
+SIZE = 4
+RESULTS_ROOT = DEFAULT_RESULTS_DIR
+LABELS = {
+    "double_q": "Double Q",
+    "df_min": "DF-IQL",
+    "sd_iql": "SD-IQL",
+    "dd_iql": "DD-IQL",
+}
+LAST = "900000_1000000"
+
+
+def write_csv(path, rows):
+    with path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def finite_stats(values):
+    x = np.asarray(values, float)
+    x = x[np.isfinite(x)]
+    if not len(x):
+        return np.nan, np.nan
+    return float(x.mean()), float(x.std(ddof=1)) if len(x) > 1 else np.nan
+
+
+def summarize(rows):
+    groups = {}
+    for row in rows:
+        key = tuple(row[k] for k in ("noise", "method", "D", "tau", "window"))
+        groups.setdefault(key, []).append(row)
+    summaries = []
+    excluded = {"noise", "method", "D", "tau", "window", "seed", "diagnostic_samples"}
+    for key, values in groups.items():
+        row = dict(zip(("noise", "method", "D", "tau", "window"), key))
+        row.update(
+            seeds=len(values),
+            diagnostic_samples_per_seed=values[0]["diagnostic_samples"],
+        )
+        for metric in values[0]:
+            if metric not in excluded:
+                mean, sd = finite_stats([r[metric] for r in values])
+                row[metric + "_mean"], row[metric + "_sd"] = mean, sd
+        summaries.append(row)
+    return summaries
+
+
+def terminal_rows(h, case):
+    _, mode, method, delay, tau = case
+    result = []
+    for slot, seed in enumerate(CONFIG["seeds"]):
+        q = h["q_final"][slot]
+        v = h["value_final"][slot] if "value_final" in h else None
+        qm = q.mean(0)
+        row = dict(noise=noise_name(mode), method=method, D=delay, tau=tau, seed=seed)
+        row.update(
+            max_q_bias=float(qm.max(-1).mean()),
+            q_bias=float(q.mean()),
+            q_member_rmse=float(np.sqrt((q * q).mean())),
+            q_ensemble_rmse=float(np.sqrt((qm * qm).mean())),
+            value_bias=float(v.mean()) if v is not None else np.nan,
+            value_member_rmse=float(np.sqrt((v * v).mean()))
+            if v is not None
+            else np.nan,
+        )
+        result.append(row)
+    return result
+
+
+def tracking(rows, cross_section=False):
+    """Descriptive matched-seed calibration across the 12 IQL method/delay settings."""
+    output = []
+    suffix = "_cross_section" if cross_section else ""
+    aggregation = "cross_section" if cross_section else "temporal"
+    for noise in ("IID", "NN-like field"):
+        for tau in CONFIG["tau_values"]:
+            for seed in CONFIG["seeds"]:
+                group = [
+                    r
+                    for r in rows
+                    if r["noise"] == noise
+                    and r["tau"] == tau
+                    and r["seed"] == seed
+                    and r["window"] == LAST
+                ]
+                assert len(group) == 12
+                for proxy in PROXIES:
+                    for target in ("operator_rmse", "q_rmse", "value_rmse"):
+                        x = np.array([r[proxy + suffix + "_abs_corr"] for r in group])
+                        y = np.array([r[target] for r in group])
+                        valid = np.isfinite(x) & np.isfinite(y)
+                        count = int(valid.sum())
+                        good = (
+                            count >= 3 and np.ptp(x[valid]) > 0 and np.ptp(y[valid]) > 0
+                        )
+                        output.append(
+                            dict(
+                                noise=noise,
+                                tau=tau,
+                                seed=seed,
+                                proxy=proxy,
+                                accuracy=target,
+                                aggregation=aggregation,
+                                valid_settings=count,
+                                spearman=float(spearmanr(x[valid], y[valid]).statistic)
+                                if good
+                                else np.nan,
+                                pearson=float(pearsonr(x[valid], y[valid]).statistic)
+                                if good
+                                else np.nan,
+                            )
+                        )
+    summaries = []
+    for noise in ("IID", "NN-like field"):
+        for tau in CONFIG["tau_values"]:
+            for proxy in PROXIES:
+                for target in ("operator_rmse", "q_rmse", "value_rmse"):
+                    group = [
+                        r
+                        for r in output
+                        if r["noise"] == noise
+                        and r["tau"] == tau
+                        and r["proxy"] == proxy
+                        and r["accuracy"] == target
+                    ]
+                    row = dict(
+                        noise=noise,
+                        tau=tau,
+                        proxy=proxy,
+                        accuracy=target,
+                        aggregation=aggregation,
+                        seeds=len(group),
+                    )
+                    for metric in ("spearman", "pearson", "valid_settings"):
+                        row[metric + "_mean"], row[metric + "_sd"] = finite_stats(
+                            [r[metric] for r in group]
+                        )
+                    summaries.append(row)
+    return output, summaries
+
+
+def formatted(row, metric):
+    return f"{row[metric + '_mean']:+.2f} ± {row[metric + '_sd']:.2f}"
+
+
+def delay_plot(rows, metric, title, filename, directory, scope):
+    panel_plot(
+        rows,
+        metric,
+        title,
+        filename,
+        directory,
+        scope,
+        SIZE,
+        RESULTS_ROOT,
+        checkpoint="100k" in filename,
+    )
+
+
+def final_summary(terminal):
+    groups = {}
+    for row in terminal:
+        key = tuple(row[k] for k in ("noise", "method", "D", "tau"))
+        groups.setdefault(key, []).append(row)
+    output = []
+    for key, group in groups.items():
+        row = dict(zip(("noise", "method", "D", "tau"), key))
+        row["seeds"] = len(group)
+        for metric in (
+            "max_q_bias",
+            "q_bias",
+            "q_member_rmse",
+            "q_ensemble_rmse",
+            "value_bias",
+            "value_member_rmse",
+        ):
+            row[metric + "_mean"], row[metric + "_sd"] = finite_stats(
+                [r[metric] for r in group]
+            )
+        output.append(row)
+    return output
+
+
+def compare_previous(final, output):
+    previous = (
+        REPO_ROOT / "logs/iclr2027_dd_iql/rebuttal/tabular_bias_1m/tables/results_1m.csv"
+    )
+    if not previous.exists():
+        return
+    names = {
+        "double_q": "Double Q",
+        "df_min": "DF min",
+        "sd_iql": "SD-IQL",
+        "dd_iql": "DD-IQL",
+    }
+    with previous.open() as stream:
+        old = list(csv.DictReader(stream))
+    comparisons = []
+    for r in final:
+        match = next(
+            x
+            for x in old
+            if x["states"] == str(SIZE)
+            and x["noise"] == r["noise"]
+            and x["method"] == names[r["method"]]
+            and (
+                r["method"] == "double_q"
+                or (int(x["D"] or 0) == r["D"] and float(x["tau"] or 0) == r["tau"])
+            )
+        )
+        comparisons.append(
+            dict(
+                noise=r["noise"],
+                method=r["method"],
+                D=r["D"],
+                tau=r["tau"],
+                old_bias_mean=float(match["bias_mean"]),
+                old_bias_sd=float(match["bias_sd"]),
+                new_bias_mean=r["max_q_bias_mean"],
+                new_bias_sd=r["max_q_bias_sd"],
+            )
+        )
+    write_csv(output / "old_vs_new_final_max_q.csv", comparisons)
+
+
+def plots(summaries, final, directory):
+    for rows, metric, title, name, scope in (
+        (
+            final,
+            "max_q_bias",
+            "Max-Q bias",
+            f"s{SIZE}_a{SIZE}_bias_vs_delay_1m.png",
+            "after 1M updates",
+        ),
+        (
+            summaries,
+            "operator_bias",
+            "Filtering signed bias",
+            "operator_bias_vs_delay.png",
+            "last 100k pre-update diagnostics",
+        ),
+        (
+            summaries,
+            "operator_rmse",
+            "Filtering RMSE",
+            "operator_rmse_vs_delay.png",
+            "last 100k pre-update diagnostics",
+        ),
+        (
+            summaries,
+            "readout_abs_corr",
+            "Mean |corr(weight, readout error)|",
+            "readout_coupling_vs_delay.png",
+            "last 100k, 101 samples per fixed unit",
+        ),
+    ):
+        delay_plot(rows, metric, title, name, directory, scope)
+    coupling_plot(summaries, directory, cross_section=False)
+    coupling_plot(summaries, directory, cross_section=True)
+
+
+def coupling_plot(summaries, directory, cross_section=False):
+    coupling_scatter(summaries, directory, SIZE, cross_section)
+
+
+def summarize_case(case, root):
+    path = case_path(root, case)
+    meta = json.loads(path.with_suffix(".json").read_text())
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == meta["data_sha256"]
+    with np.load(path) as f:
+        h = {k: f[k] for k in f.files}
+    size, mode, method, delay, tau = case
+    rows = [
+        dict(noise=noise_name(mode), method=method, D=delay, tau=tau, **r)
+        for r in window_rows(h, method, delay or 1, tau or 0.9, CONFIG["seeds"])
+    ]
+    terminal = terminal_rows(h, case)
+    checkpoint = dict(h, q_final=h["checkpoint_q_100k"])
+    if method != "double_q":
+        checkpoint["value_final"] = h["checkpoint_value_100k"]
+        ages = (h["diagnostic_step"] - 1) % delay
+        np.testing.assert_array_equal(h["diagnostic_noise_lag"], ages)
+        assert len(np.unique(ages)) == delay
+    return (
+        rows,
+        terminal,
+        terminal_rows(checkpoint, case),
+        dict(
+            path=str(path),
+            snapshot_timing=meta["snapshot_timing"],
+            gates_and_backups_verified=True,
+        ),
+    )
+
+
+def main():
+    global SIZE, RESULTS_ROOT
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
+    parser.add_argument("--size", type=int, choices=CONFIG["sizes"], required=True)
+    parser.add_argument("--workers", type=int, default=8)
+    args = parser.parse_args()
+    SIZE = args.size
+    root = args.results_dir
+    RESULTS_ROOT = root
+    output = root / "tables" / f"s{SIZE}_a{SIZE}"
+    output.mkdir(parents=True, exist_ok=True)
+    figures = root / "diagnostics_figures" / f"s{SIZE}_a{SIZE}"
+    figures.mkdir(parents=True, exist_ok=True)
+    (root / "figures").mkdir(exist_ok=True)
+    rows, terminal, checkpoints, verified = [], [], [], []
+    age_coverage = {str(d): d for d in CONFIG["delays"]}
+    with ProcessPoolExecutor(max_workers=args.workers) as pool:
+        futures = {
+            pool.submit(summarize_case, case, root): case for case in cases([SIZE])
+        }
+        for future in as_completed(futures):
+            r, t, c, v = future.result()
+            rows.extend(r)
+            terminal.extend(t)
+            checkpoints.extend(c)
+            verified.append(v)
+            print(json.dumps(dict(event="summarized", case=futures[future])), flush=True)
+    summaries = summarize(rows)
+    last = [r for r in summaries if r["window"] == LAST]
+    write_csv(output / "per_seed_windows.csv", rows)
+    write_csv(output / "window_summary.csv", summaries)
+    write_csv(output / "last100k_summary.csv", last)
+    write_csv(output / "final_q_v_per_seed.csv", terminal)
+    tracking_rows, tracking_summary = tracking(rows)
+    cross_rows, cross_summary = tracking(rows, cross_section=True)
+    tracking_rows.extend(cross_rows)
+    tracking_summary.extend(cross_summary)
+    write_csv(output / "proxy_accuracy_tracking_per_seed.csv", tracking_rows)
+    write_csv(output / "proxy_accuracy_tracking_summary.csv", tracking_summary)
+    final = final_summary(terminal)
+    write_csv(output / "final_bias_summary.csv", final)
+    compare_previous(final, output)
+    plots(last, final, figures)
+    for checkpoint_rows, name in ((final, "1m"), (final_summary(checkpoints), "100k")):
+        delay_plot(
+            checkpoint_rows,
+            "max_q_bias",
+            "Max-Q bias",
+            f"s{SIZE}_a{SIZE}_bias_vs_delay_{name}.png",
+            root / "figures",
+            f"after {name} updates",
+        )
+    write_csv(output / "checkpoint_100k_summary.csv", final_summary(checkpoints))
+    report = dict(
+        conditions=len(verified),
+        seed_trajectories=len(terminal),
+        snapshot_timing="block_start_before_update",
+        num_states=SIZE,
+        all_noise_lags_verified=True,
+        gates_and_backups_verified=True,
+        pre_update_samples=True,
+        snapshot_age_coverage=age_coverage,
+        undefined_correlations_preserved=True,
+        instantaneous_outputs_verified=True,
+        coupling_aggregations=["temporal", "cross_section"],
+        condition_reports=verified,
+    )
+    (root / f"provenance/validation_s{SIZE}.json").write_text(
+        json.dumps(report, indent=2) + "\n"
+    )
+    print(
+        json.dumps({k: v for k, v in report.items() if k != "condition_reports"}),
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -19,10 +19,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 try:
-    from utils.iclr_2027_dd_iql.tabular_dd_iql import (
+    from utils.iclr2027_dd_iql.tabular_dd_iql import (
         dd_iql_filter_indices,
         dd_iql_update,
         validate_dd_iql_config,
+    )
+    from utils.iclr2027_dd_iql.tabular_q_backups import (
+        CLIPPED_Q_BACKUPS,
+        clipped_q_bootstrap,
     )
 except ModuleNotFoundError:
     from tabular_dd_iql import (
@@ -30,6 +34,7 @@ except ModuleNotFoundError:
         dd_iql_update,
         validate_dd_iql_config,
     )
+    from tabular_q_backups import CLIPPED_Q_BACKUPS, clipped_q_bootstrap
 
 
 # ============================================================
@@ -391,6 +396,8 @@ def train(
     expectile_tau=0.7,
     alpha_v=None,
     q_target_tau=0.005,
+    clipped_q_backup="max_min",
+    df_reduction="min",
 ):
     """Train one tabular algorithm with the requested noise mechanism.
 
@@ -429,6 +436,9 @@ def train(
     Generalized Clipped Double Q when N>2:
       For each candidate, take the MIN over all N estimators; then MAX over
       candidates; apply that shared target to each of the N estimators.
+      clipped_q_backup='min_max' reverses the reductions: min_i max_a Q_i.
+      'max_mean' uses max_a mean_i Q_i. All three use a shared Q-learning
+      backup; no learned V, expectile, or delay participates in that backup.
 
     method='dd_iql' (tabular DD-IQL, default cross filtering):
       Q_i(s,a) <- (1-alpha) Q_i(s,a) + alpha [r + gamma V_i(s')].
@@ -455,6 +465,8 @@ def train(
       the gate uses current observations, matching standard IQL and the JAX
       DF implementation. All three IQL variants share this D=1 observation
       convention. For D>1, the observed noisy function is frozen at refresh.
+      df_reduction='mean' replaces critic min by mean in BOTH the V target
+      and filtering advantage, providing a separate ablation of DF-IQL.
     """
     if noise_mode not in NOISE_MODES:
         raise ValueError(f"noise_mode must be one of {NOISE_MODES}")
@@ -468,6 +480,8 @@ def train(
         raise ValueError("num_updates and log_every must be >= 1")
     if method in ("double_q", "clipped_double_q") and double_num_q < 2:
         raise ValueError("Double/Clipped Double Q require double_num_q >= 2")
+    if method == "clipped_double_q" and clipped_q_backup not in CLIPPED_Q_BACKUPS:
+        raise ValueError(f"clipped_q_backup must be one of {CLIPPED_Q_BACKUPS}")
     if method == "dd_q" and (dd_num_q < 2 or dd_delay_steps < 1):
         raise ValueError("DD-Q requires dd_num_q >= 2 and dd_delay_steps >= 1")
     if alpha_v is None:
@@ -477,7 +491,10 @@ def train(
             raise ValueError("IQL variants require N>=1, D>=1, and K=1")
         if method == "df_iql" and dd_num_q != 2:
             raise ValueError("DF-IQL uses exactly two critics and one shared V")
+        if method == "df_iql" and df_reduction not in ("min", "mean"):
+            raise ValueError("df_reduction must be 'min' or 'mean'")
         validate_dd_iql_config(alpha, alpha_v, expectile_tau, q_target_tau)
+    df_reduce = np.min if df_reduction == "min" else np.mean
 
     if method == "q_learning":
         n = 1
@@ -599,12 +616,12 @@ def train(
                 noise_sigma, 1, rng,
             )
             if method == "df_iql":
-                observed_target_q = np.min(observed_target_q, keepdims=True)
+                observed_target_q = df_reduce(observed_target_q, keepdims=True)
                 # D=1 follows delayed_iql_jax.py: ordinary IQL's current gate.
                 delayed_advantage = (
                     observed_target_q - Vs[:, r, c]
                     if dd_delay_steps == 1
-                    else np.min(delayed_view.at(state)[:, action, 0], keepdims=True)
+                    else df_reduce(delayed_view.at(state)[:, action, 0], keepdims=True)
                     - V_delayed[:, r, c]
                 )
             else:
@@ -643,8 +660,9 @@ def train(
 
             elif method == "clipped_double_q":
                 # N=2 is exactly the original pairwise minimum.
-                clipped_candidates = np.min(online_next, axis=0)
-                common_target = reward + gamma * np.max(clipped_candidates)
+                common_target = reward + gamma * clipped_q_bootstrap(
+                    online_next.reshape(n, -1), clipped_q_backup
+                )
                 targets = np.full(n, common_target, dtype=float)
 
             else:  # DD-Q
@@ -775,6 +793,7 @@ NUM_UPDATES = 20_000
 ALPHA = 0.1
 ALPHA_V = 0.1
 EXPECTILE_TAU = 0.7
+DF_REDUCTION = "min"  # "mean" changes both the DF V target and its filter.
 Q_TARGET_TAU = 0.005  # Q_target <- (1-tau_target) Q_target + tau_target Q
 GAMMA = 0.99
 EPSILON = 0.1
@@ -826,6 +845,7 @@ FIELD_STUDENT_DF = 5.0
 # N=2 preserves the original Double Q update rule.
 DOUBLE_Q_CONFIGS = [2,]
 CLIPPED_DOUBLE_Q_CONFIGS = [2,]
+CLIPPED_Q_BACKUP = "max_min"  # Alternatives: "min_max", "max_mean".
 
 # DD-IQL (or legacy DD-Q) configurations
 # Each tuple is (N, D):
@@ -890,6 +910,12 @@ if "DD-IQL (tabular)" in RUN_METHODS:
         f"dd_iql_H{GRID_HEIGHT}_W{GRID_WIDTH}_expectile{EXPECTILE_TAU:g}"
         f"_alphaQ{ALPHA:g}_alphaV{ALPHA_V:g}_target{Q_TARGET_TAU:g}",
     )
+
+if "Clipped Double Q" in RUN_METHODS and CLIPPED_Q_BACKUP != "max_min":
+    SAVE_DIR = os.path.join(SAVE_DIR, f"clipped_{CLIPPED_Q_BACKUP}")
+
+if "DF-IQL (tabular)" in RUN_METHODS and DF_REDUCTION != "min":
+    SAVE_DIR = os.path.join(SAVE_DIR, f"df_{DF_REDUCTION}")
 
 FIGURE_DIR = os.path.join(SAVE_DIR, "figures")
 TABLE_DIR = os.path.join(SAVE_DIR, "tables")
@@ -1215,6 +1241,8 @@ def main():
         alpha_v=ALPHA_V,
         expectile_tau=EXPECTILE_TAU,
         q_target_tau=Q_TARGET_TAU,
+        clipped_q_backup=CLIPPED_Q_BACKUP,
+        df_reduction=DF_REDUCTION,
         gamma=GAMMA,
         epsilon=EPSILON,
         noise_mode=NOISE_MODE,
@@ -1249,6 +1277,8 @@ def main():
             )
             for n in configs:
                 result_name = f"{name} (N={n})"
+                if method == "clipped_double_q" and CLIPPED_Q_BACKUP != "max_min":
+                    result_name += f" [{CLIPPED_Q_BACKUP}]"
                 results[result_name] = run_method_over_seeds(
                     result_name=result_name, method=method,
                     common_args=common_args, seeds=SEEDS,
@@ -1264,6 +1294,8 @@ def main():
             label = (
                 "DD-Q" if method == "dd_q" else name.replace(" (tabular)", " tabular")
             )
+            if method == "df_iql" and DF_REDUCTION != "min":
+                label += f" {DF_REDUCTION}"
             for n, delay in DD_Q_CONFIGS:
                 result_name = f"{label} (N={n}, D={delay})"
                 results[result_name] = run_method_over_seeds(

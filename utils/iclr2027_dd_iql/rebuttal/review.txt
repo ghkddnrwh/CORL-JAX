@@ -1,0 +1,89 @@
+Official Review of Submission59360 by Reviewer J5QD
+Official Reviewby Reviewer J5QD21 Oct 2026, 19:12 (modified: 06 Nov 2026, 21:40)EveryoneRevisions
+Paper Summary:
+The paper studies bias caused by using noisy value estimates to construct adaptive filtering weights. It proposes delayed and cross-estimator filtering and implements them in DD-IQL, with an additional ReBRAC variant. Experiments on OGBench report improved value stability and policy performance, particularly at high discount factors and expectile levels.
+
+Presentation: 3: Clear and easy to follow.
+Informativeness: 2: I learned something interesting or useful.
+Soundness: 2: I have minor or fixable concerns about the paper’s soundness.
+Critical Strengths:
+The paper identifies a useful limitation of in-sample value learning: avoiding explicit maximization does not remove the dependence between selection weights and estimation errors. The filtered-expectation formulation makes this issue clear and gives a direct motivation for separating weight construction from the estimator being updated.
+
+The experiments include standard settings, deliberately difficult settings, and additional task variants. The two-critic ablations are particularly useful because they show that cross-estimator filtering can help under high-discount or high-expectile settings without increasing the number of critics.
+
+Critical Weaknesses:
+The main comparisons do not fully isolate filtering from ensemble size and aggregation. DD-IQL uses 20 paired estimators, while DD-ReBRAC uses 50 critics against two-critic baselines. DD-ReBRAC also replaces minimum aggregation with a mean. The two-critic ablations help, but DD-IQL does not improve over IQL in the standard setting there. Controls at the main ensemble sizes are needed to establish how much of the headline gain comes from the proposed filtering mechanisms.
+
+The diagnostics establish weaker coupling to learned error proxies, but do not directly measure reduced value bias. TD residuals, temporal drift, and leave-one-out ensemble disagreement are not independent reference values. Since the estimators share data and bootstrapped targets, reduced correlation does not establish the conditional unbiasedness used in the analysis. This leaves the proposed explanation of the performance gains only partly validated.
+
+Questions For Authors:
+Please address the concerns listed in the Weaknesses section above.
+
+Flag For Ethics Review: No
+Rating: 2: Weak rejection
+Confidence: 3: I am familiar with this topic and its relevant literature.
+Add:
+Official Review of Submission59360 by Reviewer RYwJ
+Official Reviewby Reviewer RYwJ21 Oct 2026, 13:00 (modified: 06 Nov 2026, 21:40)EveryoneRevisions
+Paper Summary:
+This paper studies filtering-induced estimation bias in offline reinforcement learning. It interprets IQL's expectile update as a filtered expectation and explains how using noisy value estimates to construct filtering weights can couple those weights to estimation errors, even without explicit action maximization. It proposes delayed filtering from periodically refreshed snapshots and decoupled filtering across estimators, yielding Delayed Decoupled IQL (DD-IQL), and also evaluates a related ReBRAC extension. Experiments on nine OGBench environments compare original and high-discount/high-expectile settings, with additional task variants, component ablations, correlation diagnostics, and computational profiling. The reported results show more stable values and improved performance relative to IQL, particularly under bias stress. The diagnostics use TD residuals and ensemble disagreement as proxies rather than direct measurements of value error.
+
+Presentation: 3: Clear and easy to follow.
+Informativeness: 2: I learned something interesting or useful.
+Soundness: 2: I have minor or fixable concerns about the paper’s soundness.
+Critical Strengths:
+The filtered-expectation view is useful. It explains why value-dependent weighting can introduce bias even without explicit action maximization.
+Delay and cross-estimator filtering are practical ideas with a clear rationale. The paper also acknowledges their limits, including persistent and correlated errors.
+The evaluation goes beyond returns. It includes component ablations, stability checks, coupling diagnostics, and computational measurements. The bias-stress results are encouraging.
+Critical Weaknesses:
+The evidence for bias reduction is still indirect. Weaker coupling and more stable values do not necessarily mean more accurate estimates. A direct test would help.
+The main comparisons also change ensemble capacity and estimator structure. More closely matched controls are needed to show what filtering itself contributes.
+The added value of delay after decoupling is unclear. Its benefits outside stress settings also need explanation. I lean slightly negative for now. If these concerns are resolved, I would consider raising my score.
+Questions For Authors:
+Can you measure bias against a known noise-free filtering target in a controlled example? Please check underestimation as well. Do the coupling diagnostics track actual accuracy?
+How do ensemble IQL, self-delayed filtering, and DD-IQL compare with matched capacity, structure, and training budget? A representative matched ReBRAC comparison would also help.
+What does delay add once filtering is decoupled? The delay ablation looks fairly stable across several settings. Where does delay help beyond decoupling alone, including under standard conditions?
+Flag For Ethics Review: No
+Rating: 2: Weak rejection
+Confidence: 4: I have substantial direct research experience on this topic.
+Add:
+Official Review of Submission59360 by Reviewer Dr6n
+Official Reviewby Reviewer Dr6n04 Oct 2026, 20:07 (modified: 06 Nov 2026, 21:40)EveryoneRevisions
+Paper Summary:
+This paper analyzes “filtering-induced bias,” which can arise when filtering weights depend on noisy value estimates in offline RL. Focusing on IQL, the authors propose delayed and decoupled filtering, which constructs filtering weights from delayed Q/V snapshots of a different estimator than the one being updated. The proposed method achieves substantial empirical gains under high bias-stress settings.
+
+Presentation: 2: Generally understandable, but requires substantial effort in places.
+Informativeness: 1: I learned little or nothing new from this paper.
+Soundness: 1: I have significant concerns about the paper’s soundness that do not appear easy to address.
+Critical Strengths:
+The paper investigates filtering-induced bias in a reasonable problem setting.
+The paper investigates filtering-induced bias through mathematical analysis. The reasoning is coherent and easy to follow, and the experiments are designed to further examine this phenomenon.
+
+Critical Weaknesses:
+The practical significance of filtering-induced bias needs clarification.
+Prior IQL results show that larger expectiles can improve performance on long-horizon tasks requiring trajectory stitching. While this does not rule out filtering-induced bias, it raises the question of when harmful bias outweighs beneficial policy improvement. The experiments do not sufficiently clarify this trade-off or establish whether appropriate expectile tuning could address the observed degradation.
+
+The contribution of delayed filtering beyond existing stabilization techniques is unclear.
+Delayed updates are widely used: DQN periodically synchronizes its target Q-network [1], while continuous-control methods use soft target updates to stabilize value learning [2]. Although the proposed method applies delay to filtering weights and additionally introduces cross-estimator decoupling, the benefit of its delayed component beyond existing target-network mechanisms remains unclear. Comparisons against slower soft updates or periodic target synchronization would help establish this contribution.
+
+The experimental comparisons are not fair.
+The table1 does not adequately support the authors’ claims. First, increasing the number of ensemble models can improve performance [3], but the paper uses a different number of models from the baseline algorithm, making the comparison unfair. Second, following the paper’s reasoning, slower soft target updates could also be effective. However, the paper does not compare against smaller soft-update rates. Therefore, the experimental support for the authors’ claims is weak.
+
+The paper’s readability is poor.
+The terms “filtered expectation” and “filtering weights” are introduced in the introduction, but they are difficult to understand because they are not defined until Section 5.
+
+Table 1 contains many numbers. Would it be clearer to report success rates as percentages rather than raw values?
+
+[1] Mnih, Volodymyr, et al. "Human-level control through deep reinforcement learning." nature 518.7540 (2015): 529-533.
+
+[2] Fujimoto, Scott, Herke Hoof, and David Meger. "Addressing function approximation error in actor-critic methods." International conference on machine learning. Pmlr, 2018.
+
+[3] An, Gaon, et al. "Uncertainty-based offline reinforcement learning with diversified q-ensemble." Advances in neural information processing systems 34 (2021): 7436-7447.
+
+Questions For Authors:
+How does the proposed method differ from existing methods that use soft target updates or periodic critic synchronization?
+Could you compare the proposed method against a target network updated more slowly using a smaller soft-update rate?
+Why do you use more ensemble networks than the baseline?
+Flag For Ethics Review: No
+Rating: 1: Clear rejection
+Confidence: 4: I have substantial direct research experience on this topic.

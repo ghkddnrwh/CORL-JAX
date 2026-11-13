@@ -42,10 +42,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 try:
-    from utils.iclr_2027_dd_iql.tabular_dd_iql import (
+    from tabular_dd_iql import (
         dd_iql_filter_indices,
         dd_iql_update,
         validate_dd_iql_config,
+    )
+    from tabular_q_backups import (
+        CLIPPED_Q_BACKUPS,
+        clipped_q_bootstrap,
     )
 except ModuleNotFoundError:
     from tabular_dd_iql import (
@@ -53,6 +57,7 @@ except ModuleNotFoundError:
         dd_iql_update,
         validate_dd_iql_config,
     )
+    from tabular_q_backups import CLIPPED_Q_BACKUPS, clipped_q_bootstrap
 
 
 def get_methods(dd_method="dd_iql"):
@@ -95,15 +100,22 @@ def run_batch(
     expectile_tau=0.7,
     alpha_v=None,
     q_target_tau=0.005,
+    clipped_q_backup="max_min",
+    df_reduction="min",
 ):
     if method not in (*get_methods("dd_iql"), "dd_q", "sd_iql", "df_iql"):
         raise ValueError(f"Unknown method: {method}")
+    if method == "clipped_double_q" and clipped_q_backup not in CLIPPED_Q_BACKUPS:
+        raise ValueError(f"clipped_q_backup must be one of {CLIPPED_Q_BACKUPS}")
     if dd_delay_steps < 1 or log_every < 1:
         raise ValueError("dd_delay_steps and log_every must be >= 1")
     if alpha_v is None:
         alpha_v = alpha
     if method in IQL_METHODS:
         validate_dd_iql_config(alpha, alpha_v, expectile_tau, q_target_tau)
+    if method == "df_iql" and df_reduction not in ("min", "mean"):
+        raise ValueError("df_reduction must be 'min' or 'mean'")
+    df_reduce = np.min if df_reduction == "min" else np.mean
     seeds, updates = actions.shape
     num_states = noise.shape[3] if noise.ndim == 5 else 1
     num_actions = noise.shape[-1]
@@ -147,11 +159,13 @@ def run_batch(
             if method == "df_iql":
                 # Appendix D.3: clipped critics regress one shared V.
                 # The JAX DF implementation uses current weights at D=1.
-                observed_target_q = observed_target_q.min(axis=1, keepdims=True)
+                observed_target_q = df_reduce(observed_target_q, axis=1, keepdims=True)
                 delayed_adv = (
                     observed_target_q - value[index, :, state]
                     if dd_delay_steps == 1
-                    else delayed[index, :, state, action].min(axis=1, keepdims=True)
+                    else df_reduce(
+                        delayed[index, :, state, action], axis=1, keepdims=True
+                    )
                     - value_delayed[index, :, state]
                 )
             else:
@@ -188,7 +202,7 @@ def run_batch(
         elif method == "q_learning":
             targets = gamma * view[:, 0].max(axis=1)[:, None]
         elif method == "clipped_double_q":
-            targets = gamma * view.min(axis=1).max(axis=1)[:, None]
+            targets = gamma * clipped_q_bootstrap(view, clipped_q_backup)[:, None]
         elif method == "double_q":
             selected = view.argmax(axis=2)
             targets = gamma * np.stack(
@@ -256,6 +270,8 @@ def check_against_original(
     expectile_tau=0.7,
     alpha_v=None,
     q_target_tau=0.005,
+    clipped_q_backup="max_min",
+    df_reduction="min",
 ):
     """Check every target/update against train() on the same recorded data.
 
@@ -344,6 +360,8 @@ def check_against_original(
             expectile_tau=expectile_tau,
             alpha_v=alpha_v,
             q_target_tau=q_target_tau,
+            clipped_q_backup=clipped_q_backup,
+            df_reduction=df_reduction,
         )
         batched = run_batch(
             method,
@@ -358,6 +376,8 @@ def check_against_original(
             expectile_tau=expectile_tau,
             alpha_v=alpha_v,
             q_target_tau=q_target_tau,
+            clipped_q_backup=clipped_q_backup,
+            df_reduction=df_reduction,
         )
         for key in ["v_bias", "q_rmse"]:
             np.testing.assert_allclose(
@@ -498,6 +518,10 @@ def main():
     )
     parser.add_argument("--q-target-tau", type=float, default=0.005)
     parser.add_argument(
+        "--clipped-q-backup", choices=CLIPPED_Q_BACKUPS, default="max_min"
+    )
+    parser.add_argument("--df-reduction", choices=["min", "mean"], default="min")
+    parser.add_argument(
         "--behavior", choices=["uniform", "epsilon_greedy"], default="uniform"
     )
     parser.add_argument("--epsilon", type=float, default=0.1)
@@ -535,12 +559,17 @@ def main():
         except ValueError as error:
             parser.error(str(error))
     methods = get_methods(args.dd_method)
+    methods["clipped_double_q"] += f", backup={args.clipped_q_backup}"
+    if args.dd_method == "df_iql":
+        methods["df_iql"] += f", critic {args.df_reduction}"
     args.output_dir.mkdir(parents=True, exist_ok=False)
     source_path = Path(__file__).with_name("compare_tabular_methods.py")
     source = source_path.read_text()
     (args.output_dir / "compare_tabular_methods_snapshot.py").write_text(source)
     helper_source = source_path.with_name("tabular_dd_iql.py").read_text()
     (args.output_dir / "tabular_dd_iql.py").write_text(helper_source)
+    backup_source = source_path.with_name("tabular_q_backups.py").read_text()
+    (args.output_dir / "tabular_q_backups.py").write_text(backup_source)
     (args.output_dir / "driver_snapshot.py").write_text(Path(__file__).read_text())
     seed_ids = list(range(args.seed_start, args.seed_start + args.num_seeds))
     noise = make_noise(
@@ -588,6 +617,8 @@ def main():
         args.expectile_tau,
         args.alpha_v,
         args.q_target_tau,
+        args.clipped_q_backup,
+        args.df_reduction,
     )
     print("REFERENCE_CHECKS", json.dumps(checks), flush=True)
     metadata = {
@@ -634,10 +665,16 @@ def main():
         "expectile_tau": args.expectile_tau,
         "alpha_v": args.alpha_v,
         "q_target_tau": args.q_target_tau,
+        "clipped_q_backup": args.clipped_q_backup,
+        "df_reduction": args.df_reduction,
+        "backup_helper_sha256": hashlib.sha256(backup_source.encode()).hexdigest(),
         "iql_filter": {
             "dd_iql": "cross; delayed peer Q_target - V",
             "sd_iql": "self; delayed own Q_target - V",
-            "df_iql": "shared V; delayed min Q_target - V; current gate at D=1",
+            "df_iql": (
+                f"shared V; delayed critic {args.df_reduction} Q_target - V; "
+                "current gate at D=1"
+            ),
             "dd_q": "legacy delayed peer argmax",
         }[args.dd_method],
         "dd_iql_noise": "Q observations only; V learns from noisy target Q",
@@ -680,6 +717,8 @@ def main():
                 args.expectile_tau,
                 args.alpha_v,
                 args.q_target_tau,
+                args.clipped_q_backup,
+                args.df_reduction,
             )
             results[gamma][method] = history
             np.savez_compressed(

@@ -1,0 +1,74 @@
+[
+  {
+    "path": "validate.py",
+    "sha256": "da12e6071a342d79da8753abffdf9d06b42ede029c02ac42bd00085cf933563a"
+  },
+  {
+    "path": "requirements.txt",
+    "sha256": "a9272b29574dc5318369a2352e69787b05f803eebade91777d167c8665aab08a"
+  },
+  {
+    "path": "experiment_config.json",
+    "sha256": "481ec4619ab60e41bdddf425a7a4fe2fa7e1c5ead1d7ee0f61dd95c2db6b3973"
+  },
+  {
+    "path": "README.md",
+    "sha256": "9103bcb086c7b4dc1f2b763219ab8c4ef09b3585c7faf926fcf47b232ea7b373"
+  },
+  {
+    "path": "common.py",
+    "sha256": "f7349304968d89f5c2db43ff50a209db1e0864a166f2334fbc9f7a22eb6714a2"
+  },
+  {
+    "path": "run_experiment.py",
+    "sha256": "628feab298386357e0aee7a4bfdd529ba91c96ed2bc22fe02240fc5509940d75"
+  },
+  {
+    "path": "engine.py",
+    "sha256": "3412cc59cd6b7a909b3c0048aaf383dfdc34321644906f05fc83e74ac66800b7"
+  },
+  {
+    "path": "plot_results.py",
+    "sha256": "0a3e30c7f6438cd1074438a299d7740a69ed185b15dc9ff7d3c7cda610ef460b"
+  },
+  {
+    "path": "diagnostics/validate.py",
+    "sha256": "bfa9d22067408f70eed99765fe0c2ecb2cd182d01df1ad5802e3ff712addff47"
+  },
+  {
+    "path": "diagnostics/report.py",
+    "sha256": "5205cafbf375857d08e27ff3d774c262cc7f4d46f06949dc319bdbd8eb520cbf"
+  },
+  {
+    "path": "diagnostics/measure.py",
+    "sha256": "b1ec47b883b95743aaf27367796ad4140d9028b4ef15e1c517efa5bf5f592cb8"
+  },
+  {
+    "path": "diagnostics/capture.py",
+    "sha256": "a0993157cb483db71922538990aacd2d8bf1fc32ca06cecf76914cc568ece80b"
+  },
+  {
+    "path": "diagnostics/run_replay.py",
+    "sha256": "4ff27d1c5932a27145ac037227ac5bc3c710163d2a37103f90ed2d3671df652a"
+  },
+  {
+    "path": "diagnostics/README.md",
+    "sha256": "7779faa2c673fdf0aa06f0a4b1063aeb9aea1c17aa6b17e75cadd2818cebc942"
+  },
+  {
+    "path": "reference/tabular_q_backups.py",
+    "sha256": "66faa2494bfaec4fa7a8da642429b00bb41d063b13cd9a79b38d62fa539ff653"
+  },
+  {
+    "path": "reference/compare_tabular_methods.py",
+    "sha256": "9b697e8782f771465ca2b012760a8a2e6cf12b71cb99619786e1a2e6afe87c2d"
+  },
+  {
+    "path": "reference/stress_iid_min_ddq_bias.py",
+    "sha256": "c6db31c098a881006f049f10a8c97de24f6857d6db4dfc4428a0c4a02ecd6a5b"
+  },
+  {
+    "path": "reference/tabular_dd_iql.py",
+    "sha256": "1ffa870fa9cec34e47df34910f6b8640e78af752ab18e8787c80bac2927f2186"
+  }
+]

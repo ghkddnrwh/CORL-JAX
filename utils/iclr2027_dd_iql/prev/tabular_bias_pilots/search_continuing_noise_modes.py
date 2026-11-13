@@ -8,6 +8,10 @@ Use separate seed IDs for confirmation after choosing a pilot configuration.
 import argparse
 import json
 from pathlib import Path
+import sys
+
+CORE_DIR = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(CORE_DIR))
 
 import numpy as np
 from stress_iid_min_ddq_bias import make_noise, run_batch, save_csv
@@ -37,7 +41,7 @@ def main():
             args.alpha, args.alpha_v, args.expectile_tau, args.q_target_tau
         )
     args.output_dir.mkdir(parents=True, exist_ok=False)
-    source_path = Path(__file__).with_name("compare_tabular_methods.py")
+    source_path = CORE_DIR / "compare_tabular_methods.py"
     source = source_path.read_text()
     seed_ids = list(range(args.num_seeds))
     actions = np.stack(

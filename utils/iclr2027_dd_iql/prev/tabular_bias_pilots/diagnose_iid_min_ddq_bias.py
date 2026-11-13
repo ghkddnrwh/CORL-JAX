@@ -19,6 +19,10 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import sys
+
+CORE_DIR = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(CORE_DIR))
 import types
 
 import matplotlib
@@ -187,7 +191,7 @@ def main():
     if args.num_seeds < 2 or args.samples < 1 or args.updates < 2000 or args.grid_width < 2:
         parser.error("Need >=2 seeds, >=1 sample, >=2000 updates and grid width >=2")
     args.output_dir.mkdir(parents=True, exist_ok=False)
-    source_path = Path(__file__).with_name("compare_tabular_methods.py")
+    source_path = CORE_DIR / "compare_tabular_methods.py"
     source = source_path.read_text()
     (args.output_dir / "compare_tabular_methods_snapshot.py").write_text(source)
     module = types.ModuleType("iid_bias_training_snapshot")
