@@ -152,6 +152,7 @@ class TrainConfig:
     # Bellman target actions. The real actor remains a single policy trained
     # against the ensemble-mean critic.
     delayed_update_period: int = 250
+    use_target_aux_actors: bool = True
     target_action_index_mode: str = "cross"  # cross, self, periodic_self
     delayed_actor_self_period: int = 5
     delayed_actor_self_count: int = 1
@@ -219,6 +220,7 @@ def validate_config(config: TrainConfig) -> None:
     assert config.checkpoint_freq > 0
     assert config.num_critics > 0
     assert config.delayed_update_period > 0
+    assert isinstance(config.use_target_aux_actors, bool)
     assert str(config.target_action_index_mode).lower() in ("cross", "self", "periodic_self")
     assert config.delayed_actor_self_period > 0
     assert config.delayed_actor_self_count > 0
@@ -977,14 +979,15 @@ class DDReBRACAgent(flax.struct.PyTreeNode):
         return network.replace(params=new_params)
 
     def _maybe_refresh_delayed_aux_actors(self, network):
-        """Hard-copy target auxiliary actors into delayed snapshots every K steps."""
+        """Hard-copy the configured auxiliary actor source into delayed snapshots every K steps."""
         completed_updates = jnp.maximum(network.step - 1, 0)
         should_refresh = (completed_updates > 0) & (
             completed_updates % int(self.config["delayed_update_period"]) == 0
         )
         new_params = dict(network.params)
         for i in range(int(self.config["num_critics"])):
-            source = network.params[f"modules_target_aux_actor_{i}"]
+            source_prefix = "target_aux_actor" if self.config["use_target_aux_actors"] else "aux_actor"
+            source = network.params[f"modules_{source_prefix}_{i}"]
             delayed = network.params[f"modules_delayed_aux_actor_{i}"]
             new_params[f"modules_delayed_aux_actor_{i}"] = jax.tree_util.tree_map(
                 lambda src, old: jnp.where(should_refresh, src, old),
@@ -1013,8 +1016,9 @@ class DDReBRACAgent(flax.struct.PyTreeNode):
         # updated only on full (policy) updates.
         if full_update:
             new_network = self._target_update(new_network, "critic")
-            for i in range(int(self.config["num_critics"])):
-                new_network = self._target_update(new_network, f"aux_actor_{i}")
+            if self.config["use_target_aux_actors"]:
+                for i in range(int(self.config["num_critics"])):
+                    new_network = self._target_update(new_network, f"aux_actor_{i}")
 
         # Delayed snapshots are a second, much slower time scale and are hard
         # refreshed independently of whether this particular step updated actors.
@@ -1068,7 +1072,8 @@ class DDReBRACAgent(flax.struct.PyTreeNode):
         )
         for i in range(int(config["num_critics"])):
             network_info[f"aux_actor_{i}"] = (deepcopy(actor_def), (ex_observations,))
-            network_info[f"target_aux_actor_{i}"] = (deepcopy(actor_def), (ex_observations,))
+            if config["use_target_aux_actors"]:
+                network_info[f"target_aux_actor_{i}"] = (deepcopy(actor_def), (ex_observations,))
             network_info[f"delayed_aux_actor_{i}"] = (deepcopy(actor_def), (ex_observations,))
 
         networks = {k: v[0] for k, v in network_info.items()}
@@ -1086,7 +1091,8 @@ class DDReBRACAgent(flax.struct.PyTreeNode):
         # controlled way rather than injecting arbitrary target-action noise at t=0.
         for i in range(int(config["num_critics"])):
             params[f"modules_aux_actor_{i}"] = deepcopy(params["modules_actor"])
-            params[f"modules_target_aux_actor_{i}"] = deepcopy(params["modules_actor"])
+            if config["use_target_aux_actors"]:
+                params[f"modules_target_aux_actor_{i}"] = deepcopy(params["modules_actor"])
             params[f"modules_delayed_aux_actor_{i}"] = deepcopy(params["modules_actor"])
 
         network = network.replace(params=params, opt_state=network_tx.init(params))
@@ -1477,6 +1483,7 @@ def fql_config_from_train_config(config: TrainConfig) -> Dict[str, Any]:
         "normalize_q": config.normalize_q,
         "num_critics": config.num_critics,
         "delayed_update_period": config.delayed_update_period,
+        "use_target_aux_actors": config.use_target_aux_actors,
         "target_action_index_mode": str(config.target_action_index_mode).lower(),
         "delayed_actor_self_period": config.delayed_actor_self_period,
         "delayed_actor_self_count": config.delayed_actor_self_count,
