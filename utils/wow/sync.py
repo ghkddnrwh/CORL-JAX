@@ -27,18 +27,18 @@ from typing import Any, Dict, List, Optional, Sequence
 
 
 # ====== 환경 설정(필요하면 여기만 바꿔도 됨) ======
-SRC_USER = "ext_jsy"
-SRC_HOST = "166.104.28.73"
+SRC_USER = "ukjo3"
+SRC_HOST = "166.104.9.137"
 # SRC_ROOT = "/home/ukjo1/work/fed_rl/moderate-rl/logs/action_robust/sam/exclude_critic/ver2/single"
 
 # DST_ROOT = "/home/ukjo2/work/fed_rl/expectile-rl/logs/action_robust/sam/exclude_critic/ver2/single"
-SRC_ROOT = "/home/ext_jsy/work/offline_rl/CORL-JAX/logs/iclr2027_tuning/basic/rebrac_jax/fql_implementation/ogbench/mean_ablation/"
+SRC_ROOT = "/home/ukjo3/work/offline_rl/CORL-JAX/logs/iclr2027/basic/iql_jax/ogbench/soft_target_ablation/long"
 
 
-DST_ROOT = "/home/ext_ukjo/work/offline_rl/CORL-JAX/logs/iclr2027_tuning/basic/rebrac_jax/fql_implementation/ogbench/mean_ablation/"
+DST_ROOT = "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/iclr2027/basic/iql_jax/ogbench/soft_target_ablation/long"
 
 # SRC_ROOT 상대 경로 기준 깊이. 예) SRC_ROOT/Ant-v4_1 이면 depth=1.
-DEFAULT_LEAF_DEPTHS = [4]
+DEFAULT_LEAF_DEPTHS = [5]
 
 # 실제 폴더 이름이 아래 값(예: "0", "1", "2", "3")과 정확히 일치해야 함.
 DEFAULT_TARGET_FOLDERS = [
@@ -57,7 +57,7 @@ SSH_OPTS = [
     "-o", "PasswordAuthentication=no",
     "-o", "StrictHostKeyChecking=no",
     "-o", "UserKnownHostsFile=/dev/null",
-    # "-p", "7031",
+    "-p", "2203",
 ]
 # ==============================================
 

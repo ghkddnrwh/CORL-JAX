@@ -175,6 +175,12 @@ class TrainConfig:
     # Keep diagnostic results in memory at diagnostic_freq resolution, but rewrite
     # the NPZ / upload the diagnostic artifact only at this coarse cadence.
     diagnostic_flush_freq: int = int(25e3)
+    # Small fixed probes complement the post-update batch summaries. Probe
+    # arrays are evaluated before the scheduled update, with stable sample IDs.
+    diagnostic_probe_size: int = 128
+    diagnostic_probe_freq: int = 2_500
+    diagnostic_save_probes: bool = True
+    diagnostic_probe_dir: Optional[str] = None
 
     checkpoint_freq: int = int(25e3)
     wandb_entity: Optional[str] = None
@@ -202,6 +208,9 @@ def validate_config(config: TrainConfig) -> None:
     assert config.diagnostic_flush_freq > 0
     assert config.diagnostic_batch_size > 1
     assert config.diagnostic_seed_offset >= 0
+    assert config.diagnostic_probe_size > 0
+    assert config.diagnostic_probe_freq > 0
+    assert config.diagnostic_probe_dir is None or config.diagnostic_probe_dir != ""
     assert config.checkpoint_freq > 0
     assert config.discount >= 0.0 and config.discount <= 1.0
     assert config.tau >= 0.0 and config.tau <= 1.0
@@ -418,13 +427,31 @@ def batch_covariance(x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
 
 
 def batch_correlation(x: jnp.ndarray, y: jnp.ndarray, eps: float = 1e-8) -> jnp.ndarray:
-    """Per-row Pearson correlation for tensors shaped [N, B]."""
+    """Per-row Pearson correlation, with undefined rows explicitly marked NaN.
+
+    A constant weight or error vector has no defined correlation. Do not turn
+    that case into zero by adding an epsilon to the Pearson denominator.
+    """
     x_centered = x - jnp.mean(x, axis=-1, keepdims=True)
     y_centered = y - jnp.mean(y, axis=-1, keepdims=True)
     cov = jnp.mean(x_centered * y_centered, axis=-1)
     x_std = jnp.sqrt(jnp.mean(x_centered ** 2, axis=-1))
     y_std = jnp.sqrt(jnp.mean(y_centered ** 2, axis=-1))
-    return cov / (x_std * y_std + eps)
+    denominator = x_std * y_std
+    valid = (
+        jnp.all(jnp.isfinite(x), axis=-1)
+        & jnp.all(jnp.isfinite(y), axis=-1)
+        & jnp.isfinite(cov)
+        & jnp.isfinite(denominator)
+        # Explicit range checks also reject constant float32 arrays when the
+        # reduction mean rounds slightly away from the identical input value.
+        & (jnp.max(x, axis=-1) > jnp.min(x, axis=-1))
+        & (jnp.max(y, axis=-1) > jnp.min(y, axis=-1))
+        & (x_std > eps)
+        & (y_std > eps)
+    )
+    safe_denominator = jnp.where(valid, denominator, jnp.ones_like(denominator))
+    return jnp.where(valid, jnp.clip(cov / safe_denominator, -1.0, 1.0), jnp.nan)
 
 
 def weighted_error_contribution(
@@ -434,6 +461,250 @@ def weighted_error_contribution(
 ) -> jnp.ndarray:
     """Per-row E[w * error] / E[w], matching the direct weighted-error term."""
     return jnp.mean(weight * error, axis=-1) / (jnp.mean(weight, axis=-1) + eps)
+
+
+# BEGIN FIXED-PROBE DIAGNOSTIC HELPERS
+# These helpers only observe model outputs. They never change a training RNG,
+# gradient, optimizer, replay sample, or target-network parameter.
+def distribution_summary(values, prefix):
+    """JAX-compatible distribution of values across the fixed dataset batch.
+
+    ``prefix='diag/q'`` gives ``diag/q_p99``, etc. Non-finite observations
+    are not silently discarded; finite_fraction explicitly reports them.
+    These are sample/state-action statistics, not disagreement across critics.
+    """
+    x = jnp.asarray(values).reshape(-1)
+    quantiles = jnp.quantile(x, jnp.asarray([0.01, 0.05, 0.50, 0.95, 0.99]))
+    result = {
+        prefix + "_mean": jnp.mean(x),
+        prefix + "_std": jnp.std(x),
+        prefix + "_min": jnp.min(x),
+        prefix + "_max": jnp.max(x),
+        prefix + "_finite_fraction": jnp.mean(jnp.isfinite(x).astype(jnp.float32)),
+    }
+    for name, value in zip(("p01", "p05", "p50", "p95", "p99"), quantiles):
+        result[prefix + "_" + name] = value
+    result[prefix + "_p99_minus_p50"] = quantiles[4] - quantiles[2]
+    result[prefix + "_max_minus_p50"] = jnp.max(x) - quantiles[2]
+    return result
+
+
+def correlation_valid_flags(metrics):
+    """Validity companions for reported Pearson statistics; NaN is undefined.
+
+    Returns only additional keys so callers can use metrics.update(...).
+    """
+    return {
+        key + "_valid": jnp.isfinite(jnp.asarray(value)).astype(jnp.float32)
+        for key, value in metrics.items()
+        if ("corr" in key.rsplit("/", 1)[-1]) and not key.endswith("_valid")
+    }
+
+
+def _atomic_probe_npz(path, arrays):
+    """Write a non-pickled compressed NPZ atomically in the same directory."""
+    path = Path(path)
+    temporary = path.with_name(path.name + ".tmp-" + uuid.uuid4().hex)
+    try:
+        with temporary.open("wb") as handle:
+            np.savez_compressed(handle, **arrays)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+class ProbeTraceWriter:
+    """Bounded-memory histories for fixed replay examples, sampled pre-update.
+
+    Each process/resume creates a new segment. Earlier files are preserved;
+    the analysis loader discards stale continuation records after a restart.
+    append() returns scalar transition diagnostics. flush() returns only paths
+    not returned by an earlier flush, for optional incremental W&B uploads.
+    NPZ files contain numeric/unicode arrays only (allow_pickle=False works).
+    """
+
+    ARRAY_KEYS = (
+        "receiver_q1", "receiver_q2", "receiver_q", "receiver_v", "receiver_adv",
+        "source_q1", "source_q2", "source_q", "source_v", "source_adv", "weight",
+    )
+    STEP_KEYS = ("state_step", "update_step", "source_snapshot_step", "delay_age")
+    SCHEMA_VERSION = 1
+    MAX_BUFFER_RECORDS = 128
+
+    def __init__(self, root_dir, probe_indices, probe_batch, metadata, start_state_step=0):
+        import hashlib
+        import json
+        import time
+
+        self.root_dir = Path(root_dir).expanduser().resolve()
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+        self.created_ns = time.time_ns()
+        self.segment_dir = self.root_dir / (
+            f"segment_{int(start_state_step):010d}_{self.created_ns}_{uuid.uuid4().hex[:8]}"
+        )
+        self.segment_dir.mkdir()
+        self.indices = np.asarray(probe_indices, dtype=np.int64).reshape(-1).copy()
+        self.probe_size = int(self.indices.size)
+        if self.probe_size < 1:
+            raise ValueError("A fixed probe must contain at least one sample")
+        self.start_state_step = int(start_state_step)
+        self._last_state_step = None
+        self._previous_gate = None
+        self._buffer = []
+        self._pending_paths = []
+        self._chunk_number = 0
+        if isinstance(probe_batch, dict):
+            items = sorted(probe_batch.items())
+        else:
+            items = [(str(i), value) for i, value in enumerate(probe_batch)]
+        batch_arrays = {}
+        for key, value in items:
+            array = np.asarray(value)
+            if array.ndim < 1 or array.shape[0] != self.probe_size:
+                raise ValueError(f"Probe batch {key} must have first dimension {self.probe_size}")
+            if array.dtype.hasobject:
+                raise TypeError("Object arrays are not supported in probe metadata")
+            batch_arrays["batch_" + str(key)] = array.copy()
+        # Identity is based on indices/inputs, not rewards or MC returns, so the
+        # same examples can be compared under different discount factors.
+        digest = hashlib.sha256()
+        digest.update(self.indices.tobytes())
+        fingerprint_keys = [k for k in ("batch_observations", "batch_actions") if k in batch_arrays]
+        if not fingerprint_keys:
+            fingerprint_keys = sorted(batch_arrays)
+        for key in fingerprint_keys:
+            array = np.ascontiguousarray(batch_arrays[key])
+            digest.update(key.encode("utf-8"))
+            digest.update(str((array.shape, array.dtype.str)).encode("utf-8"))
+            digest.update(array.tobytes())
+        self.probe_fingerprint = digest.hexdigest()
+        full_metadata = dict(metadata)
+        full_metadata.update(
+            schema_version=self.SCHEMA_VERSION,
+            observation_phase="pre_update",
+            start_state_step=self.start_state_step,
+            created_ns=self.created_ns,
+            probe_size=self.probe_size,
+            probe_fingerprint=self.probe_fingerprint,
+            gate_definition="1 if finite source_adv >= 0; 0 if finite source_adv < 0; -1 if invalid",
+            indices_definition="row indices in the loaded replay dataset, after any dataset preprocessing",
+        )
+        metadata_path = self.segment_dir / "metadata.npz"
+        _atomic_probe_npz(metadata_path, {
+            "metadata_json": np.asarray(json.dumps(full_metadata, sort_keys=True)),
+            "probe_indices": self.indices,
+            **batch_arrays,
+        })
+        self._pending_paths.append(str(metadata_path))
+
+    def append(self, record):
+        """Record one pre-update observation; transitions are checkpoint-to-checkpoint.
+
+        A transition can miss intermediate flips between observations. The
+        first record in a new/resumed segment has undefined transition rates.
+        """
+        sample = {}
+        for key in self.ARRAY_KEYS:
+            if key not in record:
+                raise KeyError(f"Missing fixed-probe array: {key}")
+            array = np.asarray(record[key]).reshape(-1)
+            if array.shape != (self.probe_size,):
+                raise ValueError(f"Probe {key} shape {array.shape}, expected {(self.probe_size,)}")
+            sample[key] = array.copy()
+        for key in self.STEP_KEYS:
+            sample[key] = np.asarray(int(np.asarray(record[key]).item()), dtype=np.int64)
+        state_step = int(sample["state_step"])
+        if state_step < self.start_state_step:
+            raise ValueError("Probe observation predates this resume segment")
+        if self._last_state_step is not None and state_step <= self._last_state_step:
+            raise ValueError("Probe state_step must increase within each segment")
+        if int(sample["update_step"]) != state_step + 1:
+            raise ValueError("Pre-update probe requires update_step = state_step + 1")
+        if int(sample["source_snapshot_step"]) + int(sample["delay_age"]) != state_step:
+            raise ValueError("source_snapshot_step + delay_age must equal state_step")
+        if int(sample["delay_age"]) < 0:
+            raise ValueError("Probe delay_age must be nonnegative")
+        finite_source = (
+            np.isfinite(sample["source_q"]) & np.isfinite(sample["source_v"])
+            & np.isfinite(sample["source_adv"]) & np.isfinite(sample["weight"])
+        )
+        gate = np.where(finite_source, (sample["source_adv"] >= 0).astype(np.int8), -1).astype(np.int8)
+        sample["gate"] = gate
+        receiver_valid = (
+            np.isfinite(sample["receiver_q"]) & np.isfinite(sample["receiver_v"])
+            & np.isfinite(sample["receiver_adv"])
+        )
+        receiver_gate = np.where(receiver_valid, (sample["receiver_adv"] >= 0).astype(np.int8), -1).astype(np.int8)
+        sample["receiver_gate"] = receiver_gate
+        both_valid = (gate >= 0) & (receiver_gate >= 0)
+        scalar = {"diag/probe_" + key: float(sample[key]) for key in self.STEP_KEYS}
+        scalar.update({
+            "diag/probe_size": float(self.probe_size),
+            "diag/probe_filter_weight_mean": float(np.mean(sample["weight"])),
+            "diag/probe_gate_valid_fraction": float(np.mean(gate >= 0)),
+            "diag/probe_high_weight_fraction": float(np.mean(gate[gate >= 0] == 1)) if np.any(gate >= 0) else float("nan"),
+            "diag/probe_receiver_positive_fraction": float(np.mean(receiver_gate[receiver_valid] == 1)) if np.any(receiver_valid) else float("nan"),
+            "diag/probe_source_receiver_gate_disagreement_fraction": float(np.mean(gate[both_valid] != receiver_gate[both_valid])) if np.any(both_valid) else float("nan"),
+        })
+        transition_names = (
+            "gate_elapsed_updates", "gate_pair_valid_count", "gate_pair_valid_fraction",
+            "high_to_low_count", "low_to_high_count", "high_to_low_fraction", "low_to_high_fraction",
+            "gate_flip_fraction", "high_to_low_given_previous_high", "low_to_high_given_previous_low",
+        )
+        transition = {name: float("nan") for name in transition_names}
+        if self._previous_gate is not None:
+            prev = self._previous_gate
+            valid = (prev >= 0) & (gate >= 0)
+            count = int(np.sum(valid))
+            high_to_low = int(np.sum(valid & (prev == 1) & (gate == 0)))
+            low_to_high = int(np.sum(valid & (prev == 0) & (gate == 1)))
+            previous_high = int(np.sum(valid & (prev == 1)))
+            previous_low = int(np.sum(valid & (prev == 0)))
+            transition.update({
+                "gate_elapsed_updates": float(state_step - self._last_state_step),
+                "gate_pair_valid_count": float(count),
+                "gate_pair_valid_fraction": float(count / self.probe_size),
+                "high_to_low_count": float(high_to_low),
+                "low_to_high_count": float(low_to_high),
+                "high_to_low_fraction": float(high_to_low / count) if count else float("nan"),
+                "low_to_high_fraction": float(low_to_high / count) if count else float("nan"),
+                "gate_flip_fraction": float((high_to_low + low_to_high) / count) if count else float("nan"),
+                "high_to_low_given_previous_high": float(high_to_low / previous_high) if previous_high else float("nan"),
+                "low_to_high_given_previous_low": float(low_to_high / previous_low) if previous_low else float("nan"),
+            })
+        scalar.update({"diag/probe_" + key: value for key, value in transition.items()})
+        sample.update({"summary_" + key.replace("diag/probe_", ""): np.asarray(value) for key, value in scalar.items()})
+        self._buffer.append(sample)
+        self._previous_gate = gate.copy()
+        self._last_state_step = state_step
+        if len(self._buffer) >= self.MAX_BUFFER_RECORDS:
+            self._write_chunk()
+        return scalar
+
+    def _write_chunk(self):
+        if not self._buffer:
+            return
+        path = self.segment_dir / f"probe_trace_{self._chunk_number:06d}.npz"
+        arrays = {
+            key: np.stack([record[key] for record in self._buffer], axis=0)
+            for key in self._buffer[0]
+        }
+        _atomic_probe_npz(path, arrays)
+        self._pending_paths.append(str(path))
+        self._chunk_number += 1
+        self._buffer.clear()
+
+    def flush(self):
+        """Persist buffered observations; return each new path exactly once."""
+        self._write_chunk()
+        paths = self._pending_paths
+        self._pending_paths = []
+        return paths
+# END FIXED-PROBE DIAGNOSTIC HELPERS
+
 
 
 class TransformEnv:
@@ -600,15 +871,24 @@ class ReplayBuffer:
         indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
         return self._batch_from_indices(indices)
 
-    def sample_fixed(self, batch_size: int, seed: int) -> TensorBatch:
-        """Return a deterministic dataset batch for comparable diagnostics over time."""
+    def sample_fixed(
+        self, batch_size: int, seed: int, return_indices: bool = False
+    ) -> Union[TensorBatch, Tuple[TensorBatch, np.ndarray]]:
+        """Return a deterministic batch, optionally with its stable replay indices.
+
+        The private generator and its draws are unchanged. In particular, this
+        method never advances the RNG used by training minibatch sampling.
+        """
         size = min(self._size, self._pointer)
         if size <= 0:
             raise ValueError("Cannot sample diagnostics from an empty replay buffer")
         rng = np.random.default_rng(int(seed))
         replace = int(batch_size) > size
         indices = rng.choice(size, size=int(batch_size), replace=replace)
-        return self._batch_from_indices(indices)
+        batch = self._batch_from_indices(indices)
+        if return_indices:
+            return batch, indices.copy()
+        return batch
 
 
 def set_seed(seed: int, env: Optional[gym.Env] = None):
@@ -963,6 +1243,7 @@ class IQLJAX:
         self.initial_actor_key = tree_to_device(self.initial_actor_key, self.device)
         self._train_step = self._build_train_step()
         self._diagnostic_step = self._build_diagnostic_step()
+        self._probe_step = self._build_probe_step()
         self._actor_refit_step = self._build_actor_refit_step()
 
     def _apply_actor(self, actor_params: Any, observations: jnp.ndarray, training: bool, rng: Optional[jnp.ndarray] = None):
@@ -1154,7 +1435,8 @@ class IQLJAX:
             q1_q2_corr = batch_correlation(q1[None, :], q2[None, :])[0]
             structural_self_coupling = jnp.asarray(1.0, dtype=jnp.float32)
 
-            # Held-out Bellman residual on the fixed diagnostic batch.
+            # Bellman residual on a fixed batch drawn from the training dataset.
+            # Fixed sampling supports temporal comparisons; it is not held out.
             bellman_target = rewards + (1.0 - dones) * discount * next_v
             q_min_td = (q_min - bellman_target)[None, :]
             q1_td = (q1 - bellman_target)[None, :]
@@ -1211,10 +1493,12 @@ class IQLJAX:
                 "diag/filter_receiver_loo_weighted_error": loo_weighted[0],
                 "diag/filter_source_loo_weighted_error": loo_weighted[0],
 
-                # IQL is structurally self-coupled: same q_min constructs the
-                # weight and is the target receiving that weight.
-                "diag/source_receiver_error_corr": structural_self_coupling,
-                "diag/source_receiver_error_corr_abs": structural_self_coupling,
+                # Source and receiver are structurally identical, but no
+                # independent source/receiver oracle errors are measured here.
+                # Keep the legacy correlation keys unavailable instead of
+                # presenting a structural flag as an empirical correlation.
+                "diag/source_receiver_error_corr": nan_scalar,
+                "diag/source_receiver_error_corr_abs": nan_scalar,
                 "diag/source_receiver_same_estimator": structural_self_coupling,
                 "diag/ensemble_q_disagreement_std": twin_disagreement_std,
 
@@ -1267,6 +1551,35 @@ class IQLJAX:
                 "diag/filter_weight_mean": jnp.mean(weight),
                 "diag/is_self_filter": jnp.asarray(1.0, dtype=jnp.float32),
             }
+            # These batch distributions expose upper-tail changes that a mean
+            # alone cannot show. They reuse the predictions already computed in
+            # this pass; no extra network evaluation or optimizer update occurs.
+            for name, values in (
+                ("q", q_min), ("q1", q1), ("q2", q2), ("v", v),
+                ("receiver_q", q_min), ("receiver_v", v),
+                ("receiver_adv", adv), ("adv", adv),
+                ("source_q", q_min), ("source_v", v),
+                ("source_adv", adv),
+            ):
+                metrics.update(distribution_summary(values, f"diag/{name}"))
+            # The nonnegative branch, including exact ties, is the actual
+            # expectile gate; it differs from a strictly positive fraction.
+            valid_adv = jnp.isfinite(adv)
+            valid_count = jnp.sum(valid_adv)
+            high_branch_fraction = jnp.where(
+                valid_count > 0,
+                jnp.sum(valid_adv & (adv >= 0.0)) / jnp.maximum(valid_count, 1),
+                nan_scalar,
+            )
+            metrics["diag/source_adv_nonnegative_fraction"] = high_branch_fraction
+            metrics["diag/receiver_adv_nonnegative_fraction"] = high_branch_fraction
+            metrics["diag/filter_high_branch_fraction"] = high_branch_fraction
+            metrics["diag/filter_gate_valid_fraction"] = jnp.mean(valid_adv.astype(jnp.float32))
+            metrics["diag/receiver_gate_valid_fraction"] = jnp.mean(valid_adv.astype(jnp.float32))
+            metrics["diag/source_receiver_gate_mismatch_fraction"] = jnp.where(valid_count > 0, 0.0, nan_scalar)
+            metrics["diag/measurement_pre_update"] = jnp.asarray(0.0, dtype=jnp.float32)
+            metrics["diag/state_step"] = jnp.asarray(state.total_it, dtype=jnp.float32)
+            metrics.update(correlation_valid_flags(metrics))
             return metrics
 
         return diagnostic_step
@@ -1275,6 +1588,53 @@ class IQLJAX:
         # Transfer/synchronize the whole metric pytree once instead of once per key.
         metrics = jax.device_get(self._diagnostic_step(self.state, batch))
         return {key: float(np.asarray(value)) for key, value in metrics.items()}
+
+    def _build_probe_step(self):
+        """Evaluate the IQL filter at a supplied state, without changing training.
+
+        The caller invokes this before the scheduled training update. These are
+        the weights that that pre-update state assigns to the fixed probe, not a
+        claim that the probe itself is the sampled training minibatch.
+        """
+        q_apply = self.q_def.apply
+        v_apply = self.v_def.apply
+        iql_tau = self.iql_tau
+
+        @jax.jit
+        def probe_step(state: IQLState, batch: TensorBatch):
+            observations = batch["observations"]
+            actions = batch["actions"]
+            q1, q2 = q_apply({"params": state.q_target_params}, observations, actions)
+            receiver_q = jnp.minimum(q1, q2)
+            receiver_v = v_apply({"params": state.v_params}, observations)
+            receiver_adv = receiver_q - receiver_v
+            # Standard IQL constructs the filter from this same current Q/V.
+            source_adv = receiver_adv
+            weight = jnp.abs(iql_tau - (source_adv < 0.0).astype(jnp.float32))
+            return {
+                "receiver_q1": q1,
+                "receiver_q2": q2,
+                "receiver_q": receiver_q,
+                "receiver_v": receiver_v,
+                "receiver_adv": receiver_adv,
+                "source_q1": q1,
+                "source_q2": q2,
+                "source_q": receiver_q,
+                "source_v": receiver_v,
+                "source_adv": source_adv,
+                "weight": weight,
+                "state_step": state.total_it,
+                "update_step": state.total_it + 1,
+                "source_snapshot_step": state.total_it,
+                "delay_age": jnp.asarray(0, dtype=jnp.int32),
+            }
+
+        return probe_step
+
+    def compute_probe_diagnostics(self, batch: TensorBatch) -> Dict[str, np.ndarray]:
+        """Transfer the complete pre-update probe record to the host once."""
+        record = jax.device_get(self._probe_step(self.state, batch))
+        return {key: np.asarray(value) for key, value in record.items()}
 
     def train(self, batch: TensorBatch) -> Dict[str, Any]:
         # Keep metrics on device. The training loop transfers them to host only on
@@ -1885,7 +2245,10 @@ def _train_impl(config: TrainConfig):
             default_config=asdict(TrainConfig()),
             max_timesteps=int(config.max_timesteps),
             checkpoint_type="iql_jax_training_progress",
-            identity_ignored_fields=DEFAULT_IDENTITY_IGNORED_FIELDS,
+            identity_ignored_fields=set(DEFAULT_IDENTITY_IGNORED_FIELDS) | {
+                key for key in current_config_dict
+                if key.startswith("diagnostic_") or key == "enable_bias_diagnostics"
+            },
             checkpoint_version=2,
             accepted_checkpoint_versions=(1, 2),
             wandb_enabled=bool(config.log_wandb),
@@ -1938,15 +2301,26 @@ def _train_impl(config: TrainConfig):
     replay_buffer.load_d4rl_dataset(dataset)
 
     diagnostic_batch: Optional[TensorBatch] = None
+    diagnostic_probe_batch: Optional[TensorBatch] = None
+    diagnostic_probe_indices: Optional[np.ndarray] = None
     if config.enable_bias_diagnostics and not refit_only:
-        diagnostic_batch = replay_buffer.sample_fixed(
+        diagnostic_batch, diagnostic_indices = replay_buffer.sample_fixed(
             batch_size=config.diagnostic_batch_size,
             seed=config.seed + config.diagnostic_seed_offset,
+            return_indices=True,
         )
+        # Reuse a deterministic subset of the already selected batch. No new
+        # replay sample or training RNG draw is needed for the probe.
+        probe_size = min(int(config.diagnostic_probe_size), len(diagnostic_indices))
+        diagnostic_probe_batch = {
+            key: value[:probe_size] for key, value in diagnostic_batch.items()
+        }
+        diagnostic_probe_indices = diagnostic_indices[:probe_size].copy()
         print(
             "Bias diagnostics enabled: fixed batch size="
             f"{config.diagnostic_batch_size}, freq={config.diagnostic_freq}, "
-            f"flush_freq={config.diagnostic_flush_freq}."
+            f"flush_freq={config.diagnostic_flush_freq}, "
+            f"probe_size={probe_size}, probe_freq={config.diagnostic_probe_freq}."
         )
 
     max_action = float(env.action_space.high[0])
@@ -2043,6 +2417,44 @@ def _train_impl(config: TrainConfig):
                 print("Continuing local training with W&B disabled.")
                 config.log_wandb = False
 
+    probe_writer: Optional[ProbeTraceWriter] = None
+    if (
+        config.enable_bias_diagnostics
+        and config.diagnostic_save_probes
+        and diagnostic_probe_batch is not None
+        and diagnostic_probe_indices is not None
+    ):
+        if config.diagnostic_probe_dir is not None:
+            probe_root = Path(config.diagnostic_probe_dir)
+        elif config.checkpoints_path is not None:
+            probe_root = Path(config.checkpoints_path) / "diagnostic_probes"
+        elif config.log_wandb and wandb.run is not None:
+            probe_root = Path(wandb.run.dir) / "diagnostic_probes"
+        else:
+            probe_root = Path("diagnostics") / config.name / f"seed_{config.seed}" / "diagnostic_probes"
+        probe_writer = ProbeTraceWriter(
+            root_dir=probe_root,
+            probe_indices=diagnostic_probe_indices,
+            probe_batch=jax.device_get(diagnostic_probe_batch),
+            metadata={
+                "algorithm": ALGORITHM_NAME,
+                "environment": config.env,
+                "seed": int(config.seed),
+                "iql_tau": float(config.iql_tau),
+                "D": 1,
+                "delay_period": 1,
+                "discount": float(config.discount),
+                "target_update_rate": float(config.tau),
+                "diagnostic_seed": int(config.seed + config.diagnostic_seed_offset),
+                "diagnostic_probe_freq": int(config.diagnostic_probe_freq),
+                "diagnostic_batch_size": int(config.diagnostic_batch_size),
+                "probe_size": len(diagnostic_probe_indices),
+                "measurement_phase": "pre_update",
+                "receiver_q_kind": "minimum_of_current_target_critics",
+            },
+            start_state_step=int(start_timestep),
+        )
+        print(f"Fixed pre-update probe traces: {probe_writer.root_dir}")
 
     def _wandb_log(metrics, step):
         if not config.log_wandb:
@@ -2077,15 +2489,24 @@ def _train_impl(config: TrainConfig):
         Diagnostic computation remains at diagnostic_freq resolution; only the
         expensive NPZ rewrite and W&B artifact upload are throttled.
         """
-        if diagnostic_logs_path is None or not diagnostic_logs:
-            return
-        save_logs_npz(diagnostic_logs, str(diagnostic_logs_path))
-        if upload_wandb and config.log_wandb and wandb.run is not None:
-            wandb.save(str(diagnostic_logs_path), policy="now")
-        print(
-            "Flushed diagnostic logs: "
-            f"step={int(step)}, records={len(diagnostic_logs)}"
-        )
+        if diagnostic_logs_path is not None and diagnostic_logs:
+            save_logs_npz(diagnostic_logs, str(diagnostic_logs_path))
+            if upload_wandb and config.log_wandb and wandb.run is not None:
+                wandb.save(str(diagnostic_logs_path), policy="now")
+            print(
+                "Flushed diagnostic logs: "
+                f"step={int(step)}, records={len(diagnostic_logs)}"
+            )
+        if probe_writer is not None:
+            # The writer returns only new files, including any chunks flushed
+            # automatically since the last call; old chunks are not reuploaded.
+            pending_files = probe_writer.flush()
+            if upload_wandb and config.log_wandb and wandb.run is not None:
+                for probe_path in pending_files:
+                    try:
+                        wandb.save(str(probe_path), base_path=str(probe_writer.root_dir), policy="now")
+                    except Exception as exc:
+                        print(f"Warning: probe upload failed; local file retained: {probe_path}: {exc}")
 
 
     if refit_only:
@@ -2154,11 +2575,29 @@ def _train_impl(config: TrainConfig):
         for t in range(start_timestep, int(config.max_timesteps)):
             step = int(t + 1)
             batch = replay_buffer.sample(config.batch_size)
+            pending_wandb_metrics: Dict[str, Any] = {}
+            if (
+                probe_writer is not None
+                and diagnostic_probe_batch is not None
+                and (
+                    t == start_timestep
+                    or step % int(config.diagnostic_probe_freq) == 0
+                    or step == int(config.max_timesteps)
+                )
+            ):
+                # Capture the model before this training update. The smaller
+                # fixed probe is independent of the sampled minibatch above.
+                probe_record = trainer.compute_probe_diagnostics(diagnostic_probe_batch)
+                if int(probe_record["state_step"]) != t:
+                    raise RuntimeError("Probe state_step does not match the pre-update trainer state")
+                probe_metrics = probe_writer.append(probe_record)
+                if config.log_wandb:
+                    pending_wandb_metrics.update(probe_metrics)
             device_log_dict = trainer.train(batch)
 
             # Only synchronize training metrics when they are actually sent to W&B.
             if config.log_wandb and step % config.log_every == 0:
-                _wandb_log(_host_scalar_metrics(device_log_dict), step)
+                pending_wandb_metrics.update(_host_scalar_metrics(device_log_dict))
 
             if (
                 config.enable_bias_diagnostics
@@ -2180,12 +2619,12 @@ def _train_impl(config: TrainConfig):
 
                 # Scalar W&B diagnostics remain at diagnostic_freq resolution.
                 if config.log_wandb:
-                    _wandb_log(diag_metrics, step)
+                    pending_wandb_metrics.update(diag_metrics)
 
             # Expensive full-NPZ rewrites and W&B artifact uploads occur only every
             # 25k steps by default. This does not reduce diagnostic data resolution.
             if (
-                config.diagnostic_save_npz
+                (config.diagnostic_save_npz or probe_writer is not None)
                 and step % int(config.diagnostic_flush_freq) == 0
             ):
                 _flush_diagnostic_logs(step, upload_wandb=True)
@@ -2251,13 +2690,21 @@ def _train_impl(config: TrainConfig):
                         for key, value in eval_log.items()
                         if is_scalar_value(value)
                     }
-                    _wandb_log(wandb_eval_log, step)
+                    pending_wandb_metrics.update(wandb_eval_log)
 
                 save_and_upload_eval_logs(
                     eval_logs=eval_logs,
                     checkpoints_path=config.checkpoints_path,
                     log_wandb=config.log_wandb,
                 )
+
+            # One call per step prevents the plain W&B fallback from discarding
+            # later records at an already committed step. Probe keys carry their
+            # own pre-update state_step/update_step; core diagnostics remain
+            # post-update as in the original script.
+            if config.log_wandb and pending_wandb_metrics:
+                pending_wandb_metrics["training/timestep"] = step
+                _wandb_log(pending_wandb_metrics, step)
 
             # Use the Python loop step for checkpoint scheduling. Reading
             # trainer.state.total_it here would synchronize GPU->CPU every step.
