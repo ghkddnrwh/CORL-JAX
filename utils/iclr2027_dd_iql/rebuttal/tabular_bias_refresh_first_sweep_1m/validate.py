@@ -34,7 +34,7 @@ def check(case):
         np.testing.assert_array_equal(
             h["diagnostic_delayed_value"][:, fresh], h["diagnostic_value"][:, fresh]
         )
-    old_root = REPO_ROOT / "logs/iclr2027_dd_iql/rebuttal/tabular_bias_1m"
+    old_root = REPO_ROOT / "logs/iclr2027_dd_iql/archive/history_20261115/tabular_bias_1m"
     previous = case_path(old_root, case)
     reference_match = None
     if method == "double_q" or delay == 1:

@@ -1,0 +1,32 @@
+Paired four-state weight-hypothesis experiment
+
+From repository root:
+
+python utils/iclr2027_dd_iql/rebuttal/tabular_df_dd_weight_hypothesis/run_control.py --workers 8
+python utils/iclr2027_dd_iql/rebuttal/tabular_df_dd_weight_hypothesis/analyze.py
+
+Output: logs/iclr2027_dd_iql/rebuttal/tabular_df_dd_weight_hypothesis/
+Start with findings.txt and hypothesis_report.pdf.
+
+Scope: DF D=1, DD D=100, tau=.99, IID/NN-like fields, seed200-219, 1M updates.
+Three variants per setting (240 trajectories total):
+baseline; action-mean clean Q inputs; whole-table-mean clean Q inputs.
+Both interventions change clean Q entering filter construction and V regression
+throughout training. They preserve noise, action streams, Q backups and EMA.
+Internal learned Q tables are not projected; the Q-to-V input is averaged.
+This removes relative clean-Q outliers seen by the filter/V receiver, while
+retaining noisy readout tails and DF's minimum operation.
+
+Original code and logs are read-only. The baseline verifies all saved Q/V/filter
+arrays and final tables bitwise against the original 80 seed trajectories.
+All data/code checksums and actual-update V accounting are in verification.json.
+
+The full trajectory plots use the recorded pre-update diagnostic schedule.
+Weight curves alone average each seed within 20k bins before across-seed mean/SD.
+Summary statistics use 101 snapshots in the final 100k, first averaged per seed.
+Update-moment diagnostics instead use all actual sampled final-100k updates.
+Readout-error covariance is not Pearson correlation or total learned-error coupling.
+
+The homogeneous IID approximation integrates fresh min-Gaussian noise and forces
+identical clean Q entries by construction. It explains a possible mechanism;
+it is not the exact expectation of stochastic training.

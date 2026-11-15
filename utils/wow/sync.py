@@ -27,12 +27,12 @@ from typing import Any, Dict, List, Optional, Sequence
 
 
 # ====== 환경 설정(필요하면 여기만 바꿔도 됨) ======
-SRC_USER = "ukjo3"
+SRC_USER = "ukjo616"
 SRC_HOST = "166.104.9.137"
 # SRC_ROOT = "/home/ukjo1/work/fed_rl/moderate-rl/logs/action_robust/sam/exclude_critic/ver2/single"
 
 # DST_ROOT = "/home/ukjo2/work/fed_rl/expectile-rl/logs/action_robust/sam/exclude_critic/ver2/single"
-SRC_ROOT = "/home/ukjo3/work/offline_rl/CORL-JAX/logs/iclr2027/basic/iql_jax/ogbench/soft_target_ablation/long"
+SRC_ROOT = "/home/ukjo616/work/offline_rl/CORL-JAX/logs/iclr2027/basic/iql_jax/ogbench/soft_target_ablation/long"
 
 
 DST_ROOT = "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/iclr2027/basic/iql_jax/ogbench/soft_target_ablation/long"
@@ -57,7 +57,7 @@ SSH_OPTS = [
     "-o", "PasswordAuthentication=no",
     "-o", "StrictHostKeyChecking=no",
     "-o", "UserKnownHostsFile=/dev/null",
-    "-p", "2203",
+    "-p", "2201",
 ]
 # ==============================================
 

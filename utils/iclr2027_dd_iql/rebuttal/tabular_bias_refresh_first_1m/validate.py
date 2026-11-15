@@ -9,7 +9,7 @@ from measure import derive
 
 def main():
     reports = []
-    original = REPO_ROOT / "logs/iclr2027_dd_iql/rebuttal/tabular_bias_diagnostics_s4_1m"
+    original = REPO_ROOT / "logs/iclr2027_dd_iql/archive/history_20261115/tabular_bias_diagnostics_s4_1m"
     for case in cases():
         path = case_path(DEFAULT_RESULTS_DIR, case)
         meta = json.loads(path.with_suffix(".json").read_text())

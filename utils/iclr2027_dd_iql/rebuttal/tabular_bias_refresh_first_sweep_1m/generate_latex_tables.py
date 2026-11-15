@@ -44,6 +44,8 @@ def read(path):
 def min_q_reference(root):
     """Recompute the unchanged clipped baseline from its verified 20-seed Q tables."""
     previous = root.parent / "tabular_bias_1m"
+    if not previous.exists():
+        previous = root.parent.parent / "archive/history_20261115/tabular_bias_1m"
     previous_config = json.loads((previous / "experiment_config.json").read_text())
     for key in (
         "sizes",

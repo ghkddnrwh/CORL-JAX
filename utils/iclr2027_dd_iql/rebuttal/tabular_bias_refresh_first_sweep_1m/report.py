@@ -208,7 +208,7 @@ def final_summary(terminal):
 
 def compare_previous(final, output):
     previous = (
-        REPO_ROOT / "logs/iclr2027_dd_iql/rebuttal/tabular_bias_1m/tables/results_1m.csv"
+        REPO_ROOT / "logs/iclr2027_dd_iql/archive/history_20261115/tabular_bias_1m/tables/results_1m.csv"
     )
     if not previous.exists():
         return

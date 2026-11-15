@@ -1,0 +1,54 @@
+Run from the repository root:
+  python utils/iclr2027_dd_iql/rebuttal/neural_weight_mechanism_audit/analyze.py
+
+Inputs are read only. The script does not load models, train, update parameters,
+or contact W&B. Outputs:
+  logs/iclr2027_dd_iql/rebuttal/neural_weight_mechanism_audit/
+
+Primary comparison: 48 runs = 2 environments x 2 discounts x 3 methods x 4 seeds.
+Expectile tau=.99; methods IQL rho=.005, IQL rho=.0005, DD-IQL N=20 D=100 rho=.005.
+Primary trajectories stop at 1M. Separate 2M endpoint rows are retained where
+available. Sixteen already-existing Cube-S runs with rho=.00005/.000005 appear
+only as a labeled supplement; no extra experiments are launched.
+
+Full diagnostic samples are 8192 replay examples, post-update at t.
+IQL trace samples are the first 128 of that batch, pre-update at state t-1,
+with upcoming update t used on figures. These phases are never equated for
+an exact numerical comparison. Dataset examples are not held-out training data.
+Each saved example has one observed action; this is not Q(s,a) sampled over
+multiple actions at one fixed s. DD-IQL and Cube-S rho=.0005 have no raw probes
+in these inputs. Missing distributions are not filled with zeros or inferred
+from pooled means.
+
+Main summaries: all recorded checkpoints in inclusive 5k--100k (39 points)
+and 900k--1M (41 points), averaged within seed, then across 4 seeds. Standard
+deviations are sample SD across seed means (ddof=1), not confidence intervals.
+The separately labeled early_20_checkpoints window picks midpoint-spaced
+indices among the available early checkpoints; it is not the primary mean.
+
+Thin plot lines are individual seeds; thick lines are their shared-step means.
+Quantile plots show averages of each seed's 8192-example quantiles, not pooled
+quantiles. The 128-example plots are subsidiary diagnostics with sampling error.
+All fixed-example heatmaps show seed 0 selected in advance; numerical summaries
+use all four seeds. No smoothing or extrapolation is applied.
+
+Frozen min-to-mean substitution holds trained V and both target critics fixed.
+It identifies an instantaneous aggregation effect, not the outcome of training
+without min. Gate transitions occur between saved checkpoints and can miss
+intermediate flips. Q-rise / V-faster explanations of a high-to-low transition
+are algebraic descriptions, not independent causal tests.
+
+DD-IQL coarse diagnostics occur at delayed snapshot refresh (age=0). A separate
+25-step log checks all four ages 0/25/50/75. High mean weight is robust to this
+sampling choice. Cross-head assignment is a permutation, so it cannot change
+the ensemble average of the frozen source weights; its effect is on training
+through the receiver/filter pairing.
+
+MC residuals follow dataset continuations; they are not oracle value errors.
+A large positive value explosion, a low weight, and a filter-error proxy
+correlation cannot by themselves identify a causal bias mechanism. The absence
+of a positive explosion also does not prove absence of overestimation.
+
+source_manifest.json records SHA256 for every used input and analysis source.
+verification.json records gate checks, probe identities, coverage, and input
+hash rechecks. notes.txt gives the interpretation of this saved analysis.

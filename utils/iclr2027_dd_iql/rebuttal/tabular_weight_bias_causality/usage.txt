@@ -1,0 +1,42 @@
+Four-state bias / mean-weight causality controls
+
+Run from repository root:
+python utils/iclr2027_dd_iql/rebuttal/tabular_weight_bias_causality/run_controls.py --workers 8
+python utils/iclr2027_dd_iql/rebuttal/tabular_weight_bias_causality/analyze_controls.py
+
+Results:
+logs/iclr2027_dd_iql/rebuttal/tabular_weight_bias_causality/
+Read findings.txt and causal_controls_report.pdf first.
+
+Settings: S=A=4, N=2, tau=.99, gamma=.999, 1M, 20 paired seeds (200-219).
+DF D=1 and DD D=100; original noise and action streams reproduced.
+12 conditions / 240 trajectories; baseline 80 trajectories verified bitwise.
+All old code and raw logs are read-only. Source snapshots are in provenance/.
+
+Controls:
+- Original baseline (both methods / both noise modes).
+- Oracle clean-Q inputs (both methods / both noise modes): replace the clean
+  Q entering filter construction and V regression with oracle zero. Keep
+  injected noise, learned V, internal Q backup and target EMA. Report both
+  internal learned Q and actual source-clean-Q reference (zero).
+- 50% / 100% conditional noise-bias correction (DF IID only): subtract known
+  E[w*noise|pre-update Q,V]/E[w|pre-update Q,V] from V's receiver, leaving
+  the gate formula unchanged. This cancels the NET injected-noise term,
+  including the negative min-noise mean and positive selection covariance.
+  It does not cancel all learned Q/V error and is an oracle diagnostic.
+- Bellman +0.6 (DD / both noise modes): add a known positive error to every
+  Q backup. It tests whether large common Q/V bias suffices for low weight.
+
+Correction is not applied to NN-like noise: its conditional error law depends
+on history. The independent Gaussian formula is not valid there.
+
+Summary.csv averages each seed over 101 pre-update snapshots in the final100k,
+then reports 20-seed mean/sample SD. Actual-update moment diagnostics instead
+average ALL sampled final100k updates. Do not mix these estimands.
+Weight curves use per-seed 20k bins, then across-seed mean/sample SD.
+
+Verification checks actual gates, invariance to equal Q/V shifts, identical
+DF clean heads, oracle readouts, baseline arrays, hashes and full V-update
+accounting. Correction formulas are checked by independent quadrature.
+These oracle controls are mechanism tests, not deployable algorithms or
+evidence of policy-performance causality in OGBench.

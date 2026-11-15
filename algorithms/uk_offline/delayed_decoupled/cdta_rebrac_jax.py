@@ -11,6 +11,15 @@
 #
 # The rest of the dataset, environment, checkpoint, actor-refit, and logging plumbing
 # intentionally stays close to the supplied ReBRAC code.
+#
+# Performance-only changes in this variant:
+#   * Evaluate Q_i(s, mu_i(s)) memberwise for auxiliary actors in one ensemble pass.
+#   * Refresh delayed actor snapshots through a conditional branch.
+#   * Avoid per-training-step device-to-host synchronization for logging.
+#   * JIT the validation loss and skip unused validation forward passes.
+#   * Transfer NumPy batches directly to the selected JAX device.
+# The original shared-Adam optimizer and policy update cadence are deliberately
+# unchanged for compatibility with existing training checkpoints.
 
 import os
 
@@ -218,7 +227,8 @@ def validate_config(config: TrainConfig) -> None:
     assert config.max_timesteps >= 0
     assert config.log_every > 0
     assert config.checkpoint_freq > 0
-    assert config.num_critics > 0
+    if config.num_critics < 2:
+        raise ValueError("CDTA-ReBRAC requires num_critics >= 2; single-critic execution is unsupported.")
     assert config.delayed_update_period > 0
     assert isinstance(config.use_target_aux_actors, bool)
     assert str(config.target_action_index_mode).lower() in ("cross", "self", "periodic_self")
@@ -903,40 +913,43 @@ class DDReBRACAgent(flax.struct.PyTreeNode):
     def auxiliary_actor_loss(self, batch, grad_params, rng):
         """Train mu_i only against Q_i; these actors are never deployed."""
         del rng
-        losses = []
-        q_means = []
-        mses = []
-        lams = []
-        for i in range(int(self.config["num_critics"])):
+        n = int(self.config["num_critics"])
+        actions_by_member = []
+        for i in range(n):
             dist = self.network.select(f"aux_actor_{i}")(batch["observations"], params=grad_params)
-            actions = dist.mode()
+            actions_by_member.append(dist.mode())
+        actions_by_member = jnp.stack(actions_by_member, axis=0)  # [N, B, A]
 
-            # Critic parameters are read from self.network (not grad_params), so
-            # actor gradients flow through Q_i with respect to actions but do not
-            # update critic parameters through this loss.
-            qs = self.network.select("critic")(batch["observations"], actions=actions)
-            q_i = qs[i]
-            mse_i = jnp.square(actions - batch["actions"]).sum(axis=-1)
-            if self.config.get("normalize_q", True):
-                lam_i = jax.lax.stop_gradient(1 / jnp.abs(q_i).mean())
-            else:
-                lam_i = jnp.asarray(1.0, dtype=q_i.dtype)
-            loss_i = -(lam_i * q_i).mean() + (self.config["alpha_actor"] * mse_i).mean()
-            losses.append(loss_i)
-            q_means.append(q_i.mean())
-            mses.append(mse_i.mean())
-            lams.append(lam_i)
+        # Evaluate only Q_i(s, mu_i(s)), not all N critics on each of N actors.
+        # As before, the critic's parameters come from self.network rather than
+        # grad_params, so its weights receive no auxiliary-actor gradients.
+        q_by_member = self.network.select("critic")(
+            batch["observations"],
+            actions=actions_by_member,
+            memberwise_actions=True,
+        )  # [N, B]
+
+        # Preserve each actor's individual BC penalty and Q normalization.
+        mse_by_member = jnp.square(
+            actions_by_member - batch["actions"][None, ...]
+        ).sum(axis=-1)  # [N, B]
+        mses = jnp.mean(mse_by_member, axis=1)
+        if self.config.get("normalize_q", True):
+            lams = jax.lax.stop_gradient(1 / jnp.mean(jnp.abs(q_by_member), axis=1))
+        else:
+            lams = jnp.ones((n,), dtype=q_by_member.dtype)
+        losses = -jnp.mean(lams[:, None] * q_by_member, axis=1) + self.config["alpha_actor"] * mses
 
         # Sum, rather than average: parameters are disjoint across auxiliary
         # actors, so each actor receives the same per-actor gradient scale as the
         # original ReBRAC actor objective.
-        aux_loss = jnp.sum(jnp.stack(losses))
+        aux_loss = jnp.sum(losses)
         return aux_loss, {
             "total_loss": aux_loss,
-            "per_actor_loss_mean": jnp.mean(jnp.stack(losses)),
-            "q_mean": jnp.mean(jnp.stack(q_means)),
-            "mse": jnp.mean(jnp.stack(mses)),
-            "lambda": jnp.mean(jnp.stack(lams)),
+            "per_actor_loss_mean": jnp.mean(losses),
+            "q_mean": jnp.mean(q_by_member),
+            "mse": jnp.mean(mses),
+            "lambda": jnp.mean(lams),
         }
 
     @jax.jit
@@ -984,16 +997,19 @@ class DDReBRACAgent(flax.struct.PyTreeNode):
         should_refresh = (completed_updates > 0) & (
             completed_updates % int(self.config["delayed_update_period"]) == 0
         )
-        new_params = dict(network.params)
-        for i in range(int(self.config["num_critics"])):
-            source_prefix = "target_aux_actor" if self.config["use_target_aux_actors"] else "aux_actor"
-            source = network.params[f"modules_{source_prefix}_{i}"]
-            delayed = network.params[f"modules_delayed_aux_actor_{i}"]
-            new_params[f"modules_delayed_aux_actor_{i}"] = jax.tree_util.tree_map(
-                lambda src, old: jnp.where(should_refresh, src, old),
-                source,
-                delayed,
-            )
+        source_prefix = "target_aux_actor" if self.config["use_target_aux_actors"] else "aux_actor"
+
+        def refresh(params):
+            refreshed = dict(params)
+            for i in range(int(self.config["num_critics"])):
+                refreshed[f"modules_delayed_aux_actor_{i}"] = params[f"modules_{source_prefix}_{i}"]
+            return refreshed
+
+        # Unlike a per-parameter jnp.where, the copy branch only runs on the
+        # scheduled hard-refresh step. Both branches have the same parameter tree.
+        new_params = jax.lax.cond(
+            should_refresh, refresh, lambda params: params, network.params
+        )
         return network.replace(params=new_params)
 
     @jax.jit
@@ -1039,6 +1055,8 @@ class DDReBRACAgent(flax.struct.PyTreeNode):
 
     @classmethod
     def create(cls, seed, ex_observations, ex_actions, config):
+        if int(config["num_critics"]) < 2:
+            raise ValueError("CDTA-ReBRAC requires num_critics >= 2; single-critic execution is unsupported.")
         rng = jax.random.PRNGKey(seed)
         rng, init_rng = jax.random.split(rng, 2)
         action_dim = ex_actions.shape[-1]
@@ -1226,7 +1244,9 @@ class ReplayBuffer:
     def sample_batch(self, key: Optional[jax.random.PRNGKey], batch_size: int) -> TensorBatch:
         del key
         batch = self.dataset.sample(batch_size)
-        return tree_to_device({k: jnp.asarray(v) for k, v in batch.items()}, self.device)
+        # Dataset arrays are already NumPy arrays with the desired dtypes.
+        # device_put handles the entire pytree without an intermediate JAX cast.
+        return tree_to_device(batch, self.device)
 
     @staticmethod
     def normalize_reward(dataset_name: str, rewards: np.ndarray) -> np.ndarray:
@@ -1512,13 +1532,17 @@ class DDReBRACFQLJAX:
         self.initial_actor_opt_state = tree_to_device(self.actor_tx.init(self.initial_actor_params), self.device)
         self._actor_refit_step = self._build_actor_refit_step()
 
-    def train(self, batch: TensorBatch, update_actor_now: bool) -> Dict[str, float]:
+    def train(self, batch: TensorBatch, update_actor_now: bool, host_metrics: bool = True) -> Dict[str, Any]:
         if update_actor_now:
             self.agent, log_dict = self.agent.update_full(batch)
         else:
             self.agent, log_dict = self.agent.update_critic_only(batch)
         self.total_it += 1
-        return {key: float(jax.device_get(value)) for key, value in log_dict.items()}
+        if host_metrics:
+            # Preserve the original public behavior for callers outside the
+            # training loop. The loop itself postpones this synchronization.
+            return {key: float(value) for key, value in jax.device_get(log_dict).items()}
+        return log_dict
 
     def eval_current_actor(self, env: Any, n_episodes: int) -> Dict[str, float]:
         return evaluate(self.agent, env, config=self.fql_config, num_eval_episodes=n_episodes, eval_temperature=0.0)
@@ -1989,7 +2013,7 @@ def _train_impl(config: TrainConfig):
         return
 
     best_eval_metric_mean = best_eval_metric(eval_logs)
-    last_train_log: Dict[str, float] = {}
+    last_train_log: Dict[str, Any] = {}
 
     def _evaluation_required(step):
         step = int(step)
@@ -2004,19 +2028,25 @@ def _train_impl(config: TrainConfig):
             i = t + 1
             batch = replay_buffer.sample_batch(None, batch_size=config.batch_size)
             update_actor_now = (i % config.policy_freq) == 0
-            log_dict = trainer.train(batch, update_actor_now=update_actor_now)
+            log_dict = trainer.train(batch, update_actor_now=update_actor_now, host_metrics=False)
             train_step = int(trainer.total_it)
-            last_train_log = {**last_train_log, **log_dict}
+            if config.log_wandb:
+                # Keep the latest on-device metrics (including the latest actor
+                # metrics across critic-only steps) without synchronizing GPU.
+                last_train_log.update(log_dict)
     
             if config.log_wandb and train_step % config.log_every == 0:
-                _wandb_log({f"train/{key}": value for key, value in last_train_log.items()}, train_step)
+                host_log = jax.device_get(last_train_log)
+                _wandb_log({f"train/{key}": float(value) for key, value in host_log.items()}, train_step)
     
             if val_buffer is not None and train_step % config.log_every == 0:
+                # Keep the original validation sampling (and hence the NumPy
+                # RNG sequence used by subsequent training mini-batches).
                 val_batch = val_buffer.sample_batch(None, batch_size=config.batch_size)
-                _, val_info = trainer.agent.total_loss(val_batch, grad_params=None, full_update=True)
-                val_info = {f"validation/{key}": float(jax.device_get(value)) for key, value in val_info.items()}
                 if config.log_wandb:
-                    _wandb_log(val_info, train_step)
+                    _, val_info = trainer.agent.total_loss_eval(val_batch)
+                    val_info = jax.device_get(val_info)
+                    _wandb_log({f"validation/{key}": float(value) for key, value in val_info.items()}, train_step)
     
             should_eval = (
                 (config.eval_at_first_step and train_step == 1)
