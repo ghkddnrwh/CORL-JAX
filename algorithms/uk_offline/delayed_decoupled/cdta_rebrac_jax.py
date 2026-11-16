@@ -1,3 +1,7 @@
+# Packed CDTA variant: independent auxiliary actors have persistent ensemble axes.
+# One shared Adam clock is retained for online critic/real/auxiliary actors.
+# Frozen targets/snapshots have no optimizer state. Legacy checkpoints are converted
+# on load, rejecting nonzero frozen moments rather than silently dropping momentum.
 # CDTA-ReBRAC: Critic-Decoupled Target-Action ReBRAC built from the supplied ReBRAC/FQL implementation.
 #
 # Core design:
@@ -717,6 +721,56 @@ class ModuleDict(nn.Module):
 nonpytree_field = flax.struct.field
 
 
+_ACTOR_GROUPS = ("aux_actor", "target_aux_actor", "delayed_aux_actor")
+
+
+def pack_params(params, n):
+    """Stack independent member trees; preserve member order exactly."""
+    result = dict(params)
+    for prefix in _ACTOR_GROUPS:
+        keys = [f"modules_{prefix}_{i}" for i in range(n)]
+        if keys[0] in result:
+            members = [result.pop(key) for key in keys]
+            result[f"modules_{prefix}s"] = jax.tree_util.tree_map(
+                lambda *xs: jnp.stack(xs, axis=0), *members
+            )
+    return result
+
+
+def unpack_params(params, n):
+    """Inverse layout transform, also usable for gradients and Adam moments."""
+    result = dict(params)
+    for prefix in _ACTOR_GROUPS:
+        group = result.pop(f"modules_{prefix}s", None)
+        if group is not None:
+            for i in range(n):
+                result[f"modules_{prefix}_{i}"] = jax.tree_util.tree_map(lambda p: p[i], group)
+    return result
+
+
+def online_params(params):
+    return {k: v for k, v in params.items()
+            if k in ("modules_actor", "modules_critic", "modules_aux_actors")
+            or k.startswith("modules_aux_actor_")}
+
+
+def convert_agent_state_dict(payload, n):
+    """Convert a legacy serialized agent, without resetting the shared Adam count."""
+    result = deepcopy(payload)
+    network = result["network"]
+    if "modules_aux_actor_0" not in network["params"]:
+        return result
+    network["params"] = pack_params(network["params"], n)
+    adam = network["opt_state"]["0"]
+    for name in ("mu", "nu"):
+        moments = adam[name]
+        frozen = {k: v for k, v in moments.items() if k not in online_params(moments)}
+        if any(np.any(np.asarray(jax.device_get(p)) != 0) for p in jax.tree_util.tree_leaves(frozen)):
+            raise ValueError("Cannot discard nonzero target/delayed Adam moments in legacy checkpoint.")
+        adam[name] = online_params(pack_params(moments, n))
+    return result
+
+
 class FQLTrainState(flax.struct.PyTreeNode):
     step: int
     apply_fn: Any = flax.struct.field(pytree_node=False)
@@ -728,7 +782,7 @@ class FQLTrainState(flax.struct.PyTreeNode):
     @classmethod
     def create(cls, model_def, params, tx=None, **kwargs):
         params = unfreeze(params)
-        opt_state = tx.init(params) if tx is not None else None
+        opt_state = tx.init(online_params(params)) if tx is not None else None
         return cls(step=1, apply_fn=model_def.apply, model_def=model_def, params=params, tx=tx, opt_state=opt_state, **kwargs)
 
     def __call__(self, *args, params=None, method=None, **kwargs):
@@ -742,16 +796,20 @@ class FQLTrainState(flax.struct.PyTreeNode):
         return lambda *args, params=None, **kwargs: self(*args, params=params, name=name, **kwargs)
 
     def apply_gradients(self, grads, **kwargs):
-        updates, new_opt_state = self.tx.update(grads, self.opt_state, self.params)
-        new_params = optax.apply_updates(self.params, updates)
+        online = online_params(self.params)
+        updates, new_opt_state = self.tx.update(grads, self.opt_state, online)
+        # Zero-gradient online actors still receive their Adam momentum updates.
+        # Thus critic-only steps retain the original shared-Adam behavior.
+        new_params = dict(self.params)
+        new_params.update(optax.apply_updates(online, updates))
         return self.replace(step=self.step + 1, params=new_params, opt_state=new_opt_state, **kwargs)
 
     def apply_loss_fn(self, loss_fn):
-        # Keep the FQL/ReBRAC algorithmic update intact, but do not compute
-        # global gradient diagnostics inside the jitted update step. Those
-        # diagnostics create large reduce operations over every parameter leaf
-        # and can trigger very slow XLA constant-folding during first compile.
-        grads, info = jax.grad(loss_fn, has_aux=True)(self.params)
+        def online_loss(params):
+            full_params = dict(self.params)
+            full_params.update(params)
+            return loss_fn(full_params)
+        grads, info = jax.grad(online_loss, has_aux=True)(online_params(self.params))
         return self.apply_gradients(grads=grads), info
 
 
@@ -818,13 +876,15 @@ class DDReBRACAgent(flax.struct.PyTreeNode):
         cross_indices = (indices + cross_shift.astype(jnp.int32)) % n
         return jnp.where(is_self_round, indices, cross_indices)
 
+    def _aux_actions(self, observations, prefix, params=None):
+        params = self.network.params if params is None else params
+        actor_def = self.network.model_def.modules["actor"]
+        return jax.vmap(
+            lambda p: actor_def.apply({"params": p}, observations).mode()
+        )(params[f"modules_{prefix}s"])
+
     def _delayed_aux_actions(self, observations):
-        """Evaluate all delayed auxiliary actors and stack actions as [N,B,A]."""
-        actions = []
-        for i in range(int(self.config["num_critics"])):
-            dist = self.network.select(f"delayed_aux_actor_{i}")(observations)
-            actions.append(dist.mode())
-        return jnp.stack(actions, axis=0)
+        return self._aux_actions(observations, "delayed_aux_actor")
 
     def _member_target_q(self, observations, member_actions):
         return self.network.select("target_critic")(
@@ -914,11 +974,9 @@ class DDReBRACAgent(flax.struct.PyTreeNode):
         """Train mu_i only against Q_i; these actors are never deployed."""
         del rng
         n = int(self.config["num_critics"])
-        actions_by_member = []
-        for i in range(n):
-            dist = self.network.select(f"aux_actor_{i}")(batch["observations"], params=grad_params)
-            actions_by_member.append(dist.mode())
-        actions_by_member = jnp.stack(actions_by_member, axis=0)  # [N, B, A]
+        actions_by_member = self._aux_actions(
+            batch["observations"], "aux_actor", params=grad_params
+        )  # [N, B, A]
 
         # Evaluate only Q_i(s, mu_i(s)), not all N critics on each of N actors.
         # As before, the critic's parameters come from self.network rather than
@@ -1001,8 +1059,7 @@ class DDReBRACAgent(flax.struct.PyTreeNode):
 
         def refresh(params):
             refreshed = dict(params)
-            for i in range(int(self.config["num_critics"])):
-                refreshed[f"modules_delayed_aux_actor_{i}"] = params[f"modules_{source_prefix}_{i}"]
+            refreshed["modules_delayed_aux_actors"] = params[f"modules_{source_prefix}s"]
             return refreshed
 
         # Unlike a per-parameter jnp.where, the copy branch only runs on the
@@ -1033,8 +1090,7 @@ class DDReBRACAgent(flax.struct.PyTreeNode):
         if full_update:
             new_network = self._target_update(new_network, "critic")
             if self.config["use_target_aux_actors"]:
-                for i in range(int(self.config["num_critics"])):
-                    new_network = self._target_update(new_network, f"aux_actor_{i}")
+                new_network = self._target_update(new_network, "aux_actors")
 
         # Delayed snapshots are a second, much slower time scale and are hard
         # refreshed independently of whether this particular step updated actors.
@@ -1113,8 +1169,26 @@ class DDReBRACAgent(flax.struct.PyTreeNode):
                 params[f"modules_target_aux_actor_{i}"] = deepcopy(params["modules_actor"])
             params[f"modules_delayed_aux_actor_{i}"] = deepcopy(params["modules_actor"])
 
-        network = network.replace(params=params, opt_state=network_tx.init(params))
+        params = pack_params(params, int(config["num_critics"]))
+        network = network.replace(params=params, opt_state=network_tx.init(online_params(params)))
         return cls(rng, network=network, config=flax.core.FrozenDict(**config))
+
+
+def agent_from_reference(reference):
+    """Build packed execution state from a standard CDTA agent, including Adam history."""
+    n = int(reference.config["num_critics"])
+    params = pack_params(reference.network.params, n)
+    adam, *rest = reference.network.opt_state
+    for moments in (adam.mu, adam.nu):
+        frozen = {k: v for k, v in moments.items() if k not in online_params(moments)}
+        if any(np.any(np.asarray(jax.device_get(p)) != 0) for p in jax.tree_util.tree_leaves(frozen)):
+            raise ValueError("Cannot discard nonzero frozen Adam moments.")
+    adam = adam._replace(mu=online_params(pack_params(adam.mu, n)),
+                         nu=online_params(pack_params(adam.nu, n)))
+    network = FQLTrainState(step=reference.network.step, apply_fn=reference.network.apply_fn,
+                            model_def=reference.network.model_def, params=params,
+                            tx=reference.network.tx, opt_state=(adam, *rest))
+    return DDReBRACAgent(reference.rng, network=network, config=reference.config)
 
 
 class FQLDataset(FrozenDict):
@@ -1706,6 +1780,7 @@ class DDReBRACFQLJAX:
 
     def load_state_dict(self, state_dict: Dict[str, Any]):
         payload = state_dict["agent"] if "agent" in state_dict else state_dict
+        payload = convert_agent_state_dict(payload, int(self.fql_config["num_critics"]))
         self.agent = serialization.from_state_dict(self.agent, payload)
         self.total_it = int(state_dict.get("total_it", 0)) if isinstance(state_dict, dict) else 0
         if isinstance(state_dict, dict) and "initial_actor_params" in state_dict:
