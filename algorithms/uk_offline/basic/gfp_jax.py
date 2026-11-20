@@ -12,8 +12,6 @@ loss, is UNCHANGED; the newly written section is CLI, YAML, logging and resume.
 
 This file covers OFFLINE GFP, not the upstream optional offline-to-online stage.
 """
-from __future__ import annotations
-
 import os
 os.environ.setdefault('TF_CUDNN_DETERMINISTIC', '1')
 os.environ.setdefault('MUJOCO_GL', 'egl')
@@ -840,7 +838,7 @@ MINARI_DICT_REF_SCORES = dict(
 MINARI_REF_SCORES: tuple[float,float]
 
 
-def check_ref_scores(dataset:MinariDataset):
+def check_ref_scores(dataset:'MinariDataset'):
     global MINARI_REF_SCORES
     metadata = dataset.storage.metadata
     if 'ref_min_score' in metadata:

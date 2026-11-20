@@ -59,10 +59,6 @@ try:
 except ImportError:
     ogbench = None
 try:
-    import d4rl
-except ImportError:
-    d4rl = None
-try:
     import wandb
 except ImportError:
     wandb = None
@@ -1174,6 +1170,7 @@ def make_env_and_datasets(env_name, frame_stack=None, action_clip_eps=1e-5):
 
 def make_env(env_name):
     """Make D4RL environment."""
+    import d4rl  # noqa: F401  # Register D4RL environments only when needed.
     env = gymnasium.make('GymV21Environment-v0', env_id=env_name)
     env = EpisodeMonitor(env)
     return env
@@ -1189,6 +1186,7 @@ def get_dataset(
         env: Environment instance.
         env_name: Name of the environment.
     """
+    import d4rl
     dataset = d4rl.qlearning_dataset(env)
 
     terminals = np.zeros_like(dataset['rewards']) # Indicate the end of an episode.

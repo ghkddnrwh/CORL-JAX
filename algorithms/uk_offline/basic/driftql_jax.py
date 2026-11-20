@@ -1155,6 +1155,7 @@ class ReplayBuffer(Dataset):
 
 def make_env(env_name):
     """Make D4RL environment."""
+    import d4rl  # noqa: F401  # Register D4RL environments only when needed.
     env = gymnasium.make('GymV21Environment-v0', env_id=env_name)
     env = EpisodeMonitor(env)
     return env
