@@ -37,7 +37,7 @@ _ogbench_common: &ogbench_common
   target_agg: actor
   guidance_agg: actor
   guidance_fn: softmax
-  target_use_next: false
+  target_use_next: true
   normalize_q_loss: true
   encode_time_dim: 64
   alpha: 1.0
