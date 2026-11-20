@@ -1,0 +1,258 @@
+# FAC original paper/official-code settings, written in the user's ORL-SMOOTH YAML style.
+# Source: user-supplied FAC-main.zip / README.md / agents/fac.py:get_config().
+# FAC ORIGINAL math is NOT FQL math: normalize_q_loss must be true by default.
+# ORL mapping: fac_alpha -> critic_penalty_coef; fac_lambda -> actor_bc_coef;
+#              lr_bc -> bc_learning_rate; value_layer_norm -> layer_norm.
+
+_ogbench_common: &ogbench_common
+  max_timesteps: 1000000           # FAC actor-critic updates only (not BC pretraining).
+  eval_freq: 100000
+  log_every: 5000
+  checkpoint_freq: 25000
+  n_episodes: 50
+  eval_seed: 42
+  eval_at_first_step: true
+  save_best_model: true
+  save_final_model: true
+
+  batch_size: 256
+  normalize_states: false
+  normalize_reward: false
+  action_clip_eps: 1.0e-5
+  frame_stack: null
+  p_aug: null
+
+  actor_learning_rate: 3.0e-4   # FAC original AC optimizer lr
+  critic_learning_rate: 3.0e-4  # accepted for ORL CLI; FAC uses the same AC optimizer
+  bc_learning_rate: 3.0e-4      # FAC original flow-proxy optimizer lr_bc
+  hidden_dim: 512
+  actor_n_hiddens: 4
+  critic_n_hiddens: 4
+  bc_n_hiddens: 4
+  actor_hidden_dims: [512, 512, 512, 512]
+  value_hidden_dims: [512, 512, 512, 512]
+  bc_hidden_dims: [512, 512, 512, 512]
+  layer_norm: true
+  actor_layer_norm: false
+  bc_layer_norm: false
+  critic_ln: true
+  actor_ln: false
+  encoder: null
+
+  discount: 0.995
+  tau: 0.005
+  num_critics: 2
+  q_agg: min
+  flow_steps: 10
+  normalize_q_loss: true
+  distil_loss: true
+  actor_bc_coef: 1.0        # FAC original fac_lambda (NOT FQL alpha)
+  critic_penalty_coef: 1.0  # FAC original fac_alpha
+  fac_threshold: batch_adaptive
+  logp_method: exact
+  logp_hutch_probes: 8
+  weight_type: linear
+
+  epoch_flow_proxy: 250
+  bc_batch_size: null       # original FAC: 1x / 4x / 16x (state); 1x (visual)
+  pretrained_bc_dir: pretrained_bc
+
+_ogbench_visual_common: &ogbench_visual_common
+  <<: *ogbench_common
+  max_timesteps: 500000
+  encoder: impala_small
+  p_aug: 0.5
+  frame_stack: 3
+
+_d4rl_common: &d4rl_common
+  <<: *ogbench_common
+
+# OGBench reward-based singletask: ten environment families, 50 task names + ten defaults.
+_antmaze_large: &antmaze_large
+  <<: *ogbench_common
+  critic_penalty_coef: 0.5
+  actor_bc_coef: 0.1
+  fac_threshold: dataset_wide_constant
+antmaze-large-navigate-singletask-v0: { <<: *antmaze_large }
+antmaze-large-navigate-singletask-task1-v0: { <<: *antmaze_large }
+antmaze-large-navigate-singletask-task2-v0: { <<: *antmaze_large }
+antmaze-large-navigate-singletask-task3-v0: { <<: *antmaze_large }
+antmaze-large-navigate-singletask-task4-v0: { <<: *antmaze_large }
+antmaze-large-navigate-singletask-task5-v0: { <<: *antmaze_large }
+
+_antmaze_giant: &antmaze_giant
+  <<: *ogbench_common
+  critic_penalty_coef: 1.0
+  actor_bc_coef: 0.1
+  fac_threshold: dataset_wide_constant
+antmaze-giant-navigate-singletask-v0: { <<: *antmaze_giant }
+antmaze-giant-navigate-singletask-task1-v0: { <<: *antmaze_giant }
+antmaze-giant-navigate-singletask-task2-v0: { <<: *antmaze_giant }
+antmaze-giant-navigate-singletask-task3-v0: { <<: *antmaze_giant }
+antmaze-giant-navigate-singletask-task4-v0: { <<: *antmaze_giant }
+antmaze-giant-navigate-singletask-task5-v0: { <<: *antmaze_giant }
+
+_humanoid_medium: &humanoid_medium
+  <<: *ogbench_common
+  critic_penalty_coef: 0.5
+  actor_bc_coef: 0.3
+  q_agg: mean
+  logp_method: hutch-rade
+humanoidmaze-medium-navigate-singletask-v0: { <<: *humanoid_medium }
+humanoidmaze-medium-navigate-singletask-task1-v0: { <<: *humanoid_medium }
+humanoidmaze-medium-navigate-singletask-task2-v0: { <<: *humanoid_medium }
+humanoidmaze-medium-navigate-singletask-task3-v0: { <<: *humanoid_medium }
+humanoidmaze-medium-navigate-singletask-task4-v0: { <<: *humanoid_medium }
+humanoidmaze-medium-navigate-singletask-task5-v0: { <<: *humanoid_medium }
+
+_humanoid_large: &humanoid_large
+  <<: *ogbench_common
+  critic_penalty_coef: 0.5
+  actor_bc_coef: 0.1
+  q_agg: mean
+  logp_method: hutch-rade
+humanoidmaze-large-navigate-singletask-v0: { <<: *humanoid_large }
+humanoidmaze-large-navigate-singletask-task1-v0: { <<: *humanoid_large }
+humanoidmaze-large-navigate-singletask-task2-v0: { <<: *humanoid_large }
+humanoidmaze-large-navigate-singletask-task3-v0: { <<: *humanoid_large }
+humanoidmaze-large-navigate-singletask-task4-v0: { <<: *humanoid_large }
+humanoidmaze-large-navigate-singletask-task5-v0: { <<: *humanoid_large }
+
+_antsoccer_arena: &antsoccer_arena
+  <<: *ogbench_common
+  critic_penalty_coef: 1.0
+  actor_bc_coef: 0.1
+  q_agg: mean
+  fac_threshold: dataset_wide_constant
+antsoccer-arena-navigate-singletask-v0: { <<: *antsoccer_arena }
+antsoccer-arena-navigate-singletask-task1-v0: { <<: *antsoccer_arena }
+antsoccer-arena-navigate-singletask-task2-v0: { <<: *antsoccer_arena }
+antsoccer-arena-navigate-singletask-task3-v0: { <<: *antsoccer_arena }
+antsoccer-arena-navigate-singletask-task4-v0: { <<: *antsoccer_arena }
+antsoccer-arena-navigate-singletask-task5-v0: { <<: *antsoccer_arena }
+
+_cube_single: &cube_single
+  <<: *ogbench_common
+  critic_penalty_coef: 0.5
+  actor_bc_coef: 10.0
+  q_agg: mean
+cube-single-play-singletask-v0: { <<: *cube_single }
+cube-single-play-singletask-task1-v0: { <<: *cube_single }
+cube-single-play-singletask-task2-v0: { <<: *cube_single }
+cube-single-play-singletask-task3-v0: { <<: *cube_single }
+cube-single-play-singletask-task4-v0: { <<: *cube_single }
+cube-single-play-singletask-task5-v0: { <<: *cube_single }
+
+_cube_double: &cube_double
+  <<: *ogbench_common
+  critic_penalty_coef: 1.0
+  actor_bc_coef: 1.0
+  q_agg: mean
+cube-double-play-singletask-v0: { <<: *cube_double }
+cube-double-play-singletask-task1-v0: { <<: *cube_double }
+cube-double-play-singletask-task2-v0: { <<: *cube_double }
+cube-double-play-singletask-task3-v0: { <<: *cube_double }
+cube-double-play-singletask-task4-v0: { <<: *cube_double }
+cube-double-play-singletask-task5-v0: { <<: *cube_double }
+
+_scene: &scene
+  <<: *ogbench_common
+  critic_penalty_coef: 1.0
+  actor_bc_coef: 1.0
+  q_agg: mean
+scene-play-singletask-v0: { <<: *scene }
+scene-play-singletask-task1-v0: { <<: *scene }
+scene-play-singletask-task2-v0: { <<: *scene }
+scene-play-singletask-task3-v0: { <<: *scene }
+scene-play-singletask-task4-v0: { <<: *scene }
+scene-play-singletask-task5-v0: { <<: *scene }
+
+_puzzle_3x3: &puzzle_3x3
+  <<: *ogbench_common
+  critic_penalty_coef: 1.0
+  actor_bc_coef: 1.0
+  q_agg: mean
+puzzle-3x3-play-singletask-v0: { <<: *puzzle_3x3 }
+puzzle-3x3-play-singletask-task1-v0: { <<: *puzzle_3x3 }
+puzzle-3x3-play-singletask-task2-v0: { <<: *puzzle_3x3 }
+puzzle-3x3-play-singletask-task3-v0: { <<: *puzzle_3x3 }
+puzzle-3x3-play-singletask-task4-v0: { <<: *puzzle_3x3 }
+puzzle-3x3-play-singletask-task5-v0: { <<: *puzzle_3x3 }
+
+_puzzle_4x4: &puzzle_4x4
+  <<: *ogbench_common
+  critic_penalty_coef: 5.0
+  actor_bc_coef: 0.3
+  q_agg: mean
+puzzle-4x4-play-singletask-v0: { <<: *puzzle_4x4 }
+puzzle-4x4-play-singletask-task1-v0: { <<: *puzzle_4x4 }
+puzzle-4x4-play-singletask-task2-v0: { <<: *puzzle_4x4 }
+puzzle-4x4-play-singletask-task3-v0: { <<: *puzzle_4x4 }
+puzzle-4x4-play-singletask-task4-v0: { <<: *puzzle_4x4 }
+puzzle-4x4-play-singletask-task5-v0: { <<: *puzzle_4x4 }
+
+# Five OGBench visual manipulation task1 environments (FAC-main/README.md).
+_visual_cube_single: &visual_cube_single
+  <<: *ogbench_visual_common
+  critic_penalty_coef: 0.5
+  actor_bc_coef: 10.0
+  q_agg: mean
+visual-cube-single-play-singletask-v0: { <<: *visual_cube_single }
+visual-cube-single-play-singletask-task1-v0: { <<: *visual_cube_single }
+
+_visual_cube_double: &visual_cube_double
+  <<: *ogbench_visual_common
+  critic_penalty_coef: 1.0
+  actor_bc_coef: 1.0
+  q_agg: mean
+visual-cube-double-play-singletask-v0: { <<: *visual_cube_double }
+visual-cube-double-play-singletask-task1-v0: { <<: *visual_cube_double }
+
+_visual_scene: &visual_scene
+  <<: *ogbench_visual_common
+  critic_penalty_coef: 1.0
+  actor_bc_coef: 1.0
+  q_agg: mean
+visual-scene-play-singletask-v0: { <<: *visual_scene }
+visual-scene-play-singletask-task1-v0: { <<: *visual_scene }
+
+_visual_puzzle_3x3: &visual_puzzle_3x3
+  <<: *ogbench_visual_common
+  critic_penalty_coef: 1.0
+  actor_bc_coef: 1.0
+  q_agg: mean
+visual-puzzle-3x3-play-singletask-v0: { <<: *visual_puzzle_3x3 }
+visual-puzzle-3x3-play-singletask-task1-v0: { <<: *visual_puzzle_3x3 }
+
+_visual_puzzle_4x4: &visual_puzzle_4x4
+  <<: *ogbench_visual_common
+  critic_penalty_coef: 5.0
+  actor_bc_coef: 0.3
+  q_agg: mean
+visual-puzzle-4x4-play-singletask-v0: { <<: *visual_puzzle_4x4 }
+visual-puzzle-4x4-play-singletask-task1-v0: { <<: *visual_puzzle_4x4 }
+
+# D4RL official FAC configs, with original state/reward handling.
+halfcheetah-medium-v2: { <<: *d4rl_common, critic_penalty_coef: 0.05, actor_bc_coef: 0.0003 }
+halfcheetah-medium-replay-v2: { <<: *d4rl_common, critic_penalty_coef: 0.05, actor_bc_coef: 0.0003 }
+halfcheetah-medium-expert-v2: { <<: *d4rl_common, critic_penalty_coef: 0.5, actor_bc_coef: 0.003 }
+hopper-medium-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.1 }
+hopper-medium-replay-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.1 }
+hopper-medium-expert-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.3 }
+walker2d-medium-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.03 }
+walker2d-medium-replay-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.1 }
+walker2d-medium-expert-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.03 }
+antmaze-umaze-v2: { <<: *d4rl_common, critic_penalty_coef: 1.0, actor_bc_coef: 0.1, fac_threshold: dataset_wide_constant }
+antmaze-umaze-diverse-v2: { <<: *d4rl_common, critic_penalty_coef: 1.0, actor_bc_coef: 0.1, fac_threshold: dataset_wide_constant }
+antmaze-medium-play-v2: { <<: *d4rl_common, critic_penalty_coef: 0.5, actor_bc_coef: 0.03, fac_threshold: dataset_wide_constant }
+antmaze-medium-diverse-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.1, fac_threshold: dataset_wide_constant }
+antmaze-large-play-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.03, fac_threshold: dataset_wide_constant }
+antmaze-large-diverse-v2: { <<: *d4rl_common, critic_penalty_coef: 1.0, actor_bc_coef: 0.03, fac_threshold: dataset_wide_constant }
+pen-human-v1: { <<: *d4rl_common, critic_penalty_coef: 10.0, actor_bc_coef: 0.3, logp_method: hutch-rade }
+pen-cloned-v1: { <<: *d4rl_common, critic_penalty_coef: 1.0, actor_bc_coef: 0.1, logp_method: hutch-rade }
+door-human-v1: { <<: *d4rl_common, critic_penalty_coef: 1.0, actor_bc_coef: 3.0, logp_method: hutch-rade }
+door-cloned-v1: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 10.0, logp_method: hutch-rade }
+hammer-human-v1: { <<: *d4rl_common, critic_penalty_coef: 0.5, actor_bc_coef: 0.03, logp_method: hutch-rade }
+hammer-cloned-v1: { <<: *d4rl_common, critic_penalty_coef: 0.5, actor_bc_coef: 1.0, logp_method: hutch-rade }
+relocate-human-v1: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 10.0, logp_method: hutch-rade }
+relocate-cloned-v1: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 10.0, logp_method: hutch-rade }

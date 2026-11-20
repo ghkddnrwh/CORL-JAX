@@ -1,0 +1,343 @@
+# DriftQL official README configurations translated to the ORL-SMOOTH interface.
+# Algorithm and network update paths are preserved from agents/driftql.py.
+# Algorithm fields come from original get_config and README; experiment fields follow the ORL interface.
+# Original source: uploaded driftql-main.zip (agents/driftql.py, README.md).
+# Fields with interface names: q_agg_actor -> actor_critic_aggregation;
+# offline_steps -> max_timesteps, eval_interval -> eval_freq, log_interval -> log_every.
+# Visual OGBench: official README does not specify a configuration; not invented here.
+
+_ogbench_common: &ogbench_common
+  max_timesteps: 1000000
+  eval_freq: 100000
+  log_every: 5000
+  batch_size: 256
+  normalize_states: false
+  normalize_reward: false
+  action_clip_eps: 1.0e-5
+  frame_stack: null
+  p_aug: null
+  lr: 0.0003
+  actor_learning_rate: 0.0003
+  critic_learning_rate: 0.0003
+  hidden_dim: 512
+  actor_n_hiddens: 4
+  critic_n_hiddens: 4
+  actor_hidden_dims: [512, 512, 512, 512]
+  value_hidden_dims: [512, 512, 512, 512]
+  layer_norm: true
+  actor_layer_norm: false
+  critic_ln: true
+  actor_ln: false
+  discount: 0.99
+  tau: 0.005
+  q_agg: "min"
+  actor_critic_aggregation: "mean"
+  alpha: 10.0
+  normalize_q_loss: false
+  encoder: null
+  kernel: "laplace"
+  drift_temp: 0.2
+  dim_scale: true
+  drift_ngen: 32
+  noise_dim: 0
+  drift_eta: 1.0
+  drift_normalize: false
+  drift_batch_size: 256
+  drift_eps: 1.0e-12
+  n_episodes: 50
+  eval_seed: 42
+  eval_at_first_step: true
+  checkpoint_freq: 25000
+  save_best_model: true
+  save_final_model: true
+
+# Original official OGBench configurations: identical for all five singletasks in a category.
+
+_antsoccer_arena_navigate: &antsoccer_arena_navigate
+  <<: *ogbench_common
+  drift_temp: 0.5
+  discount: 0.995
+  q_agg: "mean"
+antsoccer-arena-navigate-singletask-v0: { <<: *antsoccer_arena_navigate }
+antsoccer-arena-navigate-singletask-task1-v0: { <<: *antsoccer_arena_navigate }
+antsoccer-arena-navigate-singletask-task2-v0: { <<: *antsoccer_arena_navigate }
+antsoccer-arena-navigate-singletask-task3-v0: { <<: *antsoccer_arena_navigate }
+antsoccer-arena-navigate-singletask-task4-v0: { <<: *antsoccer_arena_navigate }
+antsoccer-arena-navigate-singletask-task5-v0: { <<: *antsoccer_arena_navigate }
+
+_humanoidmaze_medium_navigate: &humanoidmaze_medium_navigate
+  <<: *ogbench_common
+  drift_temp: 0.5
+  alpha: 65
+  discount: 0.998
+  q_agg: "mean"
+humanoidmaze-medium-navigate-singletask-v0: { <<: *humanoidmaze_medium_navigate }
+humanoidmaze-medium-navigate-singletask-task1-v0: { <<: *humanoidmaze_medium_navigate }
+humanoidmaze-medium-navigate-singletask-task2-v0: { <<: *humanoidmaze_medium_navigate }
+humanoidmaze-medium-navigate-singletask-task3-v0: { <<: *humanoidmaze_medium_navigate }
+humanoidmaze-medium-navigate-singletask-task4-v0: { <<: *humanoidmaze_medium_navigate }
+humanoidmaze-medium-navigate-singletask-task5-v0: { <<: *humanoidmaze_medium_navigate }
+
+_humanoidmaze_large_navigate: &humanoidmaze_large_navigate
+  <<: *ogbench_common
+  alpha: 32
+  discount: 0.995
+  q_agg: "mean"
+humanoidmaze-large-navigate-singletask-v0: { <<: *humanoidmaze_large_navigate }
+humanoidmaze-large-navigate-singletask-task1-v0: { <<: *humanoidmaze_large_navigate }
+humanoidmaze-large-navigate-singletask-task2-v0: { <<: *humanoidmaze_large_navigate }
+humanoidmaze-large-navigate-singletask-task3-v0: { <<: *humanoidmaze_large_navigate }
+humanoidmaze-large-navigate-singletask-task4-v0: { <<: *humanoidmaze_large_navigate }
+humanoidmaze-large-navigate-singletask-task5-v0: { <<: *humanoidmaze_large_navigate }
+
+_antmaze_large_navigate: &antmaze_large_navigate
+  <<: *ogbench_common
+  drift_temp: 0.5
+  q_agg: "mean"
+antmaze-large-navigate-singletask-v0: { <<: *antmaze_large_navigate }
+antmaze-large-navigate-singletask-task1-v0: { <<: *antmaze_large_navigate }
+antmaze-large-navigate-singletask-task2-v0: { <<: *antmaze_large_navigate }
+antmaze-large-navigate-singletask-task3-v0: { <<: *antmaze_large_navigate }
+antmaze-large-navigate-singletask-task4-v0: { <<: *antmaze_large_navigate }
+antmaze-large-navigate-singletask-task5-v0: { <<: *antmaze_large_navigate }
+
+_antmaze_giant_navigate: &antmaze_giant_navigate
+  <<: *ogbench_common
+  discount: 0.995
+antmaze-giant-navigate-singletask-v0: { <<: *antmaze_giant_navigate }
+antmaze-giant-navigate-singletask-task1-v0: { <<: *antmaze_giant_navigate }
+antmaze-giant-navigate-singletask-task2-v0: { <<: *antmaze_giant_navigate }
+antmaze-giant-navigate-singletask-task3-v0: { <<: *antmaze_giant_navigate }
+antmaze-giant-navigate-singletask-task4-v0: { <<: *antmaze_giant_navigate }
+antmaze-giant-navigate-singletask-task5-v0: { <<: *antmaze_giant_navigate }
+
+_cube_single_play: &cube_single_play
+  <<: *ogbench_common
+  drift_temp: 0.02
+  alpha: 60
+  discount: 0.995
+  q_agg: "mean"
+  kernel: "gaussian"
+cube-single-play-singletask-v0: { <<: *cube_single_play }
+cube-single-play-singletask-task1-v0: { <<: *cube_single_play }
+cube-single-play-singletask-task2-v0: { <<: *cube_single_play }
+cube-single-play-singletask-task3-v0: { <<: *cube_single_play }
+cube-single-play-singletask-task4-v0: { <<: *cube_single_play }
+cube-single-play-singletask-task5-v0: { <<: *cube_single_play }
+
+_cube_double_play: &cube_double_play
+  <<: *ogbench_common
+  drift_ngen: 4
+  noise_dim: 8
+  alpha: 100
+  q_agg: "mean"
+  kernel: "gaussian"
+cube-double-play-singletask-v0: { <<: *cube_double_play }
+cube-double-play-singletask-task1-v0: { <<: *cube_double_play }
+cube-double-play-singletask-task2-v0: { <<: *cube_double_play }
+cube-double-play-singletask-task3-v0: { <<: *cube_double_play }
+cube-double-play-singletask-task4-v0: { <<: *cube_double_play }
+cube-double-play-singletask-task5-v0: { <<: *cube_double_play }
+
+_scene_play: &scene_play
+  <<: *ogbench_common
+  alpha: 250
+  discount: 0.995
+  kernel: "gaussian"
+scene-play-singletask-v0: { <<: *scene_play }
+scene-play-singletask-task1-v0: { <<: *scene_play }
+scene-play-singletask-task2-v0: { <<: *scene_play }
+scene-play-singletask-task3-v0: { <<: *scene_play }
+scene-play-singletask-task4-v0: { <<: *scene_play }
+scene-play-singletask-task5-v0: { <<: *scene_play }
+
+_puzzle_3x3_play: &puzzle_3x3_play
+  <<: *ogbench_common
+  drift_temp: 0.5
+  alpha: 50
+  kernel: "gaussian"
+puzzle-3x3-play-singletask-v0: { <<: *puzzle_3x3_play }
+puzzle-3x3-play-singletask-task1-v0: { <<: *puzzle_3x3_play }
+puzzle-3x3-play-singletask-task2-v0: { <<: *puzzle_3x3_play }
+puzzle-3x3-play-singletask-task3-v0: { <<: *puzzle_3x3_play }
+puzzle-3x3-play-singletask-task4-v0: { <<: *puzzle_3x3_play }
+puzzle-3x3-play-singletask-task5-v0: { <<: *puzzle_3x3_play }
+
+_puzzle_4x4_play: &puzzle_4x4_play
+  <<: *ogbench_common
+  drift_temp: 0.8
+  alpha: 300
+  q_agg: "mean"
+  kernel: "gaussian"
+puzzle-4x4-play-singletask-v0: { <<: *puzzle_4x4_play }
+puzzle-4x4-play-singletask-task1-v0: { <<: *puzzle_4x4_play }
+puzzle-4x4-play-singletask-task2-v0: { <<: *puzzle_4x4_play }
+puzzle-4x4-play-singletask-task3-v0: { <<: *puzzle_4x4_play }
+puzzle-4x4-play-singletask-task4-v0: { <<: *puzzle_4x4_play }
+puzzle-4x4-play-singletask-task5-v0: { <<: *puzzle_4x4_play }
+
+# Official D4RL AntMaze, Adroit, MuJoCo settings from README.md.
+
+halfcheetah-medium-expert-v2:
+  <<: *ogbench_common
+  drift_temp: 0.5
+  alpha: 300
+  q_agg: "mean"
+
+antmaze-large-play-v2:
+  <<: *ogbench_common
+  drift_temp: 0.5
+  alpha: 3
+  discount: 0.995
+  kernel: "gaussian"
+
+antmaze-medium-diverse-v2:
+  <<: *ogbench_common
+  drift_temp: 0.5
+  alpha: 8
+  discount: 0.995
+  kernel: "gaussian"
+
+antmaze-medium-play-v2:
+  <<: *ogbench_common
+  drift_temp: 0.5
+  alpha: 5
+  kernel: "gaussian"
+
+antmaze-umaze-diverse-v2:
+  <<: *ogbench_common
+  drift_temp: 0.5
+  alpha: 12
+  q_agg: "mean"
+
+antmaze-umaze-v2:
+  <<: *ogbench_common
+  drift_temp: 0.5
+  alpha: 15
+
+antmaze-large-diverse-v2:
+  <<: *ogbench_common
+  drift_temp: 0.5
+  alpha: 5
+  discount: 0.995
+  kernel: "gaussian"
+
+door-cloned-v1:
+  <<: *ogbench_common
+  alpha: 4500
+  discount: 0.995
+
+door-expert-v1:
+  <<: *ogbench_common
+  alpha: 4500
+  discount: 0.995
+  q_agg: "mean"
+
+door-human-v1:
+  <<: *ogbench_common
+  alpha: 4500
+  discount: 0.995
+  q_agg: "mean"
+
+hammer-cloned-v1:
+  <<: *ogbench_common
+  drift_temp: 0.05
+  alpha: 2500
+  q_agg: "mean"
+
+hammer-expert-v1:
+  <<: *ogbench_common
+  drift_temp: 0.05
+  alpha: 2500
+  discount: 0.995
+
+hammer-human-v1:
+  <<: *ogbench_common
+  drift_temp: 0.05
+  alpha: 2500
+  discount: 0.995
+  q_agg: "mean"
+
+pen-cloned-v1:
+  <<: *ogbench_common
+  drift_temp: 0.05
+  alpha: 1500
+  discount: 0.995
+  kernel: "gaussian"
+
+pen-expert-v1:
+  <<: *ogbench_common
+  drift_temp: 0.9
+  alpha: 2000
+
+pen-human-v1:
+  <<: *ogbench_common
+  drift_temp: 0.05
+  alpha: 2000
+  discount: 0.995
+  q_agg: "mean"
+
+relocate-cloned-v1:
+  <<: *ogbench_common
+  alpha: 5000
+  discount: 0.995
+
+relocate-expert-v1:
+  <<: *ogbench_common
+  alpha: 5000
+  discount: 0.995
+
+relocate-human-v1:
+  <<: *ogbench_common
+  alpha: 5000
+  discount: 0.995
+
+halfcheetah-medium-replay-v2:
+  <<: *ogbench_common
+  drift_temp: 0.5
+  discount: 0.995
+
+halfcheetah-medium-v2:
+  <<: *ogbench_common
+  drift_temp: 0.5
+  alpha: 3
+  q_agg: "mean"
+
+hopper-medium-expert-v2:
+  <<: *ogbench_common
+  drift_temp: 0.1
+  alpha: 600
+  discount: 0.995
+  kernel: "gaussian"
+
+hopper-medium-replay-v2:
+  <<: *ogbench_common
+  drift_temp: 0.1
+  alpha: 100
+  discount: 0.995
+  kernel: "gaussian"
+
+hopper-medium-v2:
+  <<: *ogbench_common
+  drift_temp: 0.1
+  alpha: 100
+  discount: 0.995
+  kernel: "gaussian"
+
+walker2d-medium-expert-v2:
+  <<: *ogbench_common
+  drift_temp: 0.1
+  alpha: 1000
+  q_agg: "mean"
+
+walker2d-medium-replay-v2:
+  <<: *ogbench_common
+  drift_temp: 0.1
+  alpha: 300
+  discount: 0.995
+
+walker2d-medium-v2:
+  <<: *ogbench_common
+  drift_temp: 0.1
+  alpha: 1000
+  discount: 0.995

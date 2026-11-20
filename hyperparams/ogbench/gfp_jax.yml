@@ -1,0 +1,1064 @@
+# GFP (Guided Flow Policy) — official gfp_params.csv, ORL-SMOOTH interface.
+# For any env, dataclass defaults < YAML < explicit CLI flags.
+# Algorithmic settings come from the uploaded official guided-flow-policy-main.zip.
+# No FQL alpha/aggregation settings have been transplanted into GFP.
+# GFP's alpha is the actor distillation coefficient; eta_temperature is VaBC guidance temperature.
+
+_ogbench_common: &ogbench_common
+  max_timesteps: 1000000
+  eval_freq: 100000
+  log_every: 5000
+  batch_size: 256
+  normalize_states: false
+  normalize_reward: false
+  action_clip_eps: 1.0e-5
+  frame_stack: null
+  p_aug: null
+  dataset_on_gpu: true
+  n_steps_fused: 4
+  buffer_size: 2000000
+
+  lr: 3.0e-4
+  actor_learning_rate: 3.0e-4
+  critic_learning_rate: 3.0e-4
+  hidden_dim: 512
+  actor_n_hiddens: 4
+  critic_n_hiddens: 4
+  actor_hidden_dims: [512, 512, 512, 512]
+  value_hidden_dims: [512, 512, 512, 512]
+  layer_norm: true
+  actor_layer_norm: false
+  critic_ln: true
+  actor_ln: false
+  discount: 0.99
+  tau: 0.005
+  num_critics: 2
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  guidance_fn: softmax
+  target_use_next: false
+  normalize_q_loss: true
+  encode_time_dim: 64
+  alpha: 1.0
+  eta_temperature: 0.001
+  flow_steps: 10
+  encoder: null
+  n_episodes: 50
+  eval_seed: 42
+  eval_flow_policy: true
+  eval_at_first_step: true
+  checkpoint_freq: 25000
+  save_best_model: true
+  save_final_model: true
+
+_ogbench_visual_common: &ogbench_visual_common
+  <<: *ogbench_common
+  max_timesteps: 500000
+  dataset_on_gpu: false
+  n_steps_fused: 1
+  encoder: impala_small
+  p_aug: 0.5
+  frame_stack: 3
+
+# Official OGBench GFP: visual_cube_double_play_singletask_task1_v0
+_gfp_visual_cube_double_play_singletask_task1_v0: &gfp_visual_cube_double_play_singletask_task1_v0
+  <<: *ogbench_visual_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: mean
+  guidance_agg: actor
+  alpha: 0.3
+  eta_temperature: 0.01
+visual-cube-double-play-singletask-v0: { <<: *gfp_visual_cube_double_play_singletask_task1_v0 }
+visual-cube-double-play-singletask-task1-v0: { <<: *gfp_visual_cube_double_play_singletask_task1_v0 }
+
+# Official OGBench GFP: visual_cube_single_play_singletask_task1_v0
+_gfp_visual_cube_single_play_singletask_task1_v0: &gfp_visual_cube_single_play_singletask_task1_v0
+  <<: *ogbench_visual_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: mean
+  guidance_agg: actor
+  alpha: 10.0
+  eta_temperature: 0.1
+visual-cube-single-play-singletask-v0: { <<: *gfp_visual_cube_single_play_singletask_task1_v0 }
+visual-cube-single-play-singletask-task1-v0: { <<: *gfp_visual_cube_single_play_singletask_task1_v0 }
+
+# Official OGBench GFP: visual_puzzle_3x3_play_singletask_task1_v0
+_gfp_visual_puzzle_3x3_play_singletask_task1_v0: &gfp_visual_puzzle_3x3_play_singletask_task1_v0
+  <<: *ogbench_visual_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 3.0
+  eta_temperature: 0.01
+visual-puzzle-3x3-play-singletask-v0: { <<: *gfp_visual_puzzle_3x3_play_singletask_task1_v0 }
+visual-puzzle-3x3-play-singletask-task1-v0: { <<: *gfp_visual_puzzle_3x3_play_singletask_task1_v0 }
+
+# Official OGBench GFP: visual_puzzle_4x4_play_singletask_task1_v0
+_gfp_visual_puzzle_4x4_play_singletask_task1_v0: &gfp_visual_puzzle_4x4_play_singletask_task1_v0
+  <<: *ogbench_visual_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 1.0
+  eta_temperature: 1.0e-04
+visual-puzzle-4x4-play-singletask-v0: { <<: *gfp_visual_puzzle_4x4_play_singletask_task1_v0 }
+visual-puzzle-4x4-play-singletask-task1-v0: { <<: *gfp_visual_puzzle_4x4_play_singletask_task1_v0 }
+
+# Official OGBench GFP: visual_scene_play_singletask_task1_v0
+_gfp_visual_scene_play_singletask_task1_v0: &gfp_visual_scene_play_singletask_task1_v0
+  <<: *ogbench_visual_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 10.0
+  eta_temperature: 0.001
+visual-scene-play-singletask-v0: { <<: *gfp_visual_scene_play_singletask_task1_v0 }
+visual-scene-play-singletask-task1-v0: { <<: *gfp_visual_scene_play_singletask_task1_v0 }
+
+# Official OGBench GFP: antmaze_giant_navigate
+_gfp_antmaze_giant_navigate: &gfp_antmaze_giant_navigate
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 1024
+  discount: 0.995
+  flow_steps: 10
+  q_agg: min
+  target_agg: actor
+  guidance_agg: min
+  alpha: 0.1
+  eta_temperature: 0.1
+antmaze-giant-navigate-singletask-v0: { <<: *gfp_antmaze_giant_navigate }
+antmaze-giant-navigate-singletask-task1-v0: { <<: *gfp_antmaze_giant_navigate }
+antmaze-giant-navigate-singletask-task2-v0: { <<: *gfp_antmaze_giant_navigate }
+antmaze-giant-navigate-singletask-task3-v0: { <<: *gfp_antmaze_giant_navigate }
+antmaze-giant-navigate-singletask-task4-v0: { <<: *gfp_antmaze_giant_navigate }
+antmaze-giant-navigate-singletask-task5-v0: { <<: *gfp_antmaze_giant_navigate }
+
+# Official OGBench GFP: antmaze_large_explore
+_gfp_antmaze_large_explore: &gfp_antmaze_large_explore
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 1024
+  discount: 0.995
+  flow_steps: 10
+  q_agg: min
+  target_agg: actor
+  guidance_agg: min
+  alpha: 0.01
+  eta_temperature: 1.0e-06
+antmaze-large-explore-singletask-v0: { <<: *gfp_antmaze_large_explore }
+antmaze-large-explore-singletask-task1-v0: { <<: *gfp_antmaze_large_explore }
+antmaze-large-explore-singletask-task2-v0: { <<: *gfp_antmaze_large_explore }
+antmaze-large-explore-singletask-task3-v0: { <<: *gfp_antmaze_large_explore }
+antmaze-large-explore-singletask-task4-v0: { <<: *gfp_antmaze_large_explore }
+antmaze-large-explore-singletask-task5-v0: { <<: *gfp_antmaze_large_explore }
+
+# Official OGBench GFP: antmaze_large_navigate
+_gfp_antmaze_large_navigate: &gfp_antmaze_large_navigate
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.995
+  flow_steps: 10
+  q_agg: min
+  target_agg: actor
+  guidance_agg: min
+  alpha: 0.3
+  eta_temperature: 1.0e-04
+antmaze-large-navigate-singletask-v0: { <<: *gfp_antmaze_large_navigate }
+antmaze-large-navigate-singletask-task1-v0: { <<: *gfp_antmaze_large_navigate }
+antmaze-large-navigate-singletask-task2-v0: { <<: *gfp_antmaze_large_navigate }
+antmaze-large-navigate-singletask-task3-v0: { <<: *gfp_antmaze_large_navigate }
+antmaze-large-navigate-singletask-task4-v0: { <<: *gfp_antmaze_large_navigate }
+antmaze-large-navigate-singletask-task5-v0: { <<: *gfp_antmaze_large_navigate }
+
+# Official OGBench GFP: antmaze_large_stitch
+_gfp_antmaze_large_stitch: &gfp_antmaze_large_stitch
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.995
+  flow_steps: 10
+  q_agg: min
+  target_agg: actor
+  guidance_agg: min
+  alpha: 0.3
+  eta_temperature: 1.0e-06
+antmaze-large-stitch-singletask-v0: { <<: *gfp_antmaze_large_stitch }
+antmaze-large-stitch-singletask-task1-v0: { <<: *gfp_antmaze_large_stitch }
+antmaze-large-stitch-singletask-task2-v0: { <<: *gfp_antmaze_large_stitch }
+antmaze-large-stitch-singletask-task3-v0: { <<: *gfp_antmaze_large_stitch }
+antmaze-large-stitch-singletask-task4-v0: { <<: *gfp_antmaze_large_stitch }
+antmaze-large-stitch-singletask-task5-v0: { <<: *gfp_antmaze_large_stitch }
+
+# Official OGBench GFP: antsoccer_arena_navigate
+_gfp_antsoccer_arena_navigate: &gfp_antsoccer_arena_navigate
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.995
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: min
+  alpha: 0.1
+  eta_temperature: 0.01
+antsoccer-arena-navigate-singletask-v0: { <<: *gfp_antsoccer_arena_navigate }
+antsoccer-arena-navigate-singletask-task1-v0: { <<: *gfp_antsoccer_arena_navigate }
+antsoccer-arena-navigate-singletask-task2-v0: { <<: *gfp_antsoccer_arena_navigate }
+antsoccer-arena-navigate-singletask-task3-v0: { <<: *gfp_antsoccer_arena_navigate }
+antsoccer-arena-navigate-singletask-task4-v0: { <<: *gfp_antsoccer_arena_navigate }
+antsoccer-arena-navigate-singletask-task5-v0: { <<: *gfp_antsoccer_arena_navigate }
+
+# Official OGBench GFP: antsoccer_arena_stitch
+_gfp_antsoccer_arena_stitch: &gfp_antsoccer_arena_stitch
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.995
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: min
+  alpha: 0.1
+  eta_temperature: 0.01
+antsoccer-arena-stitch-singletask-v0: { <<: *gfp_antsoccer_arena_stitch }
+antsoccer-arena-stitch-singletask-task1-v0: { <<: *gfp_antsoccer_arena_stitch }
+antsoccer-arena-stitch-singletask-task2-v0: { <<: *gfp_antsoccer_arena_stitch }
+antsoccer-arena-stitch-singletask-task3-v0: { <<: *gfp_antsoccer_arena_stitch }
+antsoccer-arena-stitch-singletask-task4-v0: { <<: *gfp_antsoccer_arena_stitch }
+antsoccer-arena-stitch-singletask-task5-v0: { <<: *gfp_antsoccer_arena_stitch }
+
+# Official OGBench GFP: cube_double_noisy
+_gfp_cube_double_noisy: &gfp_cube_double_noisy
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: mean
+  guidance_agg: actor
+  alpha: 0.1
+  eta_temperature: 1.0e-04
+cube-double-noisy-singletask-v0: { <<: *gfp_cube_double_noisy }
+cube-double-noisy-singletask-task1-v0: { <<: *gfp_cube_double_noisy }
+cube-double-noisy-singletask-task2-v0: { <<: *gfp_cube_double_noisy }
+cube-double-noisy-singletask-task3-v0: { <<: *gfp_cube_double_noisy }
+cube-double-noisy-singletask-task4-v0: { <<: *gfp_cube_double_noisy }
+cube-double-noisy-singletask-task5-v0: { <<: *gfp_cube_double_noisy }
+
+# Official OGBench GFP: cube_double_play
+_gfp_cube_double_play: &gfp_cube_double_play
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: mean
+  guidance_agg: actor
+  alpha: 1.0
+  eta_temperature: 0.01
+cube-double-play-singletask-v0: { <<: *gfp_cube_double_play }
+cube-double-play-singletask-task1-v0: { <<: *gfp_cube_double_play }
+cube-double-play-singletask-task2-v0: { <<: *gfp_cube_double_play }
+cube-double-play-singletask-task3-v0: { <<: *gfp_cube_double_play }
+cube-double-play-singletask-task4-v0: { <<: *gfp_cube_double_play }
+cube-double-play-singletask-task5-v0: { <<: *gfp_cube_double_play }
+
+# Official OGBench GFP: cube_single_noisy
+_gfp_cube_single_noisy: &gfp_cube_single_noisy
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: mean
+  guidance_agg: actor
+  alpha: 10.0
+  eta_temperature: 0.001
+cube-single-noisy-singletask-v0: { <<: *gfp_cube_single_noisy }
+cube-single-noisy-singletask-task1-v0: { <<: *gfp_cube_single_noisy }
+cube-single-noisy-singletask-task2-v0: { <<: *gfp_cube_single_noisy }
+cube-single-noisy-singletask-task3-v0: { <<: *gfp_cube_single_noisy }
+cube-single-noisy-singletask-task4-v0: { <<: *gfp_cube_single_noisy }
+cube-single-noisy-singletask-task5-v0: { <<: *gfp_cube_single_noisy }
+
+# Official OGBench GFP: cube_single_play
+_gfp_cube_single_play: &gfp_cube_single_play
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: mean
+  guidance_agg: actor
+  alpha: 10.0
+  eta_temperature: 0.1
+cube-single-play-singletask-v0: { <<: *gfp_cube_single_play }
+cube-single-play-singletask-task1-v0: { <<: *gfp_cube_single_play }
+cube-single-play-singletask-task2-v0: { <<: *gfp_cube_single_play }
+cube-single-play-singletask-task3-v0: { <<: *gfp_cube_single_play }
+cube-single-play-singletask-task4-v0: { <<: *gfp_cube_single_play }
+cube-single-play-singletask-task5-v0: { <<: *gfp_cube_single_play }
+
+# Official OGBench GFP: cube_triple_noisy
+_gfp_cube_triple_noisy: &gfp_cube_triple_noisy
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 1024
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: mean
+  guidance_agg: actor
+  alpha: 0.1
+  eta_temperature: 1.0e-05
+cube-triple-noisy-singletask-v0: { <<: *gfp_cube_triple_noisy }
+cube-triple-noisy-singletask-task1-v0: { <<: *gfp_cube_triple_noisy }
+cube-triple-noisy-singletask-task2-v0: { <<: *gfp_cube_triple_noisy }
+cube-triple-noisy-singletask-task3-v0: { <<: *gfp_cube_triple_noisy }
+cube-triple-noisy-singletask-task4-v0: { <<: *gfp_cube_triple_noisy }
+cube-triple-noisy-singletask-task5-v0: { <<: *gfp_cube_triple_noisy }
+
+# Official OGBench GFP: cube_triple_play
+_gfp_cube_triple_play: &gfp_cube_triple_play
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 1024
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: mean
+  guidance_agg: actor
+  alpha: 1.0
+  eta_temperature: 1.0e-05
+cube-triple-play-singletask-v0: { <<: *gfp_cube_triple_play }
+cube-triple-play-singletask-task1-v0: { <<: *gfp_cube_triple_play }
+cube-triple-play-singletask-task2-v0: { <<: *gfp_cube_triple_play }
+cube-triple-play-singletask-task3-v0: { <<: *gfp_cube_triple_play }
+cube-triple-play-singletask-task4-v0: { <<: *gfp_cube_triple_play }
+cube-triple-play-singletask-task5-v0: { <<: *gfp_cube_triple_play }
+
+# Official OGBench GFP: humanoidmaze_large_navigate
+_gfp_humanoidmaze_large_navigate: &gfp_humanoidmaze_large_navigate
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 1024
+  discount: 0.999
+  flow_steps: 30
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: min
+  alpha: 0.3
+  eta_temperature: 1.0e-04
+humanoidmaze-large-navigate-singletask-v0: { <<: *gfp_humanoidmaze_large_navigate }
+humanoidmaze-large-navigate-singletask-task1-v0: { <<: *gfp_humanoidmaze_large_navigate }
+humanoidmaze-large-navigate-singletask-task2-v0: { <<: *gfp_humanoidmaze_large_navigate }
+humanoidmaze-large-navigate-singletask-task3-v0: { <<: *gfp_humanoidmaze_large_navigate }
+humanoidmaze-large-navigate-singletask-task4-v0: { <<: *gfp_humanoidmaze_large_navigate }
+humanoidmaze-large-navigate-singletask-task5-v0: { <<: *gfp_humanoidmaze_large_navigate }
+
+# Official OGBench GFP: humanoidmaze_medium_navigate
+_gfp_humanoidmaze_medium_navigate: &gfp_humanoidmaze_medium_navigate
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.995
+  flow_steps: 10
+  q_agg: mean
+  target_agg: mean
+  guidance_agg: min
+  alpha: 0.3
+  eta_temperature: 0.001
+humanoidmaze-medium-navigate-singletask-v0: { <<: *gfp_humanoidmaze_medium_navigate }
+humanoidmaze-medium-navigate-singletask-task1-v0: { <<: *gfp_humanoidmaze_medium_navigate }
+humanoidmaze-medium-navigate-singletask-task2-v0: { <<: *gfp_humanoidmaze_medium_navigate }
+humanoidmaze-medium-navigate-singletask-task3-v0: { <<: *gfp_humanoidmaze_medium_navigate }
+humanoidmaze-medium-navigate-singletask-task4-v0: { <<: *gfp_humanoidmaze_medium_navigate }
+humanoidmaze-medium-navigate-singletask-task5-v0: { <<: *gfp_humanoidmaze_medium_navigate }
+
+# Official OGBench GFP: humanoidmaze_medium_stitch
+_gfp_humanoidmaze_medium_stitch: &gfp_humanoidmaze_medium_stitch
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.999
+  flow_steps: 10
+  q_agg: mean
+  target_agg: mean
+  guidance_agg: min
+  alpha: 0.3
+  eta_temperature: 0.001
+humanoidmaze-medium-stitch-singletask-v0: { <<: *gfp_humanoidmaze_medium_stitch }
+humanoidmaze-medium-stitch-singletask-task1-v0: { <<: *gfp_humanoidmaze_medium_stitch }
+humanoidmaze-medium-stitch-singletask-task2-v0: { <<: *gfp_humanoidmaze_medium_stitch }
+humanoidmaze-medium-stitch-singletask-task3-v0: { <<: *gfp_humanoidmaze_medium_stitch }
+humanoidmaze-medium-stitch-singletask-task4-v0: { <<: *gfp_humanoidmaze_medium_stitch }
+humanoidmaze-medium-stitch-singletask-task5-v0: { <<: *gfp_humanoidmaze_medium_stitch }
+
+# Official OGBench GFP: puzzle_3x3_play
+_gfp_puzzle_3x3_play: &gfp_puzzle_3x3_play
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 3.0
+  eta_temperature: 0.001
+puzzle-3x3-play-singletask-v0: { <<: *gfp_puzzle_3x3_play }
+puzzle-3x3-play-singletask-task1-v0: { <<: *gfp_puzzle_3x3_play }
+puzzle-3x3-play-singletask-task2-v0: { <<: *gfp_puzzle_3x3_play }
+puzzle-3x3-play-singletask-task3-v0: { <<: *gfp_puzzle_3x3_play }
+puzzle-3x3-play-singletask-task4-v0: { <<: *gfp_puzzle_3x3_play }
+puzzle-3x3-play-singletask-task5-v0: { <<: *gfp_puzzle_3x3_play }
+
+# Official OGBench GFP: puzzle_4x4_noisy
+_gfp_puzzle_4x4_noisy: &gfp_puzzle_4x4_noisy
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 3.0
+  eta_temperature: 0.001
+puzzle-4x4-noisy-singletask-v0: { <<: *gfp_puzzle_4x4_noisy }
+puzzle-4x4-noisy-singletask-task1-v0: { <<: *gfp_puzzle_4x4_noisy }
+puzzle-4x4-noisy-singletask-task2-v0: { <<: *gfp_puzzle_4x4_noisy }
+puzzle-4x4-noisy-singletask-task3-v0: { <<: *gfp_puzzle_4x4_noisy }
+puzzle-4x4-noisy-singletask-task4-v0: { <<: *gfp_puzzle_4x4_noisy }
+puzzle-4x4-noisy-singletask-task5-v0: { <<: *gfp_puzzle_4x4_noisy }
+
+# Official OGBench GFP: puzzle_4x4_play
+_gfp_puzzle_4x4_play: &gfp_puzzle_4x4_play
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 3.0
+  eta_temperature: 1.0e-05
+puzzle-4x4-play-singletask-v0: { <<: *gfp_puzzle_4x4_play }
+puzzle-4x4-play-singletask-task1-v0: { <<: *gfp_puzzle_4x4_play }
+puzzle-4x4-play-singletask-task2-v0: { <<: *gfp_puzzle_4x4_play }
+puzzle-4x4-play-singletask-task3-v0: { <<: *gfp_puzzle_4x4_play }
+puzzle-4x4-play-singletask-task4-v0: { <<: *gfp_puzzle_4x4_play }
+puzzle-4x4-play-singletask-task5-v0: { <<: *gfp_puzzle_4x4_play }
+
+# Official OGBench GFP: scene_noisy
+_gfp_scene_noisy: &gfp_scene_noisy
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 1.0
+  eta_temperature: 1.0e-04
+scene-noisy-singletask-v0: { <<: *gfp_scene_noisy }
+scene-noisy-singletask-task1-v0: { <<: *gfp_scene_noisy }
+scene-noisy-singletask-task2-v0: { <<: *gfp_scene_noisy }
+scene-noisy-singletask-task3-v0: { <<: *gfp_scene_noisy }
+scene-noisy-singletask-task4-v0: { <<: *gfp_scene_noisy }
+scene-noisy-singletask-task5-v0: { <<: *gfp_scene_noisy }
+
+# Official OGBench GFP: scene_play
+_gfp_scene_play: &gfp_scene_play
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 10.0
+  eta_temperature: 0.001
+scene-play-singletask-v0: { <<: *gfp_scene_play }
+scene-play-singletask-task1-v0: { <<: *gfp_scene_play }
+scene-play-singletask-task2-v0: { <<: *gfp_scene_play }
+scene-play-singletask-task3-v0: { <<: *gfp_scene_play }
+scene-play-singletask-task4-v0: { <<: *gfp_scene_play }
+scene-play-singletask-task5-v0: { <<: *gfp_scene_play }
+
+# Official D4RL GFP: antmaze_large_diverse
+_gfp_antmaze_large_diverse: &gfp_antmaze_large_diverse
+  <<: *ogbench_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: min
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 0.03
+  eta_temperature: 1.0e-05
+antmaze-large-diverse-v2: { <<: *gfp_antmaze_large_diverse }
+
+# Official D4RL GFP: antmaze_large_play
+_gfp_antmaze_large_play: &gfp_antmaze_large_play
+  <<: *ogbench_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: min
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 0.03
+  eta_temperature: 1.0e-05
+antmaze-large-play-v2: { <<: *gfp_antmaze_large_play }
+
+# Official D4RL GFP: antmaze_medium_diverse
+_gfp_antmaze_medium_diverse: &gfp_antmaze_medium_diverse
+  <<: *ogbench_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: min
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 0.03
+  eta_temperature: 0.001
+antmaze-medium-diverse-v2: { <<: *gfp_antmaze_medium_diverse }
+
+# Official D4RL GFP: antmaze_medium_play
+_gfp_antmaze_medium_play: &gfp_antmaze_medium_play
+  <<: *ogbench_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: min
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 0.03
+  eta_temperature: 0.001
+antmaze-medium-play-v2: { <<: *gfp_antmaze_medium_play }
+
+# Official D4RL GFP: antmaze_umaze
+_gfp_antmaze_umaze: &gfp_antmaze_umaze
+  <<: *ogbench_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: min
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 0.1
+  eta_temperature: 0.001
+antmaze-umaze-v2: { <<: *gfp_antmaze_umaze }
+
+# Official D4RL GFP: antmaze_umaze_diverse
+_gfp_antmaze_umaze_diverse: &gfp_antmaze_umaze_diverse
+  <<: *ogbench_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: min
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 0.1
+  eta_temperature: 0.001
+antmaze-umaze-diverse-v2: { <<: *gfp_antmaze_umaze_diverse }
+
+# Official D4RL GFP: door_cloned_v1
+_gfp_door_cloned_v1: &gfp_door_cloned_v1
+  <<: *ogbench_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 10.0
+  eta_temperature: 0.01
+door-cloned-v1: { <<: *gfp_door_cloned_v1 }
+
+# Official D4RL GFP: door_expert_v1
+_gfp_door_expert_v1: &gfp_door_expert_v1
+  <<: *ogbench_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 10.0
+  eta_temperature: 0.01
+door-expert-v1: { <<: *gfp_door_expert_v1 }
+
+# Official D4RL GFP: door_human_v1
+_gfp_door_human_v1: &gfp_door_human_v1
+  <<: *ogbench_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 10.0
+  eta_temperature: 0.01
+door-human-v1: { <<: *gfp_door_human_v1 }
+
+# Official D4RL GFP: hammer_cloned_v1
+_gfp_hammer_cloned_v1: &gfp_hammer_cloned_v1
+  <<: *ogbench_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 10.0
+  eta_temperature: 1.0e-05
+hammer-cloned-v1: { <<: *gfp_hammer_cloned_v1 }
+
+# Official D4RL GFP: hammer_expert_v1
+_gfp_hammer_expert_v1: &gfp_hammer_expert_v1
+  <<: *ogbench_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 10.0
+  eta_temperature: 0.01
+hammer-expert-v1: { <<: *gfp_hammer_expert_v1 }
+
+# Official D4RL GFP: hammer_human_v1
+_gfp_hammer_human_v1: &gfp_hammer_human_v1
+  <<: *ogbench_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 10.0
+  eta_temperature: 1.0e-05
+hammer-human-v1: { <<: *gfp_hammer_human_v1 }
+
+# Official D4RL GFP: pen_cloned_v1
+_gfp_pen_cloned_v1: &gfp_pen_cloned_v1
+  <<: *ogbench_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 3.0
+  eta_temperature: 1.0e-05
+pen-cloned-v1: { <<: *gfp_pen_cloned_v1 }
+
+# Official D4RL GFP: pen_expert_v1
+_gfp_pen_expert_v1: &gfp_pen_expert_v1
+  <<: *ogbench_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 1.0
+  eta_temperature: 0.001
+pen-expert-v1: { <<: *gfp_pen_expert_v1 }
+
+# Official D4RL GFP: pen_human_v1
+_gfp_pen_human_v1: &gfp_pen_human_v1
+  <<: *ogbench_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 3.0
+  eta_temperature: 1.0e-04
+pen-human-v1: { <<: *gfp_pen_human_v1 }
+
+# Official D4RL GFP: relocate_cloned_v1
+_gfp_relocate_cloned_v1: &gfp_relocate_cloned_v1
+  <<: *ogbench_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 10.0
+  eta_temperature: 1.0e-04
+relocate-cloned-v1: { <<: *gfp_relocate_cloned_v1 }
+
+# Official D4RL GFP: relocate_expert_v1
+_gfp_relocate_expert_v1: &gfp_relocate_expert_v1
+  <<: *ogbench_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 10.0
+  eta_temperature: 1.0e-04
+relocate-expert-v1: { <<: *gfp_relocate_expert_v1 }
+
+# Official D4RL GFP: relocate_human_v1
+_gfp_relocate_human_v1: &gfp_relocate_human_v1
+  <<: *ogbench_common
+  max_timesteps: 500000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 10.0
+  eta_temperature: 1.0e-04
+relocate-human-v1: { <<: *gfp_relocate_human_v1 }
+
+# Official Minari GFP: D4RL_door_cloned_v2
+_gfp_D4RL_door_cloned_v2: &gfp_D4RL_door_cloned_v2
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 0.03
+  eta_temperature: 1.0e-06
+D4RL/door/cloned-v2: { <<: *gfp_D4RL_door_cloned_v2 }
+
+# Official Minari GFP: D4RL_door_expert_v2
+_gfp_D4RL_door_expert_v2: &gfp_D4RL_door_expert_v2
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 3.0
+  eta_temperature: 0.001
+D4RL/door/expert-v2: { <<: *gfp_D4RL_door_expert_v2 }
+
+# Official Minari GFP: D4RL_door_human_v2
+_gfp_D4RL_door_human_v2: &gfp_D4RL_door_human_v2
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 0.01
+  eta_temperature: 0.01
+D4RL/door/human-v2: { <<: *gfp_D4RL_door_human_v2 }
+
+# Official Minari GFP: D4RL_hammer_cloned_v2
+_gfp_D4RL_hammer_cloned_v2: &gfp_D4RL_hammer_cloned_v2
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 3.0
+  eta_temperature: 1.0e-05
+D4RL/hammer/cloned-v2: { <<: *gfp_D4RL_hammer_cloned_v2 }
+
+# Official Minari GFP: D4RL_hammer_expert_v2
+_gfp_D4RL_hammer_expert_v2: &gfp_D4RL_hammer_expert_v2
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 1.0
+  eta_temperature: 1.0e-05
+D4RL/hammer/expert-v2: { <<: *gfp_D4RL_hammer_expert_v2 }
+
+# Official Minari GFP: D4RL_hammer_human_v2
+_gfp_D4RL_hammer_human_v2: &gfp_D4RL_hammer_human_v2
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 1.0
+  eta_temperature: 0.01
+D4RL/hammer/human-v2: { <<: *gfp_D4RL_hammer_human_v2 }
+
+# Official Minari GFP: D4RL_pen_cloned_v2
+_gfp_D4RL_pen_cloned_v2: &gfp_D4RL_pen_cloned_v2
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 1.0
+  eta_temperature: 1.0e-04
+D4RL/pen/cloned-v2: { <<: *gfp_D4RL_pen_cloned_v2 }
+
+# Official Minari GFP: D4RL_pen_expert_v2
+_gfp_D4RL_pen_expert_v2: &gfp_D4RL_pen_expert_v2
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 0.3
+  eta_temperature: 1.0e-06
+D4RL/pen/expert-v2: { <<: *gfp_D4RL_pen_expert_v2 }
+
+# Official Minari GFP: D4RL_pen_human_v2
+_gfp_D4RL_pen_human_v2: &gfp_D4RL_pen_human_v2
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 3.0
+  eta_temperature: 1.0e-06
+D4RL/pen/human-v2: { <<: *gfp_D4RL_pen_human_v2 }
+
+# Official Minari GFP: D4RL_relocate_cloned_v2
+_gfp_D4RL_relocate_cloned_v2: &gfp_D4RL_relocate_cloned_v2
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 3.0
+  eta_temperature: 1.0e-04
+D4RL/relocate/cloned-v2: { <<: *gfp_D4RL_relocate_cloned_v2 }
+
+# Official Minari GFP: D4RL_relocate_expert_v2
+_gfp_D4RL_relocate_expert_v2: &gfp_D4RL_relocate_expert_v2
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 3.0
+  eta_temperature: 0.001
+D4RL/relocate/expert-v2: { <<: *gfp_D4RL_relocate_expert_v2 }
+
+# Official Minari GFP: D4RL_relocate_human_v2
+_gfp_D4RL_relocate_human_v2: &gfp_D4RL_relocate_human_v2
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 256
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 3.0
+  eta_temperature: 1.0e-05
+D4RL/relocate/human-v2: { <<: *gfp_D4RL_relocate_human_v2 }
+
+# Official Minari GFP: mujoco_halfcheetah_expert_v0
+_gfp_mujoco_halfcheetah_expert_v0: &gfp_mujoco_halfcheetah_expert_v0
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 1024
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 3.0
+  eta_temperature: 0.01
+mujoco/halfcheetah/expert-v0: { <<: *gfp_mujoco_halfcheetah_expert_v0 }
+
+# Official Minari GFP: mujoco_halfcheetah_medium_v0
+_gfp_mujoco_halfcheetah_medium_v0: &gfp_mujoco_halfcheetah_medium_v0
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 1024
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 0.1
+  eta_temperature: 0.001
+mujoco/halfcheetah/medium-v0: { <<: *gfp_mujoco_halfcheetah_medium_v0 }
+
+# Official Minari GFP: mujoco_halfcheetah_simple_v0
+_gfp_mujoco_halfcheetah_simple_v0: &gfp_mujoco_halfcheetah_simple_v0
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 1024
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 0.03
+  eta_temperature: 1.0e-06
+mujoco/halfcheetah/simple-v0: { <<: *gfp_mujoco_halfcheetah_simple_v0 }
+
+# Official Minari GFP: mujoco_hopper_expert_v0
+_gfp_mujoco_hopper_expert_v0: &gfp_mujoco_hopper_expert_v0
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 1024
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 3.0
+  eta_temperature: 0.01
+mujoco/hopper/expert-v0: { <<: *gfp_mujoco_hopper_expert_v0 }
+
+# Official Minari GFP: mujoco_hopper_medium_v0
+_gfp_mujoco_hopper_medium_v0: &gfp_mujoco_hopper_medium_v0
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 1024
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 3.0
+  eta_temperature: 0.001
+mujoco/hopper/medium-v0: { <<: *gfp_mujoco_hopper_medium_v0 }
+
+# Official Minari GFP: mujoco_hopper_simple_v0
+_gfp_mujoco_hopper_simple_v0: &gfp_mujoco_hopper_simple_v0
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 1024
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 3.0
+  eta_temperature: 0.001
+mujoco/hopper/simple-v0: { <<: *gfp_mujoco_hopper_simple_v0 }
+
+# Official Minari GFP: mujoco_walker2d_expert_v0
+_gfp_mujoco_walker2d_expert_v0: &gfp_mujoco_walker2d_expert_v0
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 1024
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 3.0
+  eta_temperature: 0.001
+mujoco/walker2d/expert-v0: { <<: *gfp_mujoco_walker2d_expert_v0 }
+
+# Official Minari GFP: mujoco_walker2d_medium_v0
+_gfp_mujoco_walker2d_medium_v0: &gfp_mujoco_walker2d_medium_v0
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 1024
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 0.3
+  eta_temperature: 0.01
+mujoco/walker2d/medium-v0: { <<: *gfp_mujoco_walker2d_medium_v0 }
+
+# Official Minari GFP: mujoco_walker2d_simple_v0
+_gfp_mujoco_walker2d_simple_v0: &gfp_mujoco_walker2d_simple_v0
+  <<: *ogbench_common
+  max_timesteps: 1000000
+  batch_size: 1024
+  discount: 0.99
+  flow_steps: 10
+  q_agg: mean
+  target_agg: actor
+  guidance_agg: actor
+  alpha: 3.0
+  eta_temperature: 0.1
+mujoco/walker2d/simple-v0: { <<: *gfp_mujoco_walker2d_simple_v0 }
+
