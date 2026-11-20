@@ -146,6 +146,7 @@ class TrainConfig:
     actor_ln: bool = False       # Alias for FQL actor_layer_norm.
     discount: float = 0.99
     tau: float = 0.005
+    num_critics: int = 2
     q_agg: str = "mean"
     alpha: float = 10.0
     flow_steps: int = 10
@@ -153,7 +154,6 @@ class TrainConfig:
     encoder: Optional[str] = None
 
     # Compatibility fields that may appear in shared YAMLs. They are ignored by FQL.
-    num_critics: int = 2
     policy_noise: float = 0.0
     noise_clip: float = 0.0
     policy_freq: int = 1
@@ -225,6 +225,9 @@ def validate_config(config: TrainConfig) -> None:
     assert config.checkpoint_freq > 0
     assert config.discount >= 0.0 and config.discount <= 1.0
     assert config.tau >= 0.0 and config.tau <= 1.0
+    assert isinstance(config.num_critics, int) and config.num_critics >= 1, (
+        "num_critics must be a positive integer"
+    )
     assert config.q_agg in ("mean", "min")
     assert config.alpha >= 0.0
     assert config.flow_steps > 0
@@ -858,9 +861,8 @@ class Value(nn.Module):
     encoder: Optional[nn.Module] = None
 
     def setup(self):
-        mlp_class = MLP
-        if self.num_ensembles > 1:
-            mlp_class = ensemblize(mlp_class, self.num_ensembles)
+        # Keep the leading ensemble axis even when there is only one critic.
+        mlp_class = ensemblize(MLP, self.num_ensembles)
         self.value_net = mlp_class((*self.hidden_dims, 1), activate_final=False, layer_norm=self.layer_norm)
 
     def __call__(self, observations, actions=None):
@@ -1095,7 +1097,7 @@ class FQLAgent(flax.struct.PyTreeNode):
         critic_def = Value(
             hidden_dims=config["value_hidden_dims"],
             layer_norm=config["layer_norm"],
-            num_ensembles=2,
+            num_ensembles=config["num_critics"],
             encoder=encoders.get("critic"),
         )
         actor_bc_flow_def = ActorVectorField(
@@ -1150,6 +1152,7 @@ def config_to_agent_config(config: TrainConfig) -> Dict[str, Any]:
         actor_layer_norm=bool(config.actor_layer_norm),
         discount=float(config.discount),
         tau=float(config.tau),
+        num_critics=int(config.num_critics),
         q_agg=str(config.q_agg),
         alpha=float(config.alpha),
         flow_steps=int(config.flow_steps),
