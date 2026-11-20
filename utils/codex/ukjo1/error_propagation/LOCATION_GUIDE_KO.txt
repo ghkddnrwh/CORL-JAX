@@ -23,21 +23,31 @@
   codex.txt
 ICLR 파일에 적용했던 경로 수정 13개도 원본으로 되돌렸다.
 
-현재 실행 범위:
-  diagnosis/finite_mean_stability_4task_20261120_v1/registration_v3.json
-  control 및 critic_batch1024, 네 환경, seed 0/1/2/3/4.
-  EMA 감소와 DR3는 취소 상태를 유지한다.
-  신규 29 run + 완료된 기준선 11개 재사용.
-  GPU 0/1에 각각 8개 작업, 종료 시 자동으로 다음 작업 실행.
+현재 새로 실행하는 실험 (2026-11-20 사용자 새 요청):
+  diagnosis/finite_mean_nondefault40_g0995_n9_seed0_20261120_v1/
+  기존 10 family마다 default를 제외한 4 task, 총 40개.
+  N=9, seed=0, gamma=.995, 기본 batch256.
+  GPU 0/1에서 각 8개, 최대 16개 동시 학습하며 자동으로 다음 task를 채운다.
+  Lean 및 단일 actor를 800K/900K/1M CPU50으로 평가한다.
+  등록: registration_v1.json. 진행: controller_status.json.
+  코드: flow_iql_research/*nondefault*n9*v1.py 및 validate_nondefault_controller_v1.py.
+  다른 서버 gamma=.999 실행 안내: RUN_NONDEFAULT_GAMMA0999_KO.txt.
+  이 서버에서는 gamma=.999 non-default 학습을 시작하지 않았다.
 
-현재 관리기 재시작 (저장된 체크포인트에서 자동 재개):
-  /home/ukjo1/anaconda3/envs/ogbench/bin/python -u -m \
-    utils.codex.ukjo1.error_propagation.flow_iql_research.supervise_stability_study_v3 \
-    --root logs/codex/ukjo1/error_propagation/diagnosis/finite_mean_stability_4task_20261120_v1
+현재 상태: 사용자 요청으로 안정화 실험 전체 중단 (2026-11-20).
+  batch256 대조군과 critic batch1024를 모두 중단했다.
+  실행 중이던 학습 16개, 자동 관리기 2개, 연구 모니터 1개를 종료했다.
+  대기 중이던 13개를 포함한 미완료 29개 run은 취소 상태다.
+  학습 로그와 마지막으로 저장된 체크포인트, 완료된 기존 결과는 보존한다.
+  diagnosis/finite_mean_stability_4task_20261120_v1/STOP으로 자동 실행을 차단했다.
+  registration_v5.json은 중단 전 실험 계획을 보존한 기록이며 활성 대기열이 아니다.
+  중단 증거: 같은 실험 폴더의 cancel_all_20261120/cancellation.json.
+  EMA 감소와 DR3도 취소 상태를 유지하고 Q 정규화 실험은 보류한다.
+  사용자의 새 재개 요청 없이 관리기를 실행하거나 STOP 파일을 제거하지 않는다.
 
-현재 집계:
+보존된 결과의 집계 (학습을 실행하지 않음):
   /home/ukjo1/anaconda3/envs/ogbench/bin/python -m \
-    utils.codex.ukjo1.error_propagation.flow_iql_research.analyze_stability_study_v3 \
+    utils.codex.ukjo1.error_propagation.flow_iql_research.analyze_stability_study_v5 \
     --root logs/codex/ukjo1/error_propagation/diagnosis/finite_mean_stability_4task_20261120_v1
 
 코드의 옛 경로 utils/flow_iql_research 및 utils/propagation_research 링크는
