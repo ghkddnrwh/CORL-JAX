@@ -5,8 +5,8 @@ from pathlib import Path
 import statistics
 import time
 
-from utils.flow_iql_research import core  # Runtime compatibility before pickle.
-from utils.flow_iql_research.audit_temporal_cohort_v1 import Verifier
+from utils.codex.ukjo1.error_propagation.flow_iql_research import core  # Runtime compatibility before pickle.
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_temporal_cohort_v1 import Verifier
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -66,7 +66,7 @@ def main():
         assert result['config_sha256'] == plan['config_sha256']
         assert result['checkpoint_sha256'] == checkpoints[job['step']]
         assert result['actual_Q_Adam_count'] == job['step'] and result['actual_V_Adam_count'] == 2 * job['step']
-        assert result['source_sha256'] == plan['source_sha256']['utils/flow_iql_research/evaluate_awr_mixture_decoder_v1.py']
+        assert result['source_sha256'] == plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/evaluate_awr_mixture_decoder_v1.py']
         if job.get('self_reference'):
             for field in ('episode_successes', 'episode_rewards', 'episode_lengths'):
                 assert result[field] == baseline[job['step']][field]
@@ -81,8 +81,8 @@ def main():
             last3_mean=statistics.mean(r['success_rate'] for r in available)))
     fixed = read(root / 'analysis/Ant_AWR_mixture_decoder_fixed_queries_v1/review.json')
     assert fixed['status'] == 'complete' and len(fixed['models']) == 3 and len(fixed['rows']) == 6
-    assert verifier.digest('utils/flow_iql_research/inspect_awr_mixture_decoder_v1.py') == fixed['source_sha256']
-    assert fixed['selector_source_sha256'] == plan['source_sha256']['utils/flow_iql_research/evaluate_awr_mixture_decoder_v1.py']
+    assert verifier.digest('utils/codex/ukjo1/error_propagation/flow_iql_research/inspect_awr_mixture_decoder_v1.py') == fixed['source_sha256']
+    assert fixed['selector_source_sha256'] == plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/evaluate_awr_mixture_decoder_v1.py']
     assert fixed['config_sha256'] == plan['config_sha256']
     assert all(m['checkpoint_sha256'] == checkpoints[m['step']] for m in fixed['models'])
     validation = [r for r in fixed['rows'] if r['split'] == 'validation']

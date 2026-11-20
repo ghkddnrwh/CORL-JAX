@@ -20,8 +20,8 @@ def main():
     cross=json.loads(cross_path.read_text());fit=json.loads(fit_path.read_text())
     assert cross['status']==fit['status']=='complete'
     assert cross['actual_unique_models_verified']==36 and fit['actual_unique_1M_models_verified']==18
-    assert cross['source_sha256']==sha('utils/flow_iql_research/run_cohort_BC_critic_cross_v1.py')
-    assert fit['source_sha256']==sha('utils/flow_iql_research/run_frozen_value_sampling_v1.py')
+    assert cross['source_sha256']==sha('utils/codex/ukjo1/error_propagation/flow_iql_research/run_cohort_BC_critic_cross_v1.py')
+    assert fit['source_sha256']==sha('utils/codex/ukjo1/error_propagation/flow_iql_research/run_frozen_value_sampling_v1.py')
     assert cross['registration_sha256']==sha(root/'cohort_BC_critic_cross_registration_v1.json')
     assert fit['registration_sha256']==sha(root/'frozen_value_sampling_registration_v1.json')
     fig,axes=plt.subplots(1,2,figsize=(10.7,5.6))

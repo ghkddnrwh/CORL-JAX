@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 import statistics
 import time
-from utils.flow_iql_research import core
-from utils.flow_iql_research.review_rank_mean_calibration_v1 import describe
+from utils.codex.ukjo1.error_propagation.flow_iql_research import core
+from utils.codex.ukjo1.error_propagation.flow_iql_research.review_rank_mean_calibration_v1 import describe
 import numpy as np
 
 
@@ -20,8 +20,8 @@ def main():
     new_path=root/'analysis/fresh_independent_critic_calibration_v1/group1/rank_mean_review.json'
     old=json.loads(old_path.read_text());fresh=json.loads(new_path.read_text())
     assert old['status']==fresh['status']=='complete'
-    assert old['source_sha256']==sha('utils/flow_iql_research/review_rank_mean_calibration_v1.py')
-    assert fresh['source_sha256']==sha('utils/flow_iql_research/watch_fresh_critic_calibration_v1.py')
+    assert old['source_sha256']==sha('utils/codex/ukjo1/error_propagation/flow_iql_research/review_rank_mean_calibration_v1.py')
+    assert fresh['source_sha256']==sha('utils/codex/ukjo1/error_propagation/flow_iql_research/watch_fresh_critic_calibration_v1.py')
     for path,digest in old['inputs_sha256'].items():assert sha(path)==digest,path
     for path,digest in fresh['raw_table_sha256'].items():assert sha(path)==digest,path
     files=[{Path(p).name:Path(p)for p in old['inputs_sha256']if p.endswith('_values.npz')},

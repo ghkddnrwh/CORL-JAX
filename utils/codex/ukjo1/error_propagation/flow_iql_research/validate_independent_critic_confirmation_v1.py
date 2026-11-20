@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 
-from utils.flow_iql_research.watch_independent_critic_confirmation_v1 import promote, summarize
+from utils.codex.ukjo1.error_propagation.flow_iql_research.watch_independent_critic_confirmation_v1 import promote, summarize
 
 
 def main():

@@ -3,7 +3,7 @@
 """Standalone completed-study figures and an outcome-neutral Korean report."""
 from pathlib import Path
 import numpy as np
-from utils.flow_iql_research.analyze_discount_0995_n9_v2 import csv_file
+from utils.codex.ukjo1.error_propagation.flow_iql_research.analyze_discount_0995_n9_v2 import csv_file
 
 
 def render(root,plan,rows,groups,paired):

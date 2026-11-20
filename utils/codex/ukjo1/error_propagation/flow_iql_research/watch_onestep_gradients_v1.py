@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-from utils.flow_iql_research.evaluate_onestep_deploy_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1 import sha
 
 
 def atomic(path,value):
@@ -32,7 +32,7 @@ def main():
         saved=previous.get('running')
         if saved and identity(saved['pid'])==saved['process_identity']:
             command=Path(f'/proc/{saved["pid"]}/cmdline').read_bytes().decode().split('\0')
-            assert 'utils.flow_iql_research.diagnose_onestep_gradients_v1'in command and saved['output']in command
+            assert 'utils.codex.ukjo1.error_propagation.flow_iql_research.diagnose_onestep_gradients_v1'in command and saved['output']in command
             running=dict(process=None,log=None,**saved)
     while True:
         for path,digest in contract['source_sha256'].items():assert sha(path)==digest,path
@@ -54,7 +54,7 @@ def main():
                 elif key not in failed and (running is None or running['key']!=key):pending.append((run,step,key,path))
         if running is None and pending:
             run,step,key,path=pending[0];log_path=out/f'{run.name}_{step}.log';log=log_path.open('a')
-            command=['nice','-n','15','taskset','-c','36-41',sys.executable,'-u','-m','utils.flow_iql_research.diagnose_onestep_gradients_v1','--run',str(run),'--step',str(step),'--output',str(path)]
+            command=['nice','-n','15','taskset','-c','36-41',sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.diagnose_onestep_gradients_v1','--run',str(run),'--step',str(step),'--output',str(path)]
             p=subprocess.Popen(command,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)
             running=dict(process=p,log=log,pid=p.pid,process_identity=identity(p.pid),key=key,output=str(path),log_path=str(log_path))
         atomic(out/'status.json',dict(time=time.time(),pid=os.getpid(),completed=done,failed=failed,pending=len(pending),

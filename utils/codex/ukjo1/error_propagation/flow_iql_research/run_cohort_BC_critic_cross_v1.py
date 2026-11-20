@@ -13,8 +13,8 @@ import subprocess
 import sys
 import time
 
-from utils.flow_iql_research import core
-from utils.flow_iql_research.audit_temporal_cohort_v1 import Verifier
+from utils.codex.ukjo1.error_propagation.flow_iql_research import core
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_temporal_cohort_v1 import Verifier
 import numpy as np
 
 
@@ -42,8 +42,8 @@ def audit_job(plan, job, verifier):
         assert len(result[field]) == 50 and np.isfinite(result[field]).all()
     assert set(result['episode_successes']) <= {0.,1.}
     assert abs(statistics.mean(result['episode_successes'])-result['success_rate']) < 1e-12
-    assert result['selector_source_sha256'] == plan['source_sha256']['utils/flow_iql_research/independent_critic_policy_v2.py']
-    assert result['evaluator_source_sha256'] == plan['source_sha256']['utils/flow_iql_research/evaluate_independent_critic_policy_v2.py']
+    assert result['selector_source_sha256'] == plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/independent_critic_policy_v2.py']
+    assert result['evaluator_source_sha256'] == plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/evaluate_independent_critic_policy_v2.py']
     configurations = []
     assert len(result['critic_members']) == len(job['member_pins']) == 3
     assert len({m['training_seed'] for m in result['critic_members']}) == 3
@@ -117,7 +117,7 @@ def main():
             for path, digest in plan['source_sha256'].items():
                 assert verifier.digest(path) == digest, path
             command = ['taskset','-c',','.join(map(str,slots[slot])),sys.executable,'-u','-m',
-                'utils.flow_iql_research.evaluate_independent_critic_policy_v2',
+                'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_independent_critic_policy_v2',
                 '--actor-run',job['actor_run'],'--critic-runs',*job['critic_runs'],
                 '--step',str(job['step']),'--rule','mean_rank','--output',job['output']]
             log = (out/(job['id']+'.log')).open('w')

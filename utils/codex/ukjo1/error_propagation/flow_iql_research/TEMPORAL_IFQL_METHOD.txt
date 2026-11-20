@@ -64,14 +64,14 @@ Observed exploratory seed0 results
 Reproduce one fresh training run from the repository root
   CUDA_VISIBLE_DEVICES=0 XLA_PYTHON_CLIENT_MEM_FRACTION=0.1 \
   /home/ukjo1/anaconda3/envs/ogbench/bin/python -m \
-    utils.flow_iql_research.train_temporal_policy_v1 \
+    utils.codex.ukjo1.error_propagation.flow_iql_research.train_temporal_policy_v1 \
     --env puzzle-3x3-play-singletask-v0 \
     --output logs/diagnosis/temporal_ifql_reproduction/pz3_seed0 \
     --seed 0 --steps 1000000 --episodes 50
 
 Evaluate its self-contained checkpoint
   CUDA_VISIBLE_DEVICES='' /home/ukjo1/anaconda3/envs/ogbench/bin/python -m \
-    utils.flow_iql_research.evaluate_temporal_model_v1 \
+    utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_temporal_model_v1 \
     logs/diagnosis/temporal_ifql_reproduction/pz3_seed0/checkpoint_1000000.pkl \
     --output logs/diagnosis/temporal_ifql_reproduction/pz3_seed0_1M_eval.json
 

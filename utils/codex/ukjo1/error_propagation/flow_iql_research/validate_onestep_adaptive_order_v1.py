@@ -5,10 +5,10 @@ import copy
 import json
 from pathlib import Path
 import time
-from utils.flow_iql_research import watch_onestep_deploy_v4 as previous
-from utils.flow_iql_research import watch_onestep_deploy_v5 as candidate
-from utils.flow_iql_research.onestep_scheduling_policy_v1 import order_pending,discovery_confirmation
-from utils.flow_iql_research.evaluate_onestep_deploy_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research import watch_onestep_deploy_v4 as previous
+from utils.codex.ukjo1.error_propagation.flow_iql_research import watch_onestep_deploy_v5 as candidate
+from utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_scheduling_policy_v1 import order_pending,discovery_confirmation
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1 import sha
 
 
 def main():
@@ -36,7 +36,7 @@ def main():
     new=[]
     for env in candidate.core.ENVIRONMENTS:
         if env in plan['pilot_environments']:continue
-        new.append(dict(id=f'private_seed0_{len(new)}',module='utils.flow_iql_research.train_onestep_deploy_v1',args=dict(env=env,recipe='bank_bc',seed=0,steps=1000000)))
+        new.append(dict(id=f'private_seed0_{len(new)}',module='utils.codex.ukjo1.error_propagation.flow_iql_research.train_onestep_deploy_v1',args=dict(env=env,recipe='bank_bc',seed=0,steps=1000000)))
     assert len(new)==6;simulated['jobs']+=new;discovery_queue=queue+new
     ordered=order_pending(plan,simulated,discovery_queue,current)
     pending=[job for job in ordered if job['id']not in current]
@@ -45,7 +45,7 @@ def main():
     current|={job['id']for job in new};attempt['stage']='fresh';fresh=[]
     for seed in attempt['fresh_seeds']:
         for env in candidate.core.ENVIRONMENTS:
-            fresh.append(dict(id=f'private_fresh_{len(fresh)}',module='utils.flow_iql_research.train_onestep_deploy_v1',args=dict(env=env,recipe='bank_bc',seed=seed,steps=1000000)))
+            fresh.append(dict(id=f'private_fresh_{len(fresh)}',module='utils.codex.ukjo1.error_propagation.flow_iql_research.train_onestep_deploy_v1',args=dict(env=env,recipe='bank_bc',seed=seed,steps=1000000)))
     simulated['jobs']+=fresh;ordered=order_pending(plan,simulated,discovery_queue+fresh,current)
     assert {job['id']for job in[j for j in ordered if j['id']not in current][:27]}=={job['id']for job in fresh}
     checks.append('Fresh stage prioritizes all27 new runs with mandatory3seeds and9tasks')

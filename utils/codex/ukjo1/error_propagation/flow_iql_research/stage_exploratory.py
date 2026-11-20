@@ -12,7 +12,7 @@ from pathlib import Path
 import pickle
 import signal
 import time
-from utils.flow_iql_research.scheduler_v3 import process_identity
+from utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_v3 import process_identity
 
 
 def atomic(path,data):
@@ -61,7 +61,7 @@ def main():
             pid=record['pid'];identity=process_identity(pid)
             if identity is None:continue
             cmd=Path(f'/proc/{pid}/cmdline').read_bytes().decode().split('\0')
-            assert '-m' in cmd and cmd[cmd.index('-m')+1] in ('utils.flow_iql_research.train','utils.flow_iql_research.train_policy','utils.flow_iql_research.train_mixture')
+            assert '-m' in cmd and cmd[cmd.index('-m')+1] in ('utils.codex.ukjo1.error_propagation.flow_iql_research.train','utils.codex.ukjo1.error_propagation.flow_iql_research.train_policy','utils.codex.ukjo1.error_propagation.flow_iql_research.train_mixture')
             assert Path(cmd[cmd.index('--output')+1]).resolve()==run
             atomic(run/'staging_request.json',dict(time=time.time(),pid=pid,threshold=plan['threshold'],
                 last_saved_step=saved['step'],reason=plan['reason'],resume_job=plan.get('resume_prefix','resume_')+name))

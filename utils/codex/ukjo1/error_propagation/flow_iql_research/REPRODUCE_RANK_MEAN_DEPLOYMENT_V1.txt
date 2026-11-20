@@ -10,7 +10,7 @@ From the repository root, with the ogbench environment, export one fixed late
 checkpoint of three COMPLETED learners, first BC provider first:
 
   CUDA_VISIBLE_DEVICES='' OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MUJOCO_GL=egl \
-  python -m utils.flow_iql_research.export_rank_mean_bundle_v1 \
+  python -m utils.codex.ukjo1.error_propagation.flow_iql_research.export_rank_mean_bundle_v1 \
     --critic-runs <first member directory> <second directory> <third directory> \
     --step 1000000 --output <new bundle.pkl>
 
@@ -24,7 +24,7 @@ checkpoint/config files. This is an inference artifact, not a training resume.
 Evaluate it with the exact CPU50 protocol:
 
   CUDA_VISIBLE_DEVICES='' OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MUJOCO_GL=egl \
-  python -m utils.flow_iql_research.evaluate_rank_mean_bundle_v1 <bundle.pkl> \
+  python -m utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_rank_mean_bundle_v1 <bundle.pkl> \
     --output <new result.json> --reference <existing mean-rank evaluation.json>
 
 The optional reference check requires the same environment/checkpoint/member
@@ -34,7 +34,7 @@ Without --reference, evaluation still saves all50 independent reset seeds42..91.
 
 Application interface:
 
-  from utils.flow_iql_research.rank_mean_bundle_v1 import load
+  from utils.codex.ukjo1.error_propagation.flow_iql_research.rank_mean_bundle_v1 import load
   bundle, state, policy = load('model.pkl')
   action = policy(state.agent.network.params, observation_float32, action_key)
 

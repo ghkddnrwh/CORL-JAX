@@ -3,8 +3,8 @@ import argparse
 import json
 from pathlib import Path
 import time
-from utils.flow_iql_research.evaluate_onestep_deploy_v1 import sha
-from utils.flow_iql_research.onestep_implementation_registry_v1 import configuration,specification
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_implementation_registry_v1 import configuration,specification
 
 
 def main():
@@ -26,7 +26,7 @@ def main():
     assert state['jobs']==plan['jobs']and len(state['jobs'])==48
     assert proposal['recipe']not in state['all_recipes']and len(proposal['new_jobs'])==3
     for job in proposal['new_jobs']:
-        assert job['module']=='utils.flow_iql_research.train_onestep_deploy_v1'
+        assert job['module']=='utils.codex.ukjo1.error_propagation.flow_iql_research.train_onestep_deploy_v1'
         assert job['args']==dict(env=job['args']['env'],recipe='fqlraw_x3',seed=0,steps=1000000)
         assert proposal['expected_identities'][job['id']]==configuration(job['args']['env'],'fqlraw_x3',0)
         assert not(root/'runs'/job['id']).exists()

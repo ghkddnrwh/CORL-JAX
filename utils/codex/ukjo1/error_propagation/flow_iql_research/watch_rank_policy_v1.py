@@ -53,7 +53,7 @@ def main():
                 if slot in occupied or not jobs:
                     continue
                 name, run, step, mode = jobs.pop(0)
-                module = 'utils.flow_iql_research.rank_flow_policy_diagnostics_v1' if mode == 'distribution' else 'utils.flow_iql_research.evaluate_rank_flow_teacher_v1'
+                module = 'utils.codex.ukjo1.error_propagation.flow_iql_research.rank_flow_policy_diagnostics_v1' if mode == 'distribution' else 'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_rank_flow_teacher_v1'
                 command = ['taskset','-c',','.join(map(str,cpus)),sys.executable,'-u','-m',module,
                            str(run),'--step',str(step),'--output',str(output/(name+'.json'))]
                 if mode != 'distribution':

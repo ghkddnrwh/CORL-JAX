@@ -5,7 +5,7 @@ from pathlib import Path
 import statistics
 import time
 import numpy as np
-from utils.flow_iql_research.audit_temporal_cohort_v1 import Verifier,provided_thresholds
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_temporal_cohort_v1 import Verifier,provided_thresholds
 
 
 def audit_job(plan,job,verifier):
@@ -22,8 +22,8 @@ def audit_job(plan,job,verifier):
     assert set(result['episode_successes'])<={0.,1.}
     assert abs(statistics.mean(result['episode_successes'])-result['success_rate'])<1e-12
     assert not result['primary_evaluations_modified']and not result['mixed_joint_learning_state_saved']
-    assert result['selector_source_sha256']==plan['source_sha256']['utils/flow_iql_research/independent_critic_policy_v2.py']
-    assert result['evaluator_source_sha256']==plan['source_sha256']['utils/flow_iql_research/evaluate_independent_critic_policy_v2.py']
+    assert result['selector_source_sha256']==plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/independent_critic_policy_v2.py']
+    assert result['evaluator_source_sha256']==plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/evaluate_independent_critic_policy_v2.py']
     assert len(result['critic_members'])==len(job['critic_runs'])==len(job['member_pins'])==3
     complete=True;identities=[]
     for member,run_name,pin in zip(result['critic_members'],job['critic_runs'],job['member_pins']):

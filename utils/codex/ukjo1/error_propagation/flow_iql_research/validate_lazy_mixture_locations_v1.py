@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 import sys
 import time
-from utils.flow_iql_research import lazy_mixture_location_actor_v1 as lazy
-from utils.flow_iql_research import standalone_mixture_actor_v1 as original
+from utils.codex.ukjo1.error_propagation.flow_iql_research import lazy_mixture_location_actor_v1 as lazy
+from utils.codex.ukjo1.error_propagation.flow_iql_research import standalone_mixture_actor_v1 as original
 import jax
 import jax.numpy as jnp
 from jax.scipy.special import ndtr
@@ -16,7 +16,7 @@ import numpy as np
 def main():
     p=argparse.ArgumentParser();p.add_argument('--actors',nargs='+',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True);a=p.parse_args();assert not a.output.exists()
-    forbidden=['ogbench','optax','utils.flow_iql_research.vendor.flax_utils','utils.flow_iql_research.mixture_onestep_deploy_core_v1']
+    forbidden=['ogbench','optax','utils.codex.ukjo1.error_propagation.flow_iql_research.vendor.flax_utils','utils.codex.ukjo1.error_propagation.flow_iql_research.mixture_onestep_deploy_core_v1']
     assert all(x not in sys.modules for x in forbidden)and all(d.platform=='cpu'for d in jax.devices())
     rows=[]
     for actor in a.actors:

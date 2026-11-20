@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import pickle
 import time
-from utils.flow_iql_research import core,policy_core
+from utils.codex.ukjo1.error_propagation.flow_iql_research import core,policy_core
 import flax.serialization
 import jax
 import jax.numpy as jnp
@@ -34,13 +34,13 @@ def main():
     cfg=dict(ident['config'])
     for name in ('actor_hidden_dims','value_hidden_dims'):cfg[name]=tuple(cfg[name])
     if kind in ('awr_mixture','awr_gaussian'):
-        from utils.flow_iql_research import awr_mixture_core_v1
+        from utils.codex.ukjo1.error_propagation.flow_iql_research import awr_mixture_core_v1
         module = awr_mixture_core_v1
     elif kind == 'rank_flow':
-        from utils.flow_iql_research import rank_flow_core_v1
+        from utils.codex.ukjo1.error_propagation.flow_iql_research import rank_flow_core_v1
         module = rank_flow_core_v1
     elif kind in ('gaussian_bc','mixture_bc'):
-        from utils.flow_iql_research import mixture_core
+        from utils.codex.ukjo1.error_propagation.flow_iql_research import mixture_core
         module=mixture_core
     else:
         module=core if kind=='iql' and 'policy_type' not in cfg else policy_core
@@ -120,7 +120,7 @@ def main():
                          'This uses CPU floating point and is not an exact GPU update replay.',
                          'No checkpoint, benchmark counters, replay RNG or primary evaluation is modified.'])
     if kind in ('awr_mixture','awr_gaussian'):
-        from utils.flow_iql_research import awr_mixture_snapshot_v1 as actor_diagnostic
+        from utils.codex.ukjo1.error_propagation.flow_iql_research import awr_mixture_snapshot_v1 as actor_diagnostic
         inspector = actor_diagnostic.make_inspector(state.agent)
         result['actor_mixture_snapshot'] = {name:actor_diagnostic.summarize(inspector(b['observations'],b['actions']))
             for name,b in sets.items() if name != 'same_minibatch'}

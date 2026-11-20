@@ -70,8 +70,8 @@ def main():
                 assert len(result['critic_members']) == len(job['member_checkpoints']) == 3
                 for member,path in zip(result['critic_members'],job['member_checkpoints']):
                     assert member['sha256'] == checkpoint_sha(path)
-                assert result['selector_source_sha256'] == plan['source_sha256']['utils/flow_iql_research/temporal_selection_v1.py']
-                assert result['evaluator_source_sha256'] == plan['source_sha256']['utils/flow_iql_research/evaluate_temporal_selection_v1.py']
+                assert result['selector_source_sha256'] == plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/temporal_selection_v1.py']
+                assert result['evaluator_source_sha256'] == plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/evaluate_temporal_selection_v1.py']
                 successes = result['episode_successes']
                 assert len(successes) == 50 and set(successes) <= {0., 1.}
                 assert abs(statistics.mean(successes)-result['success_rate']) < 1e-12
@@ -107,7 +107,7 @@ def main():
             env = dict(os.environ, CUDA_VISIBLE_DEVICES='', OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1',
                        MKL_NUM_THREADS='1', MUJOCO_GL='egl', TF_NUM_INTRAOP_THREADS='1', TF_NUM_INTEROP_THREADS='1')
             command = ['taskset', '-c', ','.join(map(str, slots[slot])), sys.executable, '-u', '-m',
-                'utils.flow_iql_research.evaluate_temporal_selection_v1', job['run'], '--checkpoint', job['checkpoint'],
+                'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_temporal_selection_v1', job['run'], '--checkpoint', job['checkpoint'],
                 '--output', str(target), '--episodes', '50', '--samples', str(plan['samples']),
                 '--member-checkpoints', *job['member_checkpoints']]
             process = subprocess.Popen(command, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, close_fds=True)

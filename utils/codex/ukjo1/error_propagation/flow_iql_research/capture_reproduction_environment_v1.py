@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 
-from utils.flow_iql_research import core
+from utils.codex.ukjo1.error_propagation.flow_iql_research import core
 import ogbench.utils
 
 
@@ -49,7 +49,7 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     supplied = Path('algorithms/uk_offline/basic/propagation/fql').resolve()
-    vendor = Path('utils/flow_iql_research/vendor').resolve()
+    vendor = Path('utils/codex/ukjo1/error_propagation/flow_iql_research/vendor').resolve()
     assert (supplied / '.git').exists()
     assert Path(subprocess.check_output(['git', '-C', str(supplied), 'rev-parse', '--show-toplevel'], text=True).strip()) == supplied
     commit = subprocess.check_output(['git', '-C', str(supplied), 'rev-parse', 'HEAD'], text=True).strip()
@@ -57,7 +57,7 @@ def main():
     for name in ('iql', 'ifql', 'fql', 'rebrac', 'flax_utils', 'networks', 'encoders'):
         original = supplied / ('agents' if name in ('iql', 'ifql', 'fql', 'rebrac') else 'utils') / (name + '.py')
         destination = vendor / (name + '.py')
-        expected = original.read_text().replace('from utils.', 'from utils.flow_iql_research.vendor.')
+        expected = original.read_text().replace('from utils.', 'from utils.codex.ukjo1.error_propagation.flow_iql_research.vendor.')
         unfreeze = name in ('iql', 'ifql', 'fql', 'rebrac')
         if unfreeze:
             before = "network_params = network_def.init(init_rng, **network_args)['params']"

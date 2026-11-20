@@ -10,7 +10,7 @@ from pathlib import Path
 import pickle
 import jax
 import numpy as np
-from utils.flow_iql_research.lazy_mixture_location_actor_v1 import decode
+from utils.codex.ukjo1.error_propagation.flow_iql_research.lazy_mixture_location_actor_v1 import decode
 
 
 def make_policy(metadata,backend='cpu'):

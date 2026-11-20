@@ -12,7 +12,7 @@ import re
 import sys
 import time
 
-from utils.flow_iql_research import standalone_onestep_actor_v1 as portable
+from utils.codex.ukjo1.error_propagation.flow_iql_research import standalone_onestep_actor_v1 as portable
 
 import jax
 import numpy as np
@@ -32,9 +32,9 @@ def main():
     assert sha(__file__)==manifest['source_sha256']
     assert sha(portable.__file__)==manifest['portable_client_sha256']
     args.output.mkdir(parents=True)
-    forbidden=['ogbench','optax','utils.flow_iql_research.onestep_deploy_core_v1',
-               'utils.flow_iql_research.efficient_mean_core_v1',
-               'utils.flow_iql_research.mean_empirical_backup_core_v1']
+    forbidden=['ogbench','optax','utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_deploy_core_v1',
+               'utils.codex.ukjo1.error_propagation.flow_iql_research.efficient_mean_core_v1',
+               'utils.codex.ukjo1.error_propagation.flow_iql_research.mean_empirical_backup_core_v1']
     rows=[]
     for item in manifest['cases']:
         artifact=Path(item['artifact']);checkpoint=Path(item['checkpoint'])

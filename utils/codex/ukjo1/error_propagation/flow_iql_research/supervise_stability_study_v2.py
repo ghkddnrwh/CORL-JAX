@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-from utils.flow_iql_research.run_stability_study_v2 import atomic, birth
+from utils.codex.ukjo1.error_propagation.flow_iql_research.run_stability_study_v2 import atomic, birth
 
 
 def main():
@@ -23,7 +23,7 @@ def main():
         worker=None
         if birth(old.get('pid',-1))!=old.get('birth') or old.get('birth') is None:
             with (root/'controller_stdout.log').open('a') as stream:
-                worker=subprocess.Popen([sys.executable,'-u','-m','utils.flow_iql_research.run_stability_study_v2',
+                worker=subprocess.Popen([sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.run_stability_study_v2',
                     '--root',str(root)],stdout=stream,stderr=subprocess.STDOUT,start_new_session=True)
             pid=worker.pid; started=time.time()
         else:

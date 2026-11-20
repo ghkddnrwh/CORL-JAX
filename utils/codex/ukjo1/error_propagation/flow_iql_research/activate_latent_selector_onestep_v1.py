@@ -8,7 +8,7 @@ import signal
 import subprocess
 import sys
 import time
-from utils.flow_iql_research.onestep_scheduling_policy_v1 import order_pending
+from utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_scheduling_policy_v1 import order_pending
 
 
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -39,12 +39,12 @@ def main():
     assert Path(saved['analysis_contract'])==root/'analysis/execution_contract_v15.json'
     roles=('scheduler','analysis_controller','gradient_controller')
     owners={k:saved[k]for k in roles};role_env={}
-    expected=dict(scheduler='utils.flow_iql_research.scheduler_onestep_deploy_v6',
-        analysis_controller='utils.flow_iql_research.watch_onestep_deploy_v8',
-        gradient_controller='utils.flow_iql_research.watch_onestep_gradients_v5')
-    replacement=dict(scheduler='utils.flow_iql_research.scheduler_onestep_deploy_v7',
-        analysis_controller='utils.flow_iql_research.watch_onestep_deploy_v9',
-        gradient_controller='utils.flow_iql_research.watch_onestep_gradients_v6')
+    expected=dict(scheduler='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_onestep_deploy_v6',
+        analysis_controller='utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v8',
+        gradient_controller='utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_gradients_v5')
+    replacement=dict(scheduler='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_onestep_deploy_v7',
+        analysis_controller='utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v9',
+        gradient_controller='utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_gradients_v6')
     scheduler=json.loads((root/'scheduler_status.json').read_text());assert len(scheduler['running'])==16
     for row in scheduler['running'].values():
         assert identity(row['pid'])==row['process_identity']
@@ -105,7 +105,7 @@ def main():
         atomic(area/'activation_handles_v1.json',handles)
     for role,handle in handles.items():saved['previous_latent_'+role]=owners[role];saved[role]=handle
     saved.update(time=time.time(),analysis_contract=str(contract),gradient_contract=str(gradient),registration_sha256=sha(target),
-        current_registered_jobs=130,runtime_inspector='utils.flow_iql_research.inspect_onestep_runtime_v6',
+        current_registered_jobs=130,runtime_inspector='utils.codex.ukjo1.error_propagation.flow_iql_research.inspect_onestep_runtime_v6',
         latent_selector_joint_extension=dict(status='activated_await_adoption',receipt=str(receipt),registration=str(target),contract=str(contract)))
     saved['next_actions'].insert(0,'AUTHORITATIVE R14/V16/gradientV6. ManagerV7,CPUwatchV9,gradientwatchV6. Audit16learner and CPU/gradient-childadoption. New25nativejointlatentjobs exploratory; originalfinite-mean/lean and9task/fresh/speedgates unchanged.')
     atomic(continuation,saved)

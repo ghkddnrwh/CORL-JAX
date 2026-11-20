@@ -8,8 +8,8 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 import time
-from utils.flow_iql_research.evaluate_onestep_deploy_v1 import sha
-from utils.flow_iql_research.onestep_implementation_registry_v2 import (
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_implementation_registry_v2 import (
     IMPLEMENTATIONS, MEAN_TEACHER, configuration, implementation, specification)
 
 
@@ -87,7 +87,7 @@ def main():
     assert plan['thresholds']==json.loads(parent.read_text())['thresholds']
     args.registration.write_text(json.dumps(plan,indent=2,allow_nan=False))
     contract.update(registration=str(args.registration.resolve()),registration_sha256=sha(args.registration),
-        source_sha256=sources,GPU_scheduler_module='utils.flow_iql_research.scheduler_onestep_deploy_v4',
+        source_sha256=sources,GPU_scheduler_module='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_onestep_deploy_v4',
         mean_teacher_extension=extension,public_raw_midpoint_extension=plan['public_raw_midpoint_extension'])
     args.contract.write_text(json.dumps(contract,indent=2,allow_nan=False))
     print(json.dumps(dict(registration=str(args.registration),registration_sha256=sha(args.registration),

@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 
 from algorithms.uk_offline.basic import iql_jax as base
-from utils.propagation_research.diagnose_checkpoint import CheckpointReader
+from utils.codex.ukjo1.error_propagation.propagation_research.diagnose_checkpoint import CheckpointReader
 
 import jax
 import jax.numpy as jnp
@@ -44,7 +44,7 @@ def main():
     env = base.wrap_env(env, state_mean=mean, state_std=std)
     reset_metadata = None
     if args.seeded_action_space:
-        from utils.propagation_research.seeded_reset import prepare_seeded_action_space
+        from utils.codex.ukjo1.error_propagation.propagation_research.seeded_reset import prepare_seeded_action_space
         reset_metadata = prepare_seeded_action_space(env, cfg["seed"])
     base.set_seed(cfg["seed"], env)
     cls = base.DeterministicPolicy if cfg["iql_deterministic"] else base.GaussianPolicy
@@ -91,7 +91,7 @@ def main():
     result["evaluator_source_sha256"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     result["seeded_action_space"] = reset_metadata
     if args.seeded_action_space:
-        from utils.propagation_research.seeded_reset import PROTOCOL
+        from utils.codex.ukjo1.error_propagation.propagation_research.seeded_reset import PROTOCOL
         result["evaluation_protocol"] = PROTOCOL
     if (not np.isin(successes, [0., 1.]).all() or not np.isfinite(rewards).all()
             or len(successes) != args.episodes):

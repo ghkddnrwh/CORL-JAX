@@ -9,9 +9,9 @@ import signal
 import subprocess
 import sys
 import time
-from utils.flow_iql_research import scheduler_v21,scheduler_v4
-from utils.flow_iql_research.adopt_scheduler_v20_v1 import identity,learners
-from utils.flow_iql_research import tau_matched_extraction_v1 as helper
+from utils.codex.ukjo1.error_propagation.flow_iql_research import scheduler_v21,scheduler_v4
+from utils.codex.ukjo1.error_propagation.flow_iql_research.adopt_scheduler_v20_v1 import identity,learners
+from utils.codex.ukjo1.error_propagation.flow_iql_research import tau_matched_extraction_v1 as helper
 
 
 def insert(queue,jobs):
@@ -27,10 +27,10 @@ def main():
     parser.add_argument('--validate',action='store_true');args=parser.parse_args();root=args.root.resolve()
     plan=json.loads(args.registration.read_text());assert Path(plan['root'])==root and len(plan['jobs'])==3
     helper.check_sources(plan['analysis_source_sha256'])
-    assert helper.digest('utils/flow_iql_research/scheduler_v21.py')==plan['scheduler_source_sha256']
+    assert helper.digest('utils/codex/ukjo1/error_propagation/flow_iql_research/scheduler_v21.py')==plan['scheduler_source_sha256']
     queue=json.loads((root/'queue.json').read_text());updated,index=insert(queue,plan['jobs'])
     if args.validate:
-        assert all(j['module']=='utils.flow_iql_research.train_mean_value_teacher_v1'for j in plan['jobs'])
+        assert all(j['module']=='utils.codex.ukjo1.error_propagation.flow_iql_research.train_mean_value_teacher_v1'for j in plan['jobs'])
         assert all(j['args']['profile']=='bounded_v2_mean_value_teacher'and j['args']['seed']==0 for j in plan['jobs'])
         assert all(j['args']['discount']==.999 and j['args']['expectile']==.9 and j['args']['samples']==9 for j in plan['jobs'])
         print(json.dumps(dict(status='passed',queue_mutations=0,manager_signals=0,new_training=0,insertion_index=index)),flush=True);return
@@ -38,7 +38,7 @@ def main():
     lock=(root/'queue_mutation.lock').open('a');fcntl.flock(lock,fcntl.LOCK_EX)
     before=json.loads((root/'scheduler_status.json').read_text());old=before['pid'];old_start=identity(old);assert old_start is not None
     cmd=Path(f'/proc/{old}/cmdline').read_bytes().decode().split('\0')
-    assert cmd[cmd.index('-m')+1]=='utils.flow_iql_research.scheduler_v20'and str(root)in cmd
+    assert cmd[cmd.index('-m')+1]=='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_v20'and str(root)in cmd
     queue=json.loads((root/'queue.json').read_text());finished=json.loads((root/'finished.json').read_text())
     actual=learners(root,queue,finished,before['running'])
     assert len(actual)==16 and collections.Counter(h['gpu']for h in actual.values())=={0:8,1:8}
@@ -63,7 +63,7 @@ def main():
     helper.atomic(root/'scheduler_status.json',dict(pid=old,updated_at=time.time(),phase='controller_migration',running=actual,
         finished=len(finished),pending=len(updated)-len(finished)-len(actual)))
     fcntl.flock(lock,fcntl.LOCK_UN);logpath=root/'scheduler_v21.log'
-    with logpath.open('a')as log:process=subprocess.Popen([sys.executable,'-u','-m','utils.flow_iql_research.scheduler_v21',str(root),'--per-gpu','8'],
+    with logpath.open('a')as log:process=subprocess.Popen([sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_v21',str(root),'--per-gpu','8'],
         stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)
     for _ in range(150):
         current=json.loads((root/'scheduler_status.json').read_text())
@@ -76,7 +76,7 @@ def main():
             assert current['running'][key]['pid']==h['pid']and current['running'][key]['process_identity']==h['process_identity']
     assert len(current['running'])==16 and collections.Counter(h['gpu']for h in current['running'].values())=={0:8,1:8}
     result=dict(time=time.time(),old_scheduler_pid=old,new_scheduler_pid=process.pid,new_scheduler_identity=identity(process.pid),
-        module='utils.flow_iql_research.scheduler_v21',current_learners=current['running'],preserved_live_handles=actual,
+        module='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_v21',current_learners=current['running'],preserved_live_handles=actual,
         old_jobs_exact=True,queue_size=len(updated),jobs_added=3,insertion_index=index,after_all_mean_confirmation=True,
         no_learner_restarts=True,queue_before_sha256=helper.digest(backup),queue_after_sha256=helper.digest(root/'queue.json'),
         registration_sha256=helper.digest(args.registration),source_sha256=helper.digest(__file__),log=str(logpath))

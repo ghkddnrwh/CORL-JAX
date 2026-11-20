@@ -19,7 +19,7 @@ import numpy as np
 
 from algorithms.uk_offline.basic import iql_jax as base
 from algorithms.uk_offline.basic import iql_residual_control as research
-from utils.propagation_research.diagnose_checkpoint import CheckpointReader, conditional_reference
+from utils.codex.ukjo1.error_propagation.propagation_research.diagnose_checkpoint import CheckpointReader, conditional_reference
 import optax
 
 

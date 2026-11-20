@@ -68,8 +68,8 @@ def main():
         assert row['first_episode_seed']==42 and row['n_episodes']==50 and row['eval_device']=='cpu'
         assert row['checkpoint_sha256']==audit['actual_model_pins'][f'{rid}:{step}']['sha256']
         assert sha(root/'runs'/rid/'config.json')==row['config_sha256']
-        assert row['source_sha256']==sha(Path('utils/flow_iql_research/evaluate_efficient_v1.py'))
-        assert row['core_source_sha256']==sha(Path('utils/flow_iql_research/efficient_mean_core_v1.py'))
+        assert row['source_sha256']==sha(Path('utils/codex/ukjo1/error_propagation/flow_iql_research/evaluate_efficient_v1.py'))
+        assert row['core_source_sha256']==sha(Path('utils/codex/ukjo1/error_propagation/flow_iql_research/efficient_mean_core_v1.py'))
         assert all(len(row[k])==50 for k in ('episode_successes','episode_rewards','episode_lengths'))
         assert all(x in (0,1) for x in row['episode_successes'])
         score=Fraction(sum(int(x)for x in row['episode_successes']),50)
@@ -174,8 +174,8 @@ def main():
         'teacher9개noise전체를 조건으로 쓰거나 선택 분포를 보존하도록 설계해야 한다. 단순한 stochastic label MSE는 다시 평균화 문제를 만들 수 있다.',
         '그 단계가 성공한 뒤 Q/finite-root 오차도 제약하는 BC student를 검토한다. 이는 제안일 뿐 아직 검증된 결과가 아니다.',
         '','현재 권장 구현',
-        'utils/flow_iql_research/efficient_mean_core_v1.py, variant=lean',
-        'utils/flow_iql_research/train_efficient_v1.py --variant lean',
+        'utils/codex/ukjo1/error_propagation/flow_iql_research/efficient_mean_core_v1.py, variant=lean',
+        'utils/codex/ukjo1/error_propagation/flow_iql_research/train_efficient_v1.py --variant lean',
         '성능이 검증된 원본은 mean_empirical_backup_core_v1.py와 train_mean_empirical_backup_v1.py에 보존돼 있다.',
         '원시 결과: ../efficiency_pipeline_v1/results.csv 및 final_audit.json',
         '독립 재검증/비교 표: independent_audit.json, pilot_speed_performance.csv, per_environment_results.csv, lean_nine_task_comparison.csv']

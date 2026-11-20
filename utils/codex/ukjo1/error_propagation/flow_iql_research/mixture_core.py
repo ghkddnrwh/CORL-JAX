@@ -5,12 +5,12 @@ proposal. Neither likelihood training nor action selection uses exponential
 advantage weights. Q/V learning remains the official IQL/value-control update.
 """
 import copy
-from utils.flow_iql_research import core as reference
-from utils.flow_iql_research.core import ENVIRONMENTS,PROFILES,State,make_scan,probe
-from utils.flow_iql_research.policy_core import probe_summary
-from utils.flow_iql_research.vendor.iql import IQLAgent
-from utils.flow_iql_research.vendor.flax_utils import ModuleDict,TrainState
-from utils.flow_iql_research.vendor.networks import MLP,Value,default_init
+from utils.codex.ukjo1.error_propagation.flow_iql_research import core as reference
+from utils.codex.ukjo1.error_propagation.flow_iql_research.core import ENVIRONMENTS,PROFILES,State,make_scan,probe
+from utils.codex.ukjo1.error_propagation.flow_iql_research.policy_core import probe_summary
+from utils.codex.ukjo1.error_propagation.flow_iql_research.vendor.iql import IQLAgent
+from utils.codex.ukjo1.error_propagation.flow_iql_research.vendor.flax_utils import ModuleDict,TrainState
+from utils.codex.ukjo1.error_propagation.flow_iql_research.vendor.networks import MLP,Value,default_init
 import flax
 from flax import linen as nn
 import jax
@@ -92,5 +92,5 @@ def create(seed,observations,actions,config,kind='mixture_bc'):
 
 def build_update(profile_name,bounds,kind='mixture_bc'):
     # Reuse the frozen policy controller, including exhaustive backup metrics.
-    from utils.flow_iql_research.policy_core import build_update
+    from utils.codex.ukjo1.error_propagation.flow_iql_research.policy_core import build_update
     return build_update(profile_name,bounds,kind)

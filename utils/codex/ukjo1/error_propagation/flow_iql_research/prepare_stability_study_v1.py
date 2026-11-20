@@ -4,8 +4,8 @@ import csv
 import json
 from pathlib import Path
 import time
-from utils.flow_iql_research import stability_study_core_v1 as core
-from utils.flow_iql_research.analyze_discount_0995_n9_v2 import sha, atomic, csv_file
+from utils.codex.ukjo1.error_propagation.flow_iql_research import stability_study_core_v1 as core
+from utils.codex.ukjo1.error_propagation.flow_iql_research.analyze_discount_0995_n9_v2 import sha, atomic, csv_file
 
 
 def main():
@@ -59,8 +59,8 @@ def main():
                 token=f'stab1_{tags[env]}_{method}_s{seed}'
                 jobs.append(dict(id=token,environment=env,seed=seed,recipe=method,method=method,
                     output=str(root/'runs'/token),evaluation_directory=str(root/'evaluations'/token),
-                    train_module='utils.flow_iql_research.train_stability_study_v1',
-                    eval_module='utils.flow_iql_research.evaluate_stability_study_v1',
+                    train_module='utils.codex.ukjo1.error_propagation.flow_iql_research.train_stability_study_v1',
+                    eval_module='utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_stability_study_v1',
                     reused=False,head_aggregation='min' if env.startswith('antmaze') else 'mean'))
     assert len(jobs)==89
     plan=dict(created_time=time.time(),purpose='User-authorized four-task stability investigation and from-scratch interventions.',

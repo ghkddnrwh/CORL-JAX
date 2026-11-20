@@ -8,9 +8,9 @@ import statistics
 import subprocess
 import sys
 import time
-from utils.flow_iql_research import tau_matched_extraction_v1 as helper
-from utils.flow_iql_research.audit_temporal_cohort_v1 import Verifier
-from utils.flow_iql_research.watch_native_ifql_n9_reference_v1 import validate_result as native_result
+from utils.codex.ukjo1.error_propagation.flow_iql_research import tau_matched_extraction_v1 as helper
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_temporal_cohort_v1 import Verifier
+from utils.codex.ukjo1.error_propagation.flow_iql_research.watch_native_ifql_n9_reference_v1 import validate_result as native_result
 
 
 def validate(plan,job,verifier):
@@ -22,9 +22,9 @@ def validate(plan,job,verifier):
     assert result['retained_V_updates']==vcount
     assert result['value_checkpoint_sha256']==plan['checkpoint_sha256'][f"{job['value_run']}:{job['step']}"]
     assert result['density_checkpoint_sha256']==plan['checkpoint_sha256'][f"{job['density_run']}:{job['step']}"]
-    assert result['source_sha256']==plan['source_sha256']['utils/flow_iql_research/evaluate_factorized_policy_v3.py']
-    assert result['selection_source_sha256']==plan['source_sha256']['utils/flow_iql_research/selection_v2.py']
-    assert result['evaluation_helper_sha256']==plan['source_sha256']['utils/flow_iql_research/train.py']
+    assert result['source_sha256']==plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/evaluate_factorized_policy_v3.py']
+    assert result['selection_source_sha256']==plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/selection_v2.py']
+    assert result['evaluation_helper_sha256']==plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/train.py']
     if job['sanity']:
         assert result['all_network_params_equal_density_model'] and result['full_dynamic_state_equal_density_model']
         original=json.loads(Path(job['V2_N9_reference']).read_text())
@@ -68,7 +68,7 @@ def main():
                     assert sha==plan['checkpoint_sha256'][key];audited[key]=dict(path=str(checkpoint),sha256=sha)
             logpath=output/(job['id']+'.log');log=logpath.open('a')
             command=['nice','-n','10','taskset','-c',','.join(map(str,cpus)),sys.executable,'-u','-m',
-                'utils.flow_iql_research.evaluate_factorized_policy_v3','--value-run',str(root/'runs'/job['value_run']),
+                'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_factorized_policy_v3','--value-run',str(root/'runs'/job['value_run']),
                 '--density-run',str(root/'runs'/job['density_run']),'--step',str(job['step']),
                 '--samples','9','--output',job['output']]
             proc=subprocess.Popen(command,env=environment,stdin=subprocess.DEVNULL,stdout=log,

@@ -6,11 +6,11 @@ The deployed actor samples one latent and decodes one action. Neither
 branch supplies bootstrap proposals or maximizes an off-support critic.
 """
 from pathlib import Path
-from utils.flow_iql_research import onestep_deploy_core_v1 as base
-from utils.flow_iql_research import latent_selected_actor_v1 as diagonal
-from utils.flow_iql_research import orderstat_latent_actor_v1 as order
-from utils.flow_iql_research import standalone_latent_selector_actor_v1 as portable
-from utils.flow_iql_research.vendor.flax_utils import TrainState
+from utils.codex.ukjo1.error_propagation.flow_iql_research import onestep_deploy_core_v1 as base
+from utils.codex.ukjo1.error_propagation.flow_iql_research import latent_selected_actor_v1 as diagonal
+from utils.codex.ukjo1.error_propagation.flow_iql_research import orderstat_latent_actor_v1 as order
+from utils.codex.ukjo1.error_propagation.flow_iql_research import standalone_latent_selector_actor_v1 as portable
+from utils.codex.ukjo1.error_propagation.flow_iql_research.vendor.flax_utils import TrainState
 import jax
 import jax.numpy as jnp
 import numpy as np

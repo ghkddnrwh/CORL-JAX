@@ -60,7 +60,7 @@ def main():
     assert audit['discovery_model_hashes_rechecked'] == 27 and len(audit['seed_diversity']) == 9
     contract = root/'mean_backup_confirmation_root_audit_contract_v1.json'
     assert sha(contract) == audit['execution_contract_sha256']
-    assert sha('utils/flow_iql_research/audit_mean_backup_confirmation_v1.py') == audit['audit_source_sha256']
+    assert sha('utils/codex/ukjo1/error_propagation/flow_iql_research/audit_mean_backup_confirmation_v1.py') == audit['audit_source_sha256']
     plan_path = root/'mean_backup_independent_confirmation_registration_v1.json'
     plan = read(plan_path)
     assert sha(plan_path) == read(contract)['primary_registration_sha256']

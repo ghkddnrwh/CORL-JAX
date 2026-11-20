@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import statistics as st
 import time
-from utils.flow_iql_research.analyze_discount_0995_n9_v2 import sha, atomic, csv_file
+from utils.codex.ukjo1.error_propagation.flow_iql_research.analyze_discount_0995_n9_v2 import sha, atomic, csv_file
 
 
 def summarize(values):
@@ -140,7 +140,7 @@ def main():
     csv_file(out/f'task_summary_{suffix}.csv',groups)
     if paired: csv_file(out/f'paired_differences_{suffix}.csv',paired)
     if args.final:
-        from utils.flow_iql_research.report_stability_study_v1 import render
+        from utils.codex.ukjo1.error_propagation.flow_iql_research.report_stability_study_v1 import render
         render(root,plan,rows,groups,paired)
     result=dict(time=time.time(),complete=complete,training_complete=trained,total_cells=plan['total_cells'],
         primary_evaluations=evaluated,expected_primary_evaluations=plan['total_cells']*6,

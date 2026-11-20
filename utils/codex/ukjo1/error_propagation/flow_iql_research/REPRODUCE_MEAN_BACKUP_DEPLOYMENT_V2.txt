@@ -22,7 +22,7 @@ Set these variables before importing JAX, matching the validated replay:
 Use6logicalCPUs, e.g. taskset -c 72-77. The managed primary GPU learners used
 96logicalCPUs/16slots=6CPUs each. Do not launch extra GPU workers into fullslots.
 
-from utils.flow_iql_research.mean_backup_bundle_v1 import load
+from utils.codex.ukjo1.error_propagation.flow_iql_research.mean_backup_bundle_v1 import load
 import jax
 import numpy as np
 metadata, state, policy = load('PATH_TO_BUNDLE.pkl')
@@ -42,7 +42,7 @@ env CUDA_VISIBLE_DEVICES='' OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
   MKL_NUM_THREADS=1 TF_NUM_INTRAOP_THREADS=1 TF_NUM_INTEROP_THREADS=1 \
   XLA_PYTHON_CLIENT_MEM_FRACTION=0.1 MUJOCO_GL=egl \
   taskset -c 72-77 /home/ukjo1/anaconda3/envs/ogbench/bin/python -m \
-  utils.flow_iql_research.evaluate_mean_backup_bundle_v2 PATH_TO_BUNDLE.pkl \
+  utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_mean_backup_bundle_v2 PATH_TO_BUNDLE.pkl \
   --reference-run ORIGINAL_FIXED_SEED9_RUN --output NEW_REPLAY_RESULT.json
 Reference run names are listed in the manifest/root audit. The evaluator blocks
 original learner/checkpoint reads and optimizer updates throughout load/rollout,

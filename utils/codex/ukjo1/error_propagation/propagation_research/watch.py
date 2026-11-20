@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time
 
-from utils.propagation_research.diagnose_checkpoint import CheckpointReader
+from utils.codex.ukjo1.error_propagation.propagation_research.diagnose_checkpoint import CheckpointReader
 
 
 def main():
@@ -62,7 +62,7 @@ def main():
                        OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1", MKL_NUM_THREADS="1",
                        MUJOCO_GL="egl")
             cmd = ["taskset", "-c", slot, sys.executable, "-u", "-m",
-                   "utils.propagation_research.diagnose_checkpoint", str(run),
+                   "utils.codex.ukjo1.error_propagation.propagation_research.diagnose_checkpoint", str(run),
                    "--checkpoint", snapshot.name, "--queries", "128", "--bank", "4096"]
             log = (run / f"deep_{step}.log").open("a")
             process = subprocess.Popen(cmd, env=env, stdout=log,

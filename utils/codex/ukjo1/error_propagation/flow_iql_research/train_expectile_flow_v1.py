@@ -8,14 +8,14 @@ import pickle
 import random
 import time
 
-from utils.flow_iql_research import expectile_flow_core_v1 as core
+from utils.codex.ukjo1.error_propagation.flow_iql_research import expectile_flow_core_v1 as core
 import flax.serialization
 import jax
 import jax.numpy as jnp
 import numpy as np
 import ogbench
-from utils.propagation_research.reward_bounds import return_bounds
-from utils.propagation_research.seeded_reset import prepare_seeded_action_space
+from utils.codex.ukjo1.error_propagation.propagation_research.reward_bounds import return_bounds
+from utils.codex.ukjo1.error_propagation.propagation_research.seeded_reset import prepare_seeded_action_space
 
 
 def sha(path):
@@ -112,8 +112,8 @@ def main():
                     evaluation_steps=sorted(evaluation_steps), probe_every=args.probe_every,
                     online_metrics='all_updates_in_each_probe_window_v2',
                     evaluation='last3_cpu50_independent_seeded_episodes_v1')
-    source_paths = [Path(core.__file__), Path(__file__), Path('utils/propagation_research/seeded_reset.py'),
-                    Path('utils/propagation_research/reward_bounds.py')]
+    source_paths = [Path(core.__file__), Path(__file__), Path('utils/codex/ukjo1/error_propagation/propagation_research/seeded_reset.py'),
+                    Path('utils/codex/ukjo1/error_propagation/propagation_research/reward_bounds.py')]
     source_paths.append(Path(core.__file__).with_name('core.py'))
     source_paths.append(Path(core.__file__).with_name('policy_core.py'))
     source_paths.extend(sorted(Path(core.__file__).parent.joinpath('vendor').glob('*.py')))

@@ -14,7 +14,7 @@ import time
 
 import numpy as np
 
-from utils.propagation_research.summarize import records
+from utils.codex.ukjo1.error_propagation.propagation_research.summarize import records
 
 
 FAMILIES = ("stress_baseline", "numerical_control", "candidate")

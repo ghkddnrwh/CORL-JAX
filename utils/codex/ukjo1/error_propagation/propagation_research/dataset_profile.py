@@ -15,8 +15,8 @@ import time
 
 import numpy as np
 
-from utils.propagation_research.reward_bounds import REWARD_COMPONENTS
-from utils.propagation_research.summarize import ENVIRONMENTS
+from utils.codex.ukjo1.error_propagation.propagation_research.reward_bounds import REWARD_COMPONENTS
+from utils.codex.ukjo1.error_propagation.propagation_research.summarize import ENVIRONMENTS
 
 
 def describe(data):

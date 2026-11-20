@@ -39,7 +39,7 @@ def worker(proposal, case):
         output = Path(job['output'])
         assert not output.exists(), output
         argv = [sys.executable, '-u', '-m',
-                'utils.flow_iql_research.evaluate_native_mixture_locations_v1',
+                'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_native_mixture_locations_v1',
                 '--run', job['run'], '--step', str(job['step']),
                 '--decoder', job['decoder'], '--output', str(output)]
         started = time.time()
@@ -112,7 +112,7 @@ def main():
     for index, case in enumerate(cases):
         cpus = f'{48 + index * 6}-{53 + index * 6}'
         command = ['nice', '-n', '19', 'taskset', '-c', cpus, sys.executable,
-            '-u', '-m', 'utils.flow_iql_research.run_native_mixture_locations_CPU_v1',
+            '-u', '-m', 'utils.codex.ukjo1.error_propagation.flow_iql_research.run_native_mixture_locations_CPU_v1',
             '--proposal', str(proposal), '--case', case]
         environment = dict(os.environ, CUDA_VISIBLE_DEVICES='', JAX_PLATFORM_NAME='cpu',
             OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1',

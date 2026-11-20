@@ -14,9 +14,9 @@ import subprocess
 import sys
 import time
 
-from utils.flow_iql_research.watch_independent_critic_confirmation_v1 import ready_job, summarize
-from utils.flow_iql_research.audit_independent_critic_policy_v1 import audit_job
-from utils.flow_iql_research.audit_temporal_cohort_v1 import Verifier
+from utils.codex.ukjo1.error_propagation.flow_iql_research.watch_independent_critic_confirmation_v1 import ready_job, summarize
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_independent_critic_policy_v1 import audit_job
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_temporal_cohort_v1 import Verifier
 
 
 def main():
@@ -55,7 +55,7 @@ def main():
     assert job is not None and job['id']=='group1_cube_2_median_rank'
     assert Path(job['actor_run']).name.startswith('ieconfirm_s3_')
     discovery=json.loads(Path(production['discovery_plan']).read_text())
-    command=prefix+['utils.flow_iql_research.evaluate_independent_critic_policy_v1',
+    command=prefix+['utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_independent_critic_policy_v1',
         '--actor-run',job['actor_run'],'--critic-runs',*job['critic_runs'],'--step','2',
         '--rule','median_rank','--output',job['output']]
     with(root/'ensemble.log').open('w')as log:

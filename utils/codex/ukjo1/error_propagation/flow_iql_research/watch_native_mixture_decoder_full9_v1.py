@@ -94,7 +94,7 @@ def create(root):
     with proposal.open('x') as f:
         json.dump(plan,f,indent=2,allow_nan=False)
     command=['nice','-n','19','taskset','-c','72-95',sys.executable,'-u','-m',
-             'utils.flow_iql_research.watch_native_mixture_decoder_full9_v1','--proposal',str(proposal)]
+             'utils.codex.ukjo1.error_propagation.flow_iql_research.watch_native_mixture_decoder_full9_v1','--proposal',str(proposal)]
     with (area/'observer_stdout_v1.log').open('xb') as log:
         child=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,
                                start_new_session=True,close_fds=True)
@@ -141,7 +141,7 @@ def observe(proposal):
                 occupied={x['slot'] for x in state['running'].values()}
                 slot=next(x for x in range(4) if x not in occupied)
                 argv=['nice','-n','19','taskset','-c',f'{72+slot*6}-{77+slot*6}',sys.executable,
-                      '-u','-m','utils.flow_iql_research.evaluate_native_mixture_locations_v1',
+                      '-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_native_mixture_locations_v1',
                       '--run',job['run'],'--step',str(job['step']),'--decoder',job['decoder'],
                       '--output',key]
                 env=dict(os.environ,CUDA_VISIBLE_DEVICES='',JAX_PLATFORM_NAME='cpu',OMP_NUM_THREADS='1',

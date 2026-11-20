@@ -5,8 +5,8 @@ import datetime
 import json
 from pathlib import Path
 import shutil
-from utils.flow_iql_research import discount_0995_n9_core_v1 as core
-from utils.flow_iql_research.analyze_discount_0995_n9_v1 import sha, atomic
+from utils.codex.ukjo1.error_propagation.flow_iql_research import discount_0995_n9_core_v1 as core
+from utils.codex.ukjo1.error_propagation.flow_iql_research.analyze_discount_0995_n9_v1 import sha, atomic
 
 
 def main():
@@ -14,7 +14,7 @@ def main():
     parser.add_argument('--root', type=Path, required=True)
     args = parser.parse_args()
     root = args.root.resolve()
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = next(parent for parent in Path(__file__).resolve().parents if (parent / '.git').exists())
     folder = Path(__file__).resolve().parent
     assert not (root / 'registration_v1.json').exists(), 'Study already registered'
     numerical = json.loads((root / 'analysis/numerical_validation_v1.json').read_text())
@@ -95,8 +95,8 @@ def main():
             identity = f'g995n9_{tags[env]}_s{seed}'
             jobs.append(dict(id=identity, environment=env, recipe='g995_n9', seed=seed,
                 bootstrap_samples=9, head_aggregation='min' if env.startswith('antmaze-') else 'mean',
-                output=str(root / 'runs' / identity), train_module='utils.flow_iql_research.train_discount_0995_n9_v1',
-                eval_module='utils.flow_iql_research.evaluate_discount_0995_n9_v1', reused=False))
+                output=str(root / 'runs' / identity), train_module='utils.codex.ukjo1.error_propagation.flow_iql_research.train_discount_0995_n9_v1',
+                eval_module='utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_discount_0995_n9_v1', reused=False))
     assert len(jobs) == 38 and len(reused) == 2
     assert len({(j['environment'], j['seed']) for j in jobs + reused}) == 40
     references = dict(dataset_references)
@@ -142,7 +142,7 @@ def main():
         'Lean 배포 및 actor label 후보9개 유지. 각 학습에서 Lean과 단일 actor를 모두 평가한다.',
         '800K/900K/1M 각CPU50, reset seed42..91. 각 evaluator의 CPU affinity는4개로 고정한다.',
         '학습 시드별 세 checkpoint 평균을 구한 뒤 4시드 평균±sample SD를 집계한다.',
-        'python -m utils.flow_iql_research.run_discount_0995_n9_v1 --root ' + str(root),
+        'python -m utils.codex.ukjo1.error_propagation.flow_iql_research.run_discount_0995_n9_v1 --root ' + str(root),
         '완료 후 analysis/task_seed_results_final_v1.csv와 task_results_mean_sd_final_v1.csv를 확인한다.']
     (root / 'REPRODUCE_AND_SCOPE_KO_v1.txt').write_text('\n'.join(text) + '\n')
     link = workspace / 'logs/diagnosis' / root.name

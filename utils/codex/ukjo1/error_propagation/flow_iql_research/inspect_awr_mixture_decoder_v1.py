@@ -8,10 +8,10 @@ import json
 from pathlib import Path
 import time
 
-from utils.flow_iql_research import awr_mixture_core_v1 as core
-from utils.flow_iql_research.evaluate_awr_mixture_decoder_v1 import make_selector
-from utils.flow_iql_research.evaluate_cross_seed_temporal_v2 import read
-from utils.flow_iql_research.rank_mean_bundle_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research import awr_mixture_core_v1 as core
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_awr_mixture_decoder_v1 import make_selector
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_cross_seed_temporal_v2 import read
+from utils.codex.ukjo1.error_propagation.flow_iql_research.rank_mean_bundle_v1 import sha
 import flax.serialization
 import jax
 import jax.numpy as jnp
@@ -109,7 +109,7 @@ def main():
     env.close()
     np.savez_compressed(args.output / 'raw_fixed_queries.npz', **arrays)
     result = dict(time=time.time(), status='complete', rows=rows, models=models,
-        source_sha256=sha(__file__), selector_source_sha256=sha('utils/flow_iql_research/evaluate_awr_mixture_decoder_v1.py'),
+        source_sha256=sha(__file__), selector_source_sha256=sha('utils/codex/ukjo1/error_propagation/flow_iql_research/evaluate_awr_mixture_decoder_v1.py'),
         config_sha256=sha(args.run / 'config.json'), query_rng=91350, queries_per_split=512,
         goal_complete=False, primary_scores_unchanged=True,
         limits=['Same fixed512 observations are reused at3checkpoints, not independent state replicates.',

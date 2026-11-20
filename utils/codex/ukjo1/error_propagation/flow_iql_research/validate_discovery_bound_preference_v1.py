@@ -9,11 +9,11 @@ import subprocess
 import sys
 import time
 from types import SimpleNamespace
-from utils.flow_iql_research.discovery_bound_policy_v1 import empirical_bound,preferred_candidate
-from utils.flow_iql_research.register_discovery_bound_preference_v1 import build_plan
-from utils.flow_iql_research.onestep_implementation_registry_v5 import implementation,configuration
-from utils.flow_iql_research.activate_mixture_full9_prefetch_v1 import identity
-from utils.flow_iql_research.evaluate_onestep_deploy_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.discovery_bound_policy_v1 import empirical_bound,preferred_candidate
+from utils.codex.ukjo1.error_propagation.flow_iql_research.register_discovery_bound_preference_v1 import build_plan
+from utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_implementation_registry_v5 import implementation,configuration
+from utils.codex.ukjo1.error_propagation.flow_iql_research.activate_mixture_full9_prefetch_v1 import identity
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1 import sha
 
 
 def main():
@@ -50,17 +50,17 @@ def main():
     captured.clear();bindings['begin_fresh'](bindings['state']['attempts'][3])
     assert len(captured)==1 and len(captured[0]['new'])==27
     assert {j['args']['seed']for j in captured[0]['new']}=={21,22,23}
-    assert all(j['module']=='utils.flow_iql_research.train_mixture_onestep_v1'for j in captured[0]['new'])
+    assert all(j['module']=='utils.codex.ukjo1.error_propagation.flow_iql_research.train_mixture_onestep_v1'for j in captured[0]['new'])
     private=copy.deepcopy(plan);private['root']=str(out)
     registration=out/'private_registration.json';registration.write_text(json.dumps(private,indent=2))
     contract=out/'private_contract.json';contract.write_text(json.dumps(dict(registration=str(registration),registration_sha256=sha(registration),
-        source_sha256=private['all_source_sha256'],GPU_manager_CPU_affinity=list(range(96)),GPU_scheduler_module='utils.flow_iql_research.scheduler_onestep_deploy_v7'),indent=2))
+        source_sha256=private['all_source_sha256'],GPU_manager_CPU_affinity=list(range(96)),GPU_scheduler_module='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_onestep_deploy_v7'),indent=2))
     ps={k:copy.deepcopy(state[k])for k in ['round','round_recipes','all_recipes','phase','tested_candidates','attempts','active_attempt']}
     ps.update(jobs=plan['jobs'],identities=plan['expected_identities'],evaluation_workers={},evaluation_tries={},evaluation_failures={},benchmark_workers={},benchmark_results={},events=[])
     directory=out/'analysis/onestep_pipeline_v1';directory.mkdir(parents=True)
     (directory/'research_state.json').write_text(json.dumps(ps,indent=2));(out/'queue.json').write_text(json.dumps(plan['jobs'],indent=2))
     (out/'finished.json').write_text('{}');(out/'scheduler_status.json').write_text(json.dumps(dict(pid=os.getpid(),running={},pending=142,finished=0)))
-    command=[sys.executable,'-u','-m','utils.flow_iql_research.watch_onestep_deploy_v10',str(contract)]
+    command=[sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v10',str(contract)]
     with(out/'controller.log').open('xb')as log:
         child=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)
     birth=identity(child.pid);(out/'controller_handle.json').write_text(json.dumps(dict(pid=child.pid,birth=birth,command=command)))

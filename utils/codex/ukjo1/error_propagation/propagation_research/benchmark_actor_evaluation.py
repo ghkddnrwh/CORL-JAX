@@ -6,7 +6,7 @@ from pathlib import Path
 import time
 
 from algorithms.uk_offline.basic import iql_jax as base
-from utils.propagation_research.diagnose_checkpoint import CheckpointReader
+from utils.codex.ukjo1.error_propagation.propagation_research.diagnose_checkpoint import CheckpointReader
 
 import jax
 import jax.numpy as jnp

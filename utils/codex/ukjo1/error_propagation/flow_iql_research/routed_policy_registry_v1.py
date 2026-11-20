@@ -1,7 +1,7 @@
 """Separate a deployment candidate key from its immutable training recipe."""
 from dataclasses import replace
-from utils.flow_iql_research import onestep_implementation_registry_v5 as native
-from utils.flow_iql_research.onestep_scheduling_policy_v1 import order_pending as native_order
+from utils.codex.ukjo1.error_propagation.flow_iql_research import onestep_implementation_registry_v5 as native
+from utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_scheduling_policy_v1 import order_pending as native_order
 
 POLICY='mdn9_bc__component_location'
 NATIVE='mdn9_bc'
@@ -18,8 +18,8 @@ def implementation(recipe):
     result=native.implementation(training_recipe(recipe))
     if recipe==POLICY:
         return replace(result,
-            evaluator_module='utils.flow_iql_research.evaluate_portable_mixture_locations_v1',
-            benchmark_module='utils.flow_iql_research.benchmark_routed_mixture_isolated_v1')
+            evaluator_module='utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_portable_mixture_locations_v1',
+            benchmark_module='utils.codex.ukjo1.error_propagation.flow_iql_research.benchmark_routed_mixture_isolated_v1')
     return result
 
 
@@ -59,5 +59,5 @@ def preferred_candidate(state,plan,candidates):
             deployment_rule='sampled_component_location',
             reason='One globally fixed decoder selected from four same-model seed0 discovery tasks; all nine tasks and three fresh training seeds remain mandatory.',
             no_original_pilot_pass_claim=True,all_final_gates_unchanged=True)
-    from utils.flow_iql_research.discovery_bound_policy_v1 import preferred_candidate as previous
+    from utils.codex.ukjo1.error_propagation.flow_iql_research.discovery_bound_policy_v1 import preferred_candidate as previous
     return previous(state,plan,candidates)

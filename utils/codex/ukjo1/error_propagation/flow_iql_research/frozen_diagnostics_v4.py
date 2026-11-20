@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import pickle
 import time
-from utils.flow_iql_research import core,policy_core
+from utils.codex.ukjo1.error_propagation.flow_iql_research import core,policy_core
 import flax.serialization
 import jax
 import jax.numpy as jnp
@@ -34,10 +34,10 @@ def main():
     cfg=dict(ident['config'])
     for name in ('actor_hidden_dims','value_hidden_dims'):cfg[name]=tuple(cfg[name])
     if kind == 'rank_flow':
-        from utils.flow_iql_research import rank_flow_core_v1
+        from utils.codex.ukjo1.error_propagation.flow_iql_research import rank_flow_core_v1
         module = rank_flow_core_v1
     elif kind in ('gaussian_bc','mixture_bc'):
-        from utils.flow_iql_research import mixture_core
+        from utils.codex.ukjo1.error_propagation.flow_iql_research import mixture_core
         module=mixture_core
     else:
         module=core if kind=='iql' and 'policy_type' not in cfg else policy_core

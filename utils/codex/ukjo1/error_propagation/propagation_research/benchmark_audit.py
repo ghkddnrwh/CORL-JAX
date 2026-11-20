@@ -15,7 +15,7 @@ import time
 
 import numpy as np
 
-from utils.propagation_research.summarize import ENVIRONMENTS, collect, records
+from utils.codex.ukjo1.error_propagation.propagation_research.summarize import ENVIRONMENTS, collect, records
 
 
 def optimizer_counts(tree):
@@ -34,7 +34,7 @@ def optimizer_counts(tree):
 
 def audit_lineage(run, config):
     """Verify that resumes preserve the scientific identity and the actual seed."""
-    from utils.propagation_research.diagnose_checkpoint import CheckpointReader
+    from utils.codex.ukjo1.error_propagation.propagation_research.diagnose_checkpoint import CheckpointReader
     failures, links, seen = [], [], set()
     expected = config["identity"]
     critical = ("env", "seed", "discount", "iql_tau", "tau", "beta", "normalize",
@@ -93,7 +93,7 @@ def audit_lineage(run, config):
 
 def audit_final(run, row, plan, candidate):
     # Lazy imports keep the table/coverage utilities free of a JAX initialization.
-    from utils.propagation_research.diagnose_checkpoint import CheckpointReader
+    from utils.codex.ukjo1.error_propagation.propagation_research.diagnose_checkpoint import CheckpointReader
     import jax
 
     failures = []

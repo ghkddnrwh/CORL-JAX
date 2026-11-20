@@ -21,7 +21,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from algorithms.uk_offline.basic import iql_jax as base
-from utils.propagation_research.reward_bounds import return_bounds
+from utils.codex.ukjo1.error_propagation.propagation_research.reward_bounds import return_bounds
 
 import optax
 import yaml
@@ -190,7 +190,7 @@ def build_update(trainer, head, htx, profile, reward_bounds, hypergradient=False
     sg = (lambda x: x) if hypergradient else jax.lax.stop_gradient
     q_optimizer, v_optimizer, h_optimizer = trainer.q_tx.update, trainer.v_tx.update, htx.update
     if hypergradient:
-        from utils.propagation_research.diagnose_checkpoint import differentiable_adam
+        from utils.codex.ukjo1.error_propagation.propagation_research.diagnose_checkpoint import differentiable_adam
         # Targets remain closure constants for each INNER parameter gradient,
         # while OUTER differentiation must follow their dependence on prior state.
         q_optimizer = lambda g, o, p: differentiable_adam(g, o, q_lr)
@@ -564,7 +564,7 @@ def main():
                 path.write_text("".join(json.dumps(x)+"\n" for x in records if x["step"] <= start_step))
         print(f"Resuming at {start_step}", flush=True)
     if profile.get("jvp_control"):
-        from utils.propagation_research.diagnose_checkpoint import build_jvp_controller
+        from utils.codex.ukjo1.error_propagation.propagation_research.diagnose_checkpoint import build_jvp_controller
         controller = build_jvp_controller(trainer, cfg.qf_lr)
         control_rng = np.random.RandomState(args.seed+61597)
         control_fit = sample(control_rng.randint(len(data["actions"]), size=cfg.batch_size))

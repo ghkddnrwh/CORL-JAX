@@ -13,8 +13,8 @@ import time
 
 import numpy as np
 
-from utils.propagation_research.evaluate_seeded_finals import valid_result
-from utils.propagation_research.summarize import CRITERION, ENVIRONMENTS
+from utils.codex.ukjo1.error_propagation.propagation_research.evaluate_seeded_finals import valid_result
+from utils.codex.ukjo1.error_propagation.propagation_research.summarize import CRITERION, ENVIRONMENTS
 
 
 def sha(path):

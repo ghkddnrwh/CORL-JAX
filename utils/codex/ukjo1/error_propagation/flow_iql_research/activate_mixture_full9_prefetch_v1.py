@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 
-from utils.flow_iql_research.onestep_scheduling_policy_v1 import order_pending
+from utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_scheduling_policy_v1 import order_pending
 
 
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -42,7 +42,7 @@ def main():
     continuation=root/'CONTINUATION.json';saved=json.loads(continuation.read_text())
     assert Path(saved['analysis_contract'])==root/'analysis/execution_contract_v17.json'
     owners={k:saved[k]for k in ['scheduler','analysis_controller']};role_env={}
-    expected=dict(scheduler='utils.flow_iql_research.scheduler_onestep_deploy_v7',analysis_controller='utils.flow_iql_research.watch_onestep_deploy_v9')
+    expected=dict(scheduler='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_onestep_deploy_v7',analysis_controller='utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v9')
     scheduler=json.loads((root/'scheduler_status.json').read_text());assert len(scheduler['running'])==16
     for role,owner in owners.items():
         assert identity(owner['pid'])==owner['process_identity']

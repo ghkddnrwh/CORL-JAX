@@ -9,8 +9,8 @@ import sys
 import time
 
 
-MODULES = {'utils.flow_iql_research.train', 'utils.flow_iql_research.train_policy',
-           'utils.flow_iql_research.train_fql', 'utils.flow_iql_research.train_mixture'}
+MODULES = {'utils.codex.ukjo1.error_propagation.flow_iql_research.train', 'utils.codex.ukjo1.error_propagation.flow_iql_research.train_policy',
+           'utils.codex.ukjo1.error_propagation.flow_iql_research.train_fql', 'utils.codex.ukjo1.error_propagation.flow_iql_research.train_mixture'}
 
 
 def atomic_json(path, data):
@@ -78,7 +78,7 @@ def main():
                 job=next((j for j in queue if j['id'] not in running and j['id'] not in finished
                           and str(root/'runs'/j.get('output_run',j['id'])) not in {v['output'] for v in running.values()}),None)
                 if job is None: break
-                module=job.get('module','utils.flow_iql_research.train');assert module in MODULES
+                module=job.get('module','utils.codex.ukjo1.error_propagation.flow_iql_research.train');assert module in MODULES
                 output=root/'runs'/job.get('output_run',job['id']);output.mkdir(parents=True,exist_ok=True)
                 env=dict(os.environ,CUDA_VISIBLE_DEVICES=str(slot[0]),XLA_PYTHON_CLIENT_MEM_FRACTION='0.1',
                          OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1',MUJOCO_GL='egl',

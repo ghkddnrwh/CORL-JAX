@@ -135,7 +135,7 @@ def main():
             data = load(path)
             assert data['status'] == 'complete' and data['visible_GPU'] == str(gpu)
             assert data['CPU_affinity'] == list(range(gpu * 6, gpu * 6 + 6)) and 'A6000' in data['GPU_kind']
-            source = Path('utils/flow_iql_research/' + ('benchmark_routed_real_observations_v1.py'
+            source = Path('utils/codex/ukjo1/error_propagation/flow_iql_research/' + ('benchmark_routed_real_observations_v1.py'
                 if scope == 'real' else 'benchmark_routed_mixture_isolated_v1.py')).resolve()
             assert data['source_sha256'] == sha(source)
             if scope == 'real':
@@ -189,7 +189,7 @@ def main():
     gpu_plan = load(v15 / 'all_nine_actor_GPU_check_plan_v1.json')
     for path, digest in gpu_plan['source_sha256'].items():
         assert sha(path) == digest
-    validator = Path('utils/flow_iql_research/validate_portable_mixture_locations_GPU_v1.py').resolve()
+    validator = Path('utils/codex/ukjo1/error_propagation/flow_iql_research/validate_portable_mixture_locations_GPU_v1.py').resolve()
     assert gpu['source_sha256'] == sha(validator)
     assert {r['actor_sha256'] for r in gpu['rows']} == {p['routed_model']['actor_artifact_sha256'] for p in final_models.values()}
     for row in gpu['rows']:
@@ -224,7 +224,7 @@ def main():
         writer = csv.DictWriter(stream, fieldnames=list(speed_rows[0]))
         writer.writeheader(); writer.writerows(speed_rows)
     save(area / 'selected_actor_artifact_manifest_v1.json', dict(source_sha256=sources,
-        deployment_source='utils/flow_iql_research/standalone_mixture_location_actor_v1.py',
+        deployment_source='utils/codex/ukjo1/error_propagation/flow_iql_research/standalone_mixture_location_actor_v1.py',
         seed0_final_1M_actors=[dict(run=p['run'], environment=p['environment'], **p['routed_model']) for p in final_models.values()],
         all_four_seed_late_model_pins=model_pins))
     print(json.dumps(dict(status='pass', checks=result['checks'], speedup=result['geometric_speedup'],

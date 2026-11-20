@@ -18,7 +18,7 @@ def atomic(path,value):
 
 def command(job,cpus):
     result=['taskset','-c',','.join(map(str,cpus)),sys.executable,'-u','-m',
-        'utils.flow_iql_research.evaluate_independent_critic_policy_v2','--actor-run',job['actor_run'],
+        'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_independent_critic_policy_v2','--actor-run',job['actor_run'],
         '--critic-runs',*job['critic_runs'],'--step',str(job['step']),'--rule',job['rule'],'--output',job['output']]
     if 'reference' in job:result+=['--reference',job['reference']]
     return result

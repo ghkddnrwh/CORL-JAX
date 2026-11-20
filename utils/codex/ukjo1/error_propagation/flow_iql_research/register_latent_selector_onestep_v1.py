@@ -4,8 +4,8 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 import time
-from utils.flow_iql_research.evaluate_onestep_deploy_v1 import sha
-from utils.flow_iql_research import onestep_implementation_registry_v5 as registry
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research import onestep_implementation_registry_v5 as registry
 
 
 RECIPES=(*registry.LATENT_RECIPES,*registry.GUIDED_RECIPES)
@@ -82,7 +82,7 @@ def main():
     target.write_text(json.dumps(plan,indent=2,allow_nan=False))
     previous=root/'analysis/execution_contract_v15.json'
     contract.update(registration=str(target),registration_sha256=sha(target),source_sha256=plan['all_source_sha256'],
-        GPU_scheduler_module='utils.flow_iql_research.scheduler_onestep_deploy_v7',
+        GPU_scheduler_module='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_onestep_deploy_v7',
         previous_execution_contract=str(previous),previous_execution_contract_sha256=sha(previous),
         latent_selector_extension=plan['latent_selector_extension'])
     execution.write_text(json.dumps(contract,indent=2,allow_nan=False))

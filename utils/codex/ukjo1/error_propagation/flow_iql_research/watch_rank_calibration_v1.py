@@ -38,7 +38,7 @@ def main():
         stopping=(root/'STOP_RANK_CALIBRATION').exists()
         if running is None and jobs and not stopping:
             name,run,step=jobs.pop(0)
-            command=['taskset','-c','68-71',sys.executable,'-u','-m','utils.flow_iql_research.rank_data_calibration_v1',str(run),'--step',str(step),'--output',str(output/(name+'.json'))]
+            command=['taskset','-c','68-71',sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.rank_data_calibration_v1',str(run),'--step',str(step),'--output',str(output/(name+'.json'))]
             env=dict(os.environ,CUDA_VISIBLE_DEVICES='',OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1',MUJOCO_GL='egl',TF_NUM_INTRAOP_THREADS='1',TF_NUM_INTEROP_THREADS='1')
             log=(output/(name+'.log')).open('a');process=subprocess.Popen(command,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)
             running=dict(name=name,process=process,log=log,started_at=time.time());print('START',name,process.pid,flush=True)

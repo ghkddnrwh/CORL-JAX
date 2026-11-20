@@ -13,7 +13,7 @@ import random
 import time
 import numpy as np
 import ogbench
-from utils.propagation_research.seeded_reset import prepare_seeded_action_space
+from utils.codex.ukjo1.error_propagation.propagation_research.seeded_reset import prepare_seeded_action_space
 
 
 def sha(path):

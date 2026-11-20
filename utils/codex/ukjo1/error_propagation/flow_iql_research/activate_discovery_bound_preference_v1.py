@@ -6,7 +6,7 @@ import signal
 import subprocess
 import sys
 import time
-from utils.flow_iql_research.activate_mixture_full9_prefetch_v1 import identity,atomic,sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.activate_mixture_full9_prefetch_v1 import identity,atomic,sha
 
 
 def main():
@@ -20,7 +20,7 @@ def main():
     cpath=root/'CONTINUATION.json';c=json.loads(cpath.read_text());assert Path(c['analysis_contract'])==root/'analysis/execution_contract_v18.json'
     owner=c['analysis_controller'];assert identity(owner['pid'])==owner['process_identity']
     command=Path(f'/proc/{owner["pid"]}/cmdline').read_text().split('\0')
-    assert 'utils.flow_iql_research.watch_onestep_deploy_v9'in command
+    assert 'utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v9'in command
     env=dict(x.split('=',1)for x in Path(f'/proc/{owner["pid"]}/environ').read_text().split('\0')if'='in x)
     before=area/'activation_before_v1.json';assert not before.exists()
     atomic(before,dict(time=time.time(),old_owner=owner,scheduler=c['scheduler'],gradient=c['gradient_controller'],
@@ -31,7 +31,7 @@ def main():
     os.kill(owner['pid'],signal.SIGTERM);end=time.monotonic()+5
     while identity(owner['pid'])==owner['process_identity']and time.monotonic()<end:time.sleep(.05)
     assert identity(owner['pid'])is None,'Never force kill or signal children'
-    newcommand=['utils.flow_iql_research.watch_onestep_deploy_v10'if x=='utils.flow_iql_research.watch_onestep_deploy_v9'else x for x in owner['command']]
+    newcommand=['utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v10'if x=='utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v9'else x for x in owner['command']]
     newcommand[-1]=str(contract)
     with(area/'CPU_controller_activation_v1.log').open('a')as log:
         child=subprocess.Popen(newcommand,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)

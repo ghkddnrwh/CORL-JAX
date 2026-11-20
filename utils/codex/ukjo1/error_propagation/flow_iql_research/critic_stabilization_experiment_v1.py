@@ -9,13 +9,13 @@ import subprocess
 import sys
 import time
 
-from utils.flow_iql_research.diagnose_sample_budget_components_v1 import atomic, sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.diagnose_sample_budget_components_v1 import atomic, sha
 
-PROJECT = Path(__file__).resolve().parents[2]
+PROJECT = next(parent for parent in Path(__file__).resolve().parents if (parent / '.git').exists())
 
 
 def prepare(root):
-    from utils.flow_iql_research import critic_stabilization_core_v1 as core
+    from utils.codex.ukjo1.error_propagation.flow_iql_research import critic_stabilization_core_v1 as core
     oldroot = PROJECT / 'logs/diagnosis/finite_mean_sample_budget_multiseed_20261115'
     oldpath = oldroot / 'registration_v1.json'
     old = json.loads(oldpath.read_text())
@@ -46,8 +46,8 @@ def prepare(root):
                 label = case['id'] + '_' + method
                 jobs.append(dict(id=label, case=case['id'], method=method,
                                  output=str(root / 'runs' / label)))
-    paths = core.source_paths() + [Path(__file__), PROJECT / 'utils/flow_iql_research/evaluate_sample_budget_v1.py',
-        PROJECT / 'utils/flow_iql_research/validate_critic_stabilization_v1.py']
+    paths = core.source_paths() + [Path(__file__), PROJECT / 'utils/codex/ukjo1/error_propagation/flow_iql_research/evaluate_sample_budget_v1.py',
+        PROJECT / 'utils/codex/ukjo1/error_propagation/flow_iql_research/validate_critic_stabilization_v1.py']
     hashes.update({str(p.resolve()): sha(p) for p in paths})
     plan = dict(protocol='late_Q_stabilization_v1', created_unix=time.time(),
         parent_registration_sha256=sha(oldpath), cases=cases, jobs=jobs, source_sha256=hashes,
@@ -94,9 +94,9 @@ def train(plan_path, job_id, stop_at=None):
     import jax.numpy as jnp
     import numpy as np
     import ogbench
-    from utils.flow_iql_research import critic_stabilization_core_v1 as core
-    from utils.flow_iql_research import sample_budget_core_v1 as ref
-    from utils.flow_iql_research.train_sample_budget_v1 import sync
+    from utils.codex.ukjo1.error_propagation.flow_iql_research import critic_stabilization_core_v1 as core
+    from utils.codex.ukjo1.error_propagation.flow_iql_research import sample_budget_core_v1 as ref
+    from utils.codex.ukjo1.error_propagation.flow_iql_research.train_sample_budget_v1 import sync
 
     plan = load_plan(plan_path)
     job = next(j for j in plan['jobs'] if j['id'] == job_id)
@@ -267,7 +267,7 @@ def controller(plan_path):
             log = (logsdir / f'train_{job["id"]}.log').open('a')
             env = dict(env_common, CUDA_VISIBLE_DEVICES=str(slot[0]), XLA_PYTHON_CLIENT_MEM_FRACTION='0.20')
             command = ['taskset', '-c', ','.join(map(str, cores)), sys.executable, '-u', '-m',
-                'utils.flow_iql_research.critic_stabilization_experiment_v1', 'train',
+                'utils.codex.ukjo1.error_propagation.flow_iql_research.critic_stabilization_experiment_v1', 'train',
                 '--plan', str(plan_path), '--job', job['id']]
             process = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT,
                                        stdin=subprocess.DEVNULL, start_new_session=True)
@@ -289,7 +289,7 @@ def controller(plan_path):
             log = (logsdir / f'eval_{label}.log').open('a')
             env = dict(env_common, CUDA_VISIBLE_DEVICES='', JAX_PLATFORMS='cpu')
             command = ['taskset', '-c', ','.join(map(str, range(64+4*index, 68+4*index))),
-                sys.executable, '-u', '-m', 'utils.flow_iql_research.evaluate_sample_budget_v1',
+                sys.executable, '-u', '-m', 'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_sample_budget_v1',
                 '--run', job['output'], '--step', str(step), '--mode', mode, '--episodes', '50', '--output', str(output)]
             process = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT,
                                        stdin=subprocess.DEVNULL, start_new_session=True)

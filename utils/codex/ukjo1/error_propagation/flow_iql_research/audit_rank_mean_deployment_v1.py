@@ -5,9 +5,9 @@ from pathlib import Path
 import pickle
 import time
 
-from utils.flow_iql_research import core  # Compatibility before unpickling.
-from utils.flow_iql_research.audit_temporal_cohort_v1 import Verifier
-from utils.flow_iql_research.evaluate_cross_seed_temporal_v2 import read
+from utils.codex.ukjo1.error_propagation.flow_iql_research import core  # Compatibility before unpickling.
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_temporal_cohort_v1 import Verifier
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_cross_seed_temporal_v2 import read
 import jax
 import numpy as np
 
@@ -77,7 +77,7 @@ def main():
         assert record['environment'] == reference['environment'] == job['environment']
         assert record['step'] == reference['step'] == 1000000
         assert record['bundle_sha256'] == artifact['bundle_sha256']
-        assert record['source_sha256'] == bundle['source_sha256']['utils/flow_iql_research/evaluate_rank_mean_bundle_v1.py']
+        assert record['source_sha256'] == bundle['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/evaluate_rank_mean_bundle_v1.py']
         assert reference['aggregation_rule'] == 'mean_rank' and reference['selection_samples'] == 9
         assert [m['checkpoint_sha256'] for m in bundle['members']] == [m['checkpoint_sha256'] for m in reference['critic_members']]
         assert record['n_episodes'] == reference['n_episodes'] == 50

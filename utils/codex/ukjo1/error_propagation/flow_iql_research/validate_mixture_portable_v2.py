@@ -5,8 +5,8 @@ from pathlib import Path
 import sys
 import time
 
-from utils.flow_iql_research import standalone_mixture_actor_v1 as old
-from utils.flow_iql_research import standalone_mixture_actor_v2 as new
+from utils.codex.ukjo1.error_propagation.flow_iql_research import standalone_mixture_actor_v1 as old
+from utils.codex.ukjo1.error_propagation.flow_iql_research import standalone_mixture_actor_v2 as new
 
 import jax
 import jax.numpy as jnp
@@ -45,7 +45,7 @@ def main():
         difference=float(jnp.max(jnp.abs(got-want)));assert difference<1e-6,difference
         rows.append(dict(path=str(path),sha256=sha(path),normalized=normalized,max_action_difference=difference,
             actor_forward_passes=m['actor_forward_passes'],generated_candidates=m['generated_candidate_actions']))
-    forbidden=[name for name in sys.modules if name=='ogbench'or name.startswith(('utils.flow_iql_research.vendor','utils.flow_iql_research.onestep_deploy_core'))]
+    forbidden=[name for name in sys.modules if name=='ogbench'or name.startswith(('utils.codex.ukjo1.error_propagation.flow_iql_research.vendor','utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_deploy_core'))]
     assert not forbidden,forbidden
     out.write_text(json.dumps(dict(time=time.time(),status='pass',rows=rows,only_actor_trees_loaded=True,no_RL_imports=True,no_optimizer_or_GPU_updates=True,
         source_sha256={str(Path(p).resolve()):sha(p)for p in [__file__,old.__file__,new.__file__]},

@@ -8,7 +8,7 @@ meanQ as in official FQL. The critic is supplied as a frozen callable.
 import jax
 import jax.numpy as jnp
 
-from utils.flow_iql_research.mixture_onestep_actor_v1 import log_probability
+from utils.codex.ukjo1.error_propagation.flow_iql_research.mixture_onestep_actor_v1 import log_probability
 
 
 def component_actions(parameters,noises):

@@ -5,8 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 import time
-from utils.flow_iql_research import giant_core_v1 as core
-from utils.propagation_research.seeded_reset import prepare_seeded_action_space
+from utils.codex.ukjo1.error_propagation.flow_iql_research import giant_core_v1 as core
+from utils.codex.ukjo1.error_propagation.propagation_research.seeded_reset import prepare_seeded_action_space
 import flax.serialization
 import jax
 import jax.numpy as jnp

@@ -8,9 +8,9 @@ running. Discovery alone does not complete the goal. No SOTA, matched-compute,
 or matched-seed FQL superiority claim is established by this number.
 
 Actual implementation
-Core: utils/flow_iql_research/mean_empirical_backup_core_v1.py
-Runner: utils/flow_iql_research/train_mean_empirical_backup_v1.py
-Exact finite root: utils/flow_iql_research/selection_v2.py:empirical_expectile
+Core: utils/codex/ukjo1/error_propagation/flow_iql_research/mean_empirical_backup_core_v1.py
+Runner: utils/codex/ukjo1/error_propagation/flow_iql_research/train_mean_empirical_backup_v1.py
+Exact finite root: utils/codex/ukjo1/error_propagation/flow_iql_research/selection_v2.py:empirical_expectile
 All active/resumable sources are frozen; preserve the original files.
 
 At each Q update, train the behavioral flow with the ordinary unweighted
@@ -41,7 +41,7 @@ necessary algorithm component or silently remove it from this frozen runner.
 Example, using a NEW output directory
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.1 CUDA_VISIBLE_DEVICES=0 \
   /home/ukjo1/anaconda3/envs/ogbench/bin/python -u -m \
-  utils.flow_iql_research.train_mean_empirical_backup_v1 \
+  utils.codex.ukjo1.error_propagation.flow_iql_research.train_mean_empirical_backup_v1 \
   --output NEW_OUTPUT_DIRECTORY --env antmaze-large-navigate-singletask-v0 \
   --kind ifql --profile bounded_v2_mean_empirical_backup --seed 0 \
   --discount 0.999 --expectile 0.9 --samples 9 --steps 1000000 \

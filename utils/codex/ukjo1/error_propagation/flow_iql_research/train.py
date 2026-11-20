@@ -8,14 +8,14 @@ import pickle
 import random
 import time
 
-from utils.flow_iql_research import core
+from utils.codex.ukjo1.error_propagation.flow_iql_research import core
 import flax.serialization
 import jax
 import jax.numpy as jnp
 import numpy as np
 import ogbench
-from utils.propagation_research.reward_bounds import return_bounds
-from utils.propagation_research.seeded_reset import prepare_seeded_action_space
+from utils.codex.ukjo1.error_propagation.propagation_research.reward_bounds import return_bounds
+from utils.codex.ukjo1.error_propagation.propagation_research.seeded_reset import prepare_seeded_action_space
 
 
 def sha(path):
@@ -98,7 +98,7 @@ def main():
                     seed=args.seed, steps=args.steps, chunk=args.chunk, episodes=args.episodes,
                     eval_every=args.eval_every, probe_every=args.probe_every,
                     evaluation='last3_cpu50_independent_seeded_episodes_v1')
-    source_paths = [Path(core.__file__), Path(__file__), Path('utils/propagation_research/seeded_reset.py')]
+    source_paths = [Path(core.__file__), Path(__file__), Path('utils/codex/ukjo1/error_propagation/propagation_research/seeded_reset.py')]
     source_paths.extend(sorted(Path(core.__file__).parent.joinpath('vendor').glob('*.py')))
     sources = {str(p): sha(p) for p in source_paths}
     config_path = out/'config.json'

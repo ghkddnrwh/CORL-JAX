@@ -4,9 +4,9 @@ The production recipe uses a fixed one-half correction, with all other IFQLV2
 updates and random streams retained. The finite proposal score and convex loss
 are diagnostic objectives under the current generator, not oracle residuals.
 """
-from utils.flow_iql_research import policy_core as reference
-from utils.flow_iql_research import selection_v2
-from utils.flow_iql_research.policy_core import (
+from utils.codex.ukjo1.error_propagation.flow_iql_research import policy_core as reference
+from utils.codex.ukjo1.error_propagation.flow_iql_research import selection_v2
+from utils.codex.ukjo1.error_propagation.flow_iql_research.policy_core import (
     ENVIRONMENTS, State, create, make_scan,
 )
 import jax

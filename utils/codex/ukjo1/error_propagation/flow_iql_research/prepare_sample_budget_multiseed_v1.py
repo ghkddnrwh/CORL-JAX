@@ -33,7 +33,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--root', type=Path, default=Path('/data/sda2/ukjo1/finite_mean_sample_budget_multiseed_20261115'))
     args = parser.parse_args()
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = next(parent for parent in Path(__file__).resolve().parents if (parent / '.git').exists())
     old_root = (workspace / 'logs/diagnosis/finite_mean_sample_budget_20261108').resolve()
     root = args.root.resolve()
     assert not (root / 'registration_v1.json').exists(), 'Study already registered'
@@ -91,8 +91,8 @@ def main():
                 identity = f'ms1_{tags[env]}_N{n}_s{seed}'
                 jobs.append(dict(id=identity, environment=env, recipe=f'n{n}', seed=seed,
                     head_aggregation='min' if env.startswith('antmaze-') else 'mean', bootstrap_samples=n,
-                    output=str(root / 'runs' / identity), train_module='utils.flow_iql_research.train_sample_budget_v1',
-                    eval_module='utils.flow_iql_research.evaluate_sample_budget_v1', reused=False))
+                    output=str(root / 'runs' / identity), train_module='utils.codex.ukjo1.error_propagation.flow_iql_research.train_sample_budget_v1',
+                    eval_module='utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_sample_budget_v1', reused=False))
     assert len(jobs) == 52 and len(reused) == 32
     assert len({(j['environment'], j['bootstrap_samples'], j['seed']) for j in jobs + reused}) == 84
     evidence = {}
@@ -134,7 +134,7 @@ def main():
     (root / 'analysis').mkdir(exist_ok=True)
     old_validation = old_root / 'analysis/numerical_validation_v1.json'
     assert json.loads(old_validation.read_text())['status'] == 'PASS'
-    check = subprocess.run([sys.executable, '-m', 'utils.flow_iql_research.validate_sample_budget_multiseed_controller_v1'],
+    check = subprocess.run([sys.executable, '-m', 'utils.codex.ukjo1.error_propagation.flow_iql_research.validate_sample_budget_multiseed_controller_v1'],
                            cwd=workspace, capture_output=True, text=True, check=True)
     regression = json.loads(check.stdout)
     assert regression['status'] == 'PASS'
@@ -190,7 +190,7 @@ def main():
             'Bootstrap 표본 수만 다르며 actor label/lean 배포 후보9개, V fit0, gamma0.999, expectile0.9, target EMA0.005 유지.',
             '각 학습에서 lean/단일 actor 평가. 800K/900K/1M CPU50, reset42..91 전체 평균.',
             'GPU0/1 각8개, 총16개 동시 학습. 각 memory fraction0.1, CPU4개. CPU평가8개 별도.',
-            'python -m utils.flow_iql_research.run_sample_budget_multiseed_v1 --root ' + str(root),
+            'python -m utils.codex.ukjo1.error_propagation.flow_iql_research.run_sample_budget_multiseed_v1 --root ' + str(root),
             '완료 분석: analysis/task_seed_results_final_v1.csv, task_results_mean_sd_final_v1.csv, macro_results_mean_sd_final_v1.csv.',
             '선택된4환경의 기술통계다. 전체10환경 평균이나 모든환경의 최적 N으로 확대 해석하지 않는다.']
     (root / 'REPRODUCE_AND_SCOPE_KO_v1.txt').write_text('\n'.join(text) + '\n')

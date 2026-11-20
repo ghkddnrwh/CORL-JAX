@@ -63,8 +63,8 @@ def main():
     os.environ["JAX_PLATFORMS"] = "cpu"
     from algorithms.uk_offline.basic import iql_jax as base
     from algorithms.uk_offline.basic import iql_residual_control as research
-    from utils.propagation_research.diagnose_checkpoint import CheckpointReader
-    from utils.propagation_research.reward_bounds import return_bounds
+    from utils.codex.ukjo1.error_propagation.propagation_research.diagnose_checkpoint import CheckpointReader
+    from utils.codex.ukjo1.error_propagation.propagation_research.reward_bounds import return_bounds
     import jax
     import jax.numpy as jnp
 

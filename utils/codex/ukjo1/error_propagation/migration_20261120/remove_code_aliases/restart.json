@@ -1,0 +1,8 @@
+{
+  "time": 1795146152.973208,
+  "supervisor_pid": 2852773,
+  "monitor_pid": 2852774,
+  "root": "/data/sda2/ukjo1/codex/error_propagation/logs/diagnosis/finite_mean_stability_4task_20261120_v1",
+  "registration": "registration_v3.json",
+  "removed_code_aliases": true
+}

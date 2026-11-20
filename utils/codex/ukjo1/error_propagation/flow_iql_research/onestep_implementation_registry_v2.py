@@ -1,13 +1,13 @@
 """Versioned mean-teacher routing; frozen flat/set implementations unchanged."""
-from utils.flow_iql_research import onestep_implementation_registry_v1 as previous
+from utils.codex.ukjo1.error_propagation.flow_iql_research import onestep_implementation_registry_v1 as previous
 Implementation=previous.Implementation
 FLAT=previous.FLAT
 SET=previous.SET
 SET_RECIPES=previous.SET_RECIPES
-MEAN_TEACHER=Implementation('mean_teacher','utils.flow_iql_research.mean_teacher_onestep_core_v1',
- 'utils.flow_iql_research.train_mean_teacher_onestep_v1',
- 'utils.flow_iql_research.evaluate_mean_teacher_onestep_v1',
- 'utils.flow_iql_research.benchmark_mean_teacher_onestep_v1')
+MEAN_TEACHER=Implementation('mean_teacher','utils.codex.ukjo1.error_propagation.flow_iql_research.mean_teacher_onestep_core_v1',
+ 'utils.codex.ukjo1.error_propagation.flow_iql_research.train_mean_teacher_onestep_v1',
+ 'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_mean_teacher_onestep_v1',
+ 'utils.codex.ukjo1.error_propagation.flow_iql_research.benchmark_mean_teacher_onestep_v1')
 IMPLEMENTATIONS=(*previous.IMPLEMENTATIONS,MEAN_TEACHER)
 
 def implementation(recipe):

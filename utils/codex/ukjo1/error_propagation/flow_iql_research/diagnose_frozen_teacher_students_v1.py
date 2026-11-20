@@ -14,12 +14,12 @@ import time
 from types import SimpleNamespace
 
 # Existing legacyJAX/SciPy compatibility shim must precede optax.
-from utils.flow_iql_research import onestep_deploy_core_v1 as flat
-from utils.flow_iql_research import energy_onestep_deploy_core_v1 as energy
-from utils.flow_iql_research import mixture_onestep_actor_v1 as mixture
-from utils.flow_iql_research.vendor.flax_utils import TrainState
-from utils.flow_iql_research.train_mean_empirical_backup_v1 import evaluate
-from utils.propagation_research.seeded_reset import prepare_seeded_action_space
+from utils.codex.ukjo1.error_propagation.flow_iql_research import onestep_deploy_core_v1 as flat
+from utils.codex.ukjo1.error_propagation.flow_iql_research import energy_onestep_deploy_core_v1 as energy
+from utils.codex.ukjo1.error_propagation.flow_iql_research import mixture_onestep_actor_v1 as mixture
+from utils.codex.ukjo1.error_propagation.flow_iql_research.vendor.flax_utils import TrainState
+from utils.codex.ukjo1.error_propagation.flow_iql_research.train_mean_empirical_backup_v1 import evaluate
+from utils.codex.ukjo1.error_propagation.propagation_research.seeded_reset import prepare_seeded_action_space
 
 import flax.serialization
 import jax

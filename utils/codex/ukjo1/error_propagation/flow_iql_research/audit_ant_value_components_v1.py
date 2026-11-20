@@ -6,8 +6,8 @@ from pathlib import Path
 import pickle
 import time
 import numpy as np
-from utils.flow_iql_research.audit_temporal_cohort_v1 import Verifier
-from utils.flow_iql_research.audit_gaussian_factorial_v1 import finite
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_temporal_cohort_v1 import Verifier
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_gaussian_factorial_v1 import finite
 
 
 def main():
@@ -25,7 +25,7 @@ def main():
         selected={field:cfg[field]for field in fields}
         # Public IQL hardcodes this constructor argument instead of storing it
         # in get_config(). Read its pinned source rather than inventing a field.
-        assert 'state_dependent_std=False,'in Path('utils/flow_iql_research/vendor/iql.py').read_text()
+        assert 'state_dependent_std=False,'in Path('utils/codex/ukjo1/error_propagation/flow_iql_research/vendor/iql.py').read_text()
         assert cfg['const_std']and cfg['actor_loss']=='awr'
         selected['actor_constructor_state_dependent_std']=False
         if common_config is None:common_config=selected

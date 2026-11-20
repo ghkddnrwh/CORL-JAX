@@ -14,10 +14,10 @@ import sys
 import time
 import statistics
 
-from utils.flow_iql_research import core
-from utils.flow_iql_research.audit_temporal_cohort_v1 import Verifier
-from utils.flow_iql_research.watch_independent_critic_confirmation_v1 import ready_job
-from utils.flow_iql_research.review_rank_mean_calibration_v1 import describe
+from utils.codex.ukjo1.error_propagation.flow_iql_research import core
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_temporal_cohort_v1 import Verifier
+from utils.codex.ukjo1.error_propagation.flow_iql_research.watch_independent_critic_confirmation_v1 import ready_job
+from utils.codex.ukjo1.error_propagation.flow_iql_research.review_rank_mean_calibration_v1 import describe
 import numpy as np
 
 
@@ -50,7 +50,7 @@ def review(directory, inputs, group, verifier):
     original = json.loads(path.read_text())
     assert original['status'] == 'complete' and original['models_audited'] == 81
     assert len(original['rows']) == 54 and original['unique_environments'] == 9
-    assert original['source_sha256'] == verifier.digest('utils/flow_iql_research/independent_critic_calibration_v2.py')
+    assert original['source_sha256'] == verifier.digest('utils/codex/ukjo1/error_propagation/flow_iql_research/independent_critic_calibration_v2.py')
     assert original['plan_sha256'] == verifier.digest(directory.parent / (directory.name + '_input.json'))
     expected_models = {(run, job['step']): pin for job in inputs['jobs']
         for run, pin in zip(job['critic_runs'], job['member_pins'])}
@@ -140,7 +140,7 @@ def main():
                 directory = out / f'group{index+1}'
                 log = (out / f'group{index+1}.log').open('a')
                 command = ['taskset', '-c', ','.join(map(str, registration['CPUcores'])), sys.executable,
-                    '-u', '-m', 'utils.flow_iql_research.independent_critic_calibration_v2', str(input_path),
+                    '-u', '-m', 'utils.codex.ukjo1.error_propagation.flow_iql_research.independent_critic_calibration_v2', str(input_path),
                     '--output', str(directory)]
                 process = subprocess.Popen(command, env=environment, stdin=subprocess.DEVNULL,
                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True, close_fds=True)

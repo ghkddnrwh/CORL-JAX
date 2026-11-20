@@ -8,8 +8,8 @@ import time
 
 import numpy as np
 
-from utils.flow_iql_research.critic_stabilization_experiment_v1 import load_plan
-from utils.flow_iql_research.diagnose_sample_budget_components_v1 import atomic, sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.critic_stabilization_experiment_v1 import load_plan
+from utils.codex.ukjo1.error_propagation.flow_iql_research.diagnose_sample_budget_components_v1 import atomic, sha
 
 LABELS={'baseline':'Original', 'q_lr_0p1':'Q LR x0.1', 'q_cosine':'Q cosine decay',
         'temporal_Q_average':'800K/current Q average'}
@@ -33,8 +33,8 @@ def rank_stats(a,b):
 
 
 def baseline_rankings(plan_path):
-    from utils.flow_iql_research import sample_budget_core_v1 as core
-    from utils.flow_iql_research.diagnose_sample_budget_components_v1 import read_source
+    from utils.codex.ukjo1.error_propagation.flow_iql_research import sample_budget_core_v1 as core
+    from utils.codex.ukjo1.error_propagation.flow_iql_research.diagnose_sample_budget_components_v1 import read_source
     import jax
     import jax.numpy as jnp
     plan=load_plan(plan_path)

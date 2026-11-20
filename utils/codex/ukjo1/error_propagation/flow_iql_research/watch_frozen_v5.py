@@ -51,9 +51,9 @@ def main():
                 env=dict(os.environ,CUDA_VISIBLE_DEVICES='',OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',
                          MKL_NUM_THREADS='1',MUJOCO_GL='egl',PYTHONUNBUFFERED='1',TF_NUM_INTRAOP_THREADS='1',TF_NUM_INTEROP_THREADS='1')
                 identity = json.loads((run/'config.json').read_text())['identity']
-                diagnostic = ('utils.flow_iql_research.frozen_diagnostics_v5' if identity['kind'] in ('awr_mixture','awr_gaussian')
-                    else 'utils.flow_iql_research.frozen_diagnostics_v4' if identity['kind']=='rank_flow'
-                    else 'utils.flow_iql_research.frozen_diagnostics_v3')
+                diagnostic = ('utils.codex.ukjo1.error_propagation.flow_iql_research.frozen_diagnostics_v5' if identity['kind'] in ('awr_mixture','awr_gaussian')
+                    else 'utils.codex.ukjo1.error_propagation.flow_iql_research.frozen_diagnostics_v4' if identity['kind']=='rank_flow'
+                    else 'utils.codex.ukjo1.error_propagation.flow_iql_research.frozen_diagnostics_v3')
                 cmd=['taskset','-c',','.join(map(str,slots[slot])),sys.executable,'-u','-m',
                      diagnostic,str(run),'--step',str(step),'--output',str(out/f'{key}.json')]
                 p=subprocess.Popen(cmd,env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)

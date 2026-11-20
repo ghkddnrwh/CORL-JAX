@@ -45,15 +45,15 @@ def main():
                 assert result['protocol']=='last3_cpu50_independent_seeded_episodes_v1'
                 assert len(result['episode_successes'])==50
                 assert abs(float(np.mean(result['episode_successes']))-result['success_rate'])<1e-12
-                assert result['decoder_source_sha256']==plan['source_sha256']['utils/flow_iql_research/rank_decode_policy_v1.py']
-                assert result['evaluator_source_sha256']==plan['source_sha256']['utils/flow_iql_research/evaluate_rank_decode_v1.py']
+                assert result['decoder_source_sha256']==plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/rank_decode_policy_v1.py']
+                assert result['evaluator_source_sha256']==plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/evaluate_rank_decode_v1.py']
                 valid[job['id']]=result
             elif job['id']not in running and job['id']not in failures:pending.append(job)
         occupied={item['slot']for item in running.values()}
         for slot,cpus in enumerate(slots):
             if slot in occupied or not pending:continue
             job=pending.pop(0);path=Path(job['output'])
-            command=['taskset','-c',cpus,sys.executable,'-u','-m','utils.flow_iql_research.evaluate_rank_decode_v1',plan['run'],'--step',str(plan['step']),'--decode-steps',str(job['decode_steps']),'--episodes','50','--queries',str(plan['queries']),'--samples',str(plan['samples']),'--output',str(path)]
+            command=['taskset','-c',cpus,sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_rank_decode_v1',plan['run'],'--step',str(plan['step']),'--decode-steps',str(job['decode_steps']),'--episodes','50','--queries',str(plan['queries']),'--samples',str(plan['samples']),'--output',str(path)]
             if job['decode_steps']==10:command+=['--reference',str(Path(plan['run'])/'evaluations.jsonl')]
             env=dict(os.environ,CUDA_VISIBLE_DEVICES='',OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1',MUJOCO_GL='egl',TF_NUM_INTRAOP_THREADS='1',TF_NUM_INTEROP_THREADS='1')
             log=path.with_suffix('.log').open('a');process=subprocess.Popen(command,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)

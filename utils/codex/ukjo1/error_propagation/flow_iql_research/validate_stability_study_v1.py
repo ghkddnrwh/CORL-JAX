@@ -6,8 +6,8 @@ import flax.serialization
 import jax
 import jax.numpy as jnp
 import numpy as np
-from utils.flow_iql_research import stability_study_core_v1 as core
-from utils.flow_iql_research import sample_budget_core_v1 as ref
+from utils.codex.ukjo1.error_propagation.flow_iql_research import stability_study_core_v1 as core
+from utils.codex.ukjo1.error_propagation.flow_iql_research import sample_budget_core_v1 as ref
 
 
 def diff(a,b):

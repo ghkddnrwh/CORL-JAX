@@ -9,8 +9,8 @@ import subprocess
 import sys
 import tempfile
 from unittest.mock import patch
-from utils.flow_iql_research import run_discount_0995_n9_v2 as controller
-from utils.flow_iql_research import analyze_discount_0995_n9_v2 as analyzer
+from utils.codex.ukjo1.error_propagation.flow_iql_research import run_discount_0995_n9_v2 as controller
+from utils.codex.ukjo1.error_propagation.flow_iql_research import analyze_discount_0995_n9_v2 as analyzer
 
 def check_loop(retry, seed):
     with tempfile.TemporaryDirectory() as folder:

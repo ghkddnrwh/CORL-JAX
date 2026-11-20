@@ -21,7 +21,7 @@ are used, and its optimizer is None. No synthetic training clocks are exposed.
 
 CPU single-observation action
 Set CUDA_VISIBLE_DEVICES='' before importing JAX in a fresh process.
-from utils.flow_iql_research.mean_backup_bundle_v1 import load
+from utils.codex.ukjo1.error_propagation.flow_iql_research.mean_backup_bundle_v1 import load
 import jax
 import numpy as np
 metadata, state, policy = load('PATH_TO_BUNDLE.pkl')
@@ -35,9 +35,9 @@ then chooses the highest online twin-minimum Q. Deployment still uses min;
 mean target-Q is the training-backup rule. No policy or gradient is retrained.
 
 Export and exact replay tools
-python -m utils.flow_iql_research.export_mean_backup_bundle_v1 RUN_DIRECTORY \
+python -m utils.codex.ukjo1.error_propagation.flow_iql_research.export_mean_backup_bundle_v1 RUN_DIRECTORY \
   --output NEW_BUNDLE.pkl
-python -m utils.flow_iql_research.evaluate_mean_backup_bundle_v1 NEW_BUNDLE.pkl \
+python -m utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_mean_backup_bundle_v1 NEW_BUNDLE.pkl \
   --reference-run RUN_DIRECTORY --output NEW_REPLAY_RESULT.json
 Use the existing ogbench Python environment and CUDA_VISIBLE_DEVICES=''.
 Export supports fixed1M only and requires a completed mean-backup parent.

@@ -23,11 +23,11 @@ def inspect(root):
     counts, handles, controllers = {}, [], []
     for name, item in scheduler['running'].items():
         directory = process(item['pid'], item['process_identity'],
-                            ('utils.flow_iql_research.train_onestep_deploy_v1',
-                             'utils.flow_iql_research.train_set_onestep_deploy_v1',
-                             'utils.flow_iql_research.train_mean_teacher_onestep_v1',
-                             'utils.flow_iql_research.train_energy_onestep_v1',
-                             'utils.flow_iql_research.train_mixture_onestep_v1'))
+                            ('utils.codex.ukjo1.error_propagation.flow_iql_research.train_onestep_deploy_v1',
+                             'utils.codex.ukjo1.error_propagation.flow_iql_research.train_set_onestep_deploy_v1',
+                             'utils.codex.ukjo1.error_propagation.flow_iql_research.train_mean_teacher_onestep_v1',
+                             'utils.codex.ukjo1.error_propagation.flow_iql_research.train_energy_onestep_v1',
+                             'utils.codex.ukjo1.error_propagation.flow_iql_research.train_mixture_onestep_v1'))
         env = dict(x.split('=', 1) for x in (directory/'environ').read_text().split('\0') if '=' in x)
         assert env['XLA_PYTHON_CLIENT_MEM_FRACTION'] == '0.1'
         assert env['CUDA_VISIBLE_DEVICES'] == str(item['gpu'])

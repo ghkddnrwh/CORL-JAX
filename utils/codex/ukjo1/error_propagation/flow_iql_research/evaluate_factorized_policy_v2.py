@@ -11,13 +11,13 @@ import json
 from pathlib import Path
 import pickle
 import time
-from utils.flow_iql_research import core,policy_core,train
+from utils.codex.ukjo1.error_propagation.flow_iql_research import core,policy_core,train
 import flax.serialization
 import jax
 import jax.numpy as jnp
 import numpy as np
 import ogbench
-from utils.propagation_research.seeded_reset import prepare_seeded_action_space
+from utils.codex.ukjo1.error_propagation.propagation_research.seeded_reset import prepare_seeded_action_space
 
 
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -73,7 +73,7 @@ def main():
     if bi['kind']=='ifql':
         module=policy_core
     else:
-        from utils.flow_iql_research import mixture_core
+        from utils.codex.ukjo1.error_propagation.flow_iql_research import mixture_core
         module=mixture_core
     template=module.create(qi['seed'],jnp.zeros((1,env.observation_space.shape[-1])),jnp.zeros((1,env.action_space.shape[-1])),cfg,bi['kind'])
     state=flax.serialization.from_state_dict(template,merged)

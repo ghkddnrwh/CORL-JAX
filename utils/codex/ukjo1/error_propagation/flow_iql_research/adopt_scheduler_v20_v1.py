@@ -9,8 +9,8 @@ import signal
 import subprocess
 import sys
 import time
-from utils.flow_iql_research import scheduler_v20, scheduler_v4
-from utils.flow_iql_research import tau_matched_extraction_v1 as helper
+from utils.codex.ukjo1.error_propagation.flow_iql_research import scheduler_v20, scheduler_v4
+from utils.codex.ukjo1.error_propagation.flow_iql_research import tau_matched_extraction_v1 as helper
 
 
 def identity(pid):
@@ -51,7 +51,7 @@ def main():
     parser=argparse.ArgumentParser();parser.add_argument('root',type=Path)
     parser.add_argument('registration',type=Path);args=parser.parse_args();root=args.root.resolve()
     plan=json.loads(args.registration.read_text());assert Path(plan['root'])==root
-    assert len(plan['jobs'])==6 and helper.digest('utils/flow_iql_research/scheduler_v20.py')==plan['scheduler_source_sha256']
+    assert len(plan['jobs'])==6 and helper.digest('utils/codex/ukjo1/error_propagation/flow_iql_research/scheduler_v20.py')==plan['scheduler_source_sha256']
     for source,digest in plan['analysis_source_sha256'].items():assert helper.digest(source)==digest
     for source,digest in next(iter(plan['expected_training_sources'].values())).items():assert helper.digest(source)==digest
     receipt_path=root/'analysis/scheduler_v20_adoption_v1.json';assert not receipt_path.exists()
@@ -59,7 +59,7 @@ def main():
     before=json.loads((root/'scheduler_status.json').read_text());old=before['pid'];old_start=identity(old)
     assert old_start is not None
     cmd=Path(f'/proc/{old}/cmdline').read_bytes().decode().split('\0')
-    assert cmd[cmd.index('-m')+1]=='utils.flow_iql_research.scheduler_v19' and str(root)in cmd
+    assert cmd[cmd.index('-m')+1]=='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_v19' and str(root)in cmd
     queue=json.loads((root/'queue.json').read_text());finished=json.loads((root/'finished.json').read_text())
     actual=learners(root,queue,finished,before['running'])
     assert len(actual)==16 and collections.Counter(r['gpu']for r in actual.values())=={0:8,1:8}
@@ -115,7 +115,7 @@ def main():
     fcntl.flock(lock,fcntl.LOCK_UN)
     logpath=root/'scheduler_v20.log'
     with logpath.open('a')as log:
-        proc=subprocess.Popen([sys.executable,'-u','-m','utils.flow_iql_research.scheduler_v20',str(root),'--per-gpu','8'],
+        proc=subprocess.Popen([sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_v20',str(root),'--per-gpu','8'],
             stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)
     for _ in range(150):
         current=json.loads((root/'scheduler_status.json').read_text())
@@ -128,7 +128,7 @@ def main():
             assert current['running'][key]['pid']==row['pid'] and current['running'][key]['process_identity']==row['process_identity']
     assert len(current['running'])==16 and collections.Counter(r['gpu']for r in current['running'].values())=={0:8,1:8}
     receipt=dict(time=time.time(),old_scheduler_pid=old,new_scheduler_pid=proc.pid,
-        new_scheduler_identity=identity(proc.pid),new_scheduler_module='utils.flow_iql_research.scheduler_v20',
+        new_scheduler_identity=identity(proc.pid),new_scheduler_module='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_v20',
         current_learners=current['running'],preserved_original_live_handles=actual,
         old_training_jobs_unchanged=True,queue_size=len(updated),new_GPU_jobs=6,no_learner_restarts=True,
         registration_sha256=helper.digest(args.registration),source_sha256=helper.digest(__file__),log=str(logpath))

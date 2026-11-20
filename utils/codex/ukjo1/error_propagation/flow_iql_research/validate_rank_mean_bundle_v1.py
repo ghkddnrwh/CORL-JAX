@@ -12,8 +12,8 @@ import sys
 import time
 from unittest import mock
 
-from utils.flow_iql_research.rank_mean_bundle_v1 import load, sha
-from utils.flow_iql_research.evaluate_cross_seed_temporal_v2 import read
+from utils.codex.ukjo1.error_propagation.flow_iql_research.rank_mean_bundle_v1 import load, sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_cross_seed_temporal_v2 import read
 import jax
 import numpy as np
 
@@ -35,7 +35,7 @@ def main():
         plan_sha256=sha(plan_path), reference_path=job['output'], reference_sha256=sha(job['output']),
         benchmark_scores_modified=False, new_training_replications=0)
     (out / 'progress.json').write_text(json.dumps(progress | dict(stage='exporting'), indent=2))
-    subprocess.run([sys.executable, '-m', 'utils.flow_iql_research.export_rank_mean_bundle_v1',
+    subprocess.run([sys.executable, '-m', 'utils.codex.ukjo1.error_propagation.flow_iql_research.export_rank_mean_bundle_v1',
         '--critic-runs', *job['critic_runs'], '--step', '1000000', '--output', str(model)], check=True)
     with model.open('rb') as stream:
         saved = pickle.load(stream)
@@ -72,7 +72,7 @@ def main():
     (out / 'progress.json').write_text(json.dumps(progress | dict(stage='CPU50_evaluating',
         source_parameter_trees_exact=True, no_source_model_reads_during_load=True), indent=2))
     result_path = out / 'CPU50_reference_equivalence.json'
-    subprocess.run([sys.executable, '-m', 'utils.flow_iql_research.evaluate_rank_mean_bundle_v1', str(model),
+    subprocess.run([sys.executable, '-m', 'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_rank_mean_bundle_v1', str(model),
         '--output', str(result_path), '--reference', job['output']], check=True)
     result = json.loads(result_path.read_text())
     assert all(result['reference_episode_arrays_exact'].values())

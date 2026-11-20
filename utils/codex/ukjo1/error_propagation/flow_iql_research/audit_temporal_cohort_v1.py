@@ -121,8 +121,8 @@ class Verifier:
                     assert member['step'] == job['step']+offset
                     assert Path(member['checkpoint']).resolve() == Path(path).resolve()
                     assert member['sha256'] == self.checkpoint(path, config, member['step'])
-                for field, source in [('selector_source_sha256', 'utils/flow_iql_research/temporal_selection_v1.py'),
-                                      ('evaluator_source_sha256', 'utils/flow_iql_research/evaluate_temporal_selection_v1.py')]:
+                for field, source in [('selector_source_sha256', 'utils/codex/ukjo1/error_propagation/flow_iql_research/temporal_selection_v1.py'),
+                                      ('evaluator_source_sha256', 'utils/codex/ukjo1/error_propagation/flow_iql_research/evaluate_temporal_selection_v1.py')]:
                     assert result[field] == plan['source_sha256'][source]
                 valid[job['id']] = result['success_rate']
             except (AssertionError, KeyError, OSError, ValueError) as error:

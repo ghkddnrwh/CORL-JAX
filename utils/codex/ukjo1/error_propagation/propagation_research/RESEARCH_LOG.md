@@ -33,7 +33,7 @@ batch 평균과 같지 않다. 신경망 V의 최적화 정상조건도 상태�
 
 ## 2026-10-25: 기존 V21 감사
 
-`utils/propagation_research/audit_existing.py`로 현재 V21 분기 로그를 집계했다.
+`utils/codex/ukjo1/error_propagation/propagation_research/audit_existing.py`로 현재 V21 분기 로그를 집계했다.
 결과: `analysis/historical_branches.csv` (새 로그 루트 기준).
 
 - bk_independent_control: 기록된 5개 분기 전부 Q damping 적용 비율 0.
@@ -462,7 +462,7 @@ V2+fresh / no-projection Cube 300k pilot은 CPU 20 episode .85였다.
 정확한 checkpoint/optimizer/RNG부터 `full_ablation_cube_v2_fresh_s2_seed0`로
 1M 후속을 준비했다. Scene의 같은 pilot도 300k 종료 후 같은 방식으로 이어간다.
 
-`utils/propagation_research/suite.py`는9환경 x3seed 실행 구성을 만들고,
+`utils/codex/ukjo1/error_propagation/propagation_research/suite.py`는9환경 x3seed 실행 구성을 만들고,
 runner/base-IQL/YAML/queue SHA를 검증한다. Queue 생성은 JAX를 초기화하지 않는다.
 원래 discount에서는 override를 생략하고, 기본 최종 평가는1M / CPU50이다.
 27개 unique job, V update count, shell syntax, 정상 hash 검증과 입력 변경 검출을
@@ -812,7 +812,7 @@ update(Q2/V4/actor2)와 suite 준비가 성공했다. 이는 export의 실행 �
 갱신한다. 선정 training update는 그 사이 바꾸지 않았다.
 
 사용법·선정 알고리즘의 update 순서·compute 차이·평가 원칙은
-`utils/propagation_research/README.md`에 정리했다.
+`utils/codex/ukjo1/error_propagation/propagation_research/README.md`에 정리했다.
 
 ## 독립 seed1 stress baseline과 음수 값에서의 정책 하락
 

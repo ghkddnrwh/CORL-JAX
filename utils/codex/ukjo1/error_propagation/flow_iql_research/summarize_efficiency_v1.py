@@ -102,12 +102,12 @@ def write_report(root,status,output,terminal_reason):
         item.update({key:statistics.mean(float(p[key]) for p in late) if late and all(key in p for p in late) else None for key in keys})
         diagnostics.append(item)
     lines+=['','재현 및 실제 소스 경로',
-        'utils/flow_iql_research/efficient_mean_core_v1.py',
-        'utils/flow_iql_research/train_efficient_v1.py',
-        'utils/flow_iql_research/evaluate_efficient_v1.py',
-        'utils/flow_iql_research/benchmark_efficient_models_v1.py',
-        '원본 성공 알고리즘: utils/flow_iql_research/mean_empirical_backup_core_v1.py',
-        '원본 학습 runner: utils/flow_iql_research/train_mean_empirical_backup_v1.py',
+        'utils/codex/ukjo1/error_propagation/flow_iql_research/efficient_mean_core_v1.py',
+        'utils/codex/ukjo1/error_propagation/flow_iql_research/train_efficient_v1.py',
+        'utils/codex/ukjo1/error_propagation/flow_iql_research/evaluate_efficient_v1.py',
+        'utils/codex/ukjo1/error_propagation/flow_iql_research/benchmark_efficient_models_v1.py',
+        '원본 성공 알고리즘: utils/codex/ukjo1/error_propagation/flow_iql_research/mean_empirical_backup_core_v1.py',
+        '원본 학습 runner: utils/codex/ukjo1/error_propagation/flow_iql_research/train_mean_empirical_backup_v1.py',
         '등록/실행 계약: registration_v1.json, analysis/execution_contract_v1.json',
         '최종 실제 모델/평가/설정 SHA: analysis/efficiency_pipeline_v1/final_audit.json',
         '세부 비용 및 진단: speed_performance.csv, late_training_diagnostics.csv',

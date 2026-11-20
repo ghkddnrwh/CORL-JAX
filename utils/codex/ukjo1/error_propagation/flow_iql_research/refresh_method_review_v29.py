@@ -11,7 +11,7 @@ import shutil
 import statistics
 import subprocess
 import time
-from utils.flow_iql_research.refresh_method_review_v27 import ENVIRONMENTS
+from utils.codex.ukjo1.error_propagation.flow_iql_research.refresh_method_review_v27 import ENVIRONMENTS
 
 
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -76,7 +76,7 @@ def main():
     assert len(workers)==16 and collections.Counter(w['gpu']for w in workers)=={0:8,1:8}
     apps=subprocess.check_output(['nvidia-smi','--query-compute-apps=pid,gpu_uuid,used_memory','--format=csv,noheader'],text=True)
     assert {int(line.split(',')[0])for line in apps.splitlines()}<={w['pid']for w in workers}
-    runtime=dict(time=time.time(),scheduler_pid=status['pid'],scheduler_module='utils.flow_iql_research.scheduler_v20',
+    runtime=dict(time=time.time(),scheduler_pid=status['pid'],scheduler_module='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_v20',
         scheduler_finished=status['finished'],scheduler_pending=status['pending'],actual_learner_processes=16,
         per_GPU={'0':8,'1':8},workers=workers,nvidia_compute_apps=apps,
         transition_note='Fresh startup or CPU evaluation can temporarily precede/leave CUDA context ownership.',

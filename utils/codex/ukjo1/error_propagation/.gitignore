@@ -5,3 +5,6 @@ __pycache__/
 **/__pycache__/
 migration_20261120/files_before.json
 migration_20261120/path_moves.json
+migration_20261120/remove_code_aliases/original_sources/
+migration_20261120/remove_code_aliases/staged_sources/
+migration_20261120/remove_code_aliases/numerical_before.pkl

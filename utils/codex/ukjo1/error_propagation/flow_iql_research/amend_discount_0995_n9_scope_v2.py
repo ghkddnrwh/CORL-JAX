@@ -5,7 +5,7 @@ import datetime
 import json
 from pathlib import Path
 import shutil
-from utils.flow_iql_research.analyze_discount_0995_n9_v2 import atomic, sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.analyze_discount_0995_n9_v2 import atomic, sha
 
 
 def main():
@@ -60,7 +60,7 @@ def main():
         writer = csv.DictWriter(stream, fieldnames=['environment', 'seed', 'bootstrap_samples', 'id', 'output'])
         writer.writeheader()
         writer.writerows({k: j[k] for k in writer.fieldnames} for j in selected)
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = next(parent for parent in Path(__file__).resolve().parents if (parent / '.git').exists())
     for path in sources:
         destination = root / 'source' / Path(path).relative_to(workspace)
         if not destination.exists():
@@ -77,7 +77,7 @@ def main():
         'Seed2/3의20개 예약을 취소한다. 현재 seed0/1 학습 프로세스와 데이터 경로는 유지한다.',
         '학습·actor·평가 구현 및 하이퍼파라미터는 변경하지 않는다.',
         '800K/900K/1M 각CPU50, Lean과actor 평가; seed0/1 각각과 평균±sample SD를 기록한다.',
-        'python -m utils.flow_iql_research.run_discount_0995_n9_v2 --root ' + str(root),
+        'python -m utils.codex.ukjo1.error_propagation.flow_iql_research.run_discount_0995_n9_v2 --root ' + str(root),
         '완료 결과: analysis/task_seed_results_final_v2.csv, task_results_mean_sd_final_v2.csv.',
         '진행 상태: controller_status.json. 물리 경로의4seed 명칭은 기존 학습 경로를 유지하기 위한 역사적 명칭이다.']
     (root / 'CURRENT_SCOPE_KO_v2.txt').write_text('\n'.join(text) + '\n')

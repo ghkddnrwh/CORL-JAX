@@ -12,9 +12,9 @@ import statistics
 import subprocess
 import sys
 import time
-from utils.flow_iql_research import tau_matched_extraction_v1 as helper
-from utils.flow_iql_research.audit_temporal_cohort_v1 import Verifier
-from utils.flow_iql_research.audit_probability_value_pilots_v1 import equal
+from utils.codex.ukjo1.error_propagation.flow_iql_research import tau_matched_extraction_v1 as helper
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_temporal_cohort_v1 import Verifier
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_probability_value_pilots_v1 import equal
 
 
 def validate_result(plan,job,verifier):
@@ -24,9 +24,9 @@ def validate_result(plan,job,verifier):
     assert result['proposal_source']in('auto','behavior') and result['primary_evaluations_modified']is False
     assert result['config_sha256']==verifier.digest(Path(plan['root'])/'runs'/job['run_id']/'config.json')
     assert result['checkpoint_sha256']==plan['checkpoint_sha256'][f"{job['run_id']}:{job['step']}"]
-    for field,path in [('policy_source_sha256','utils/flow_iql_research/selection_v2.py'),
-        ('evaluation_helper_source_sha256','utils/flow_iql_research/train.py'),
-        ('evaluator_source_sha256','utils/flow_iql_research/evaluate_selection_v2.py')]:
+    for field,path in [('policy_source_sha256','utils/codex/ukjo1/error_propagation/flow_iql_research/selection_v2.py'),
+        ('evaluation_helper_source_sha256','utils/codex/ukjo1/error_propagation/flow_iql_research/train.py'),
+        ('evaluator_source_sha256','utils/codex/ukjo1/error_propagation/flow_iql_research/evaluate_selection_v2.py')]:
         assert result[field]==plan['source_sha256'][path]
     return result
 
@@ -67,7 +67,7 @@ def main():
             if slot in used or not ready:continue
             job=ready.pop(0);logpath=output/(job['id']+'.log');log=logpath.open('a')
             command=['nice','-n','10','taskset','-c',','.join(map(str,cpus)),sys.executable,'-u','-m',
-                'utils.flow_iql_research.evaluate_selection_v2',str(root/'runs'/job['run_id']),
+                'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_selection_v2',str(root/'runs'/job['run_id']),
                 '--checkpoint',job['checkpoint'],'--output',job['output'],'--rule','max','--samples','9',
                 '--proposal-source','behavior','--episodes','50']
             proc=subprocess.Popen(command,env=env,stdin=subprocess.DEVNULL,stdout=log,

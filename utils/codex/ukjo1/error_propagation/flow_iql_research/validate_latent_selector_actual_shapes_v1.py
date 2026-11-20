@@ -72,7 +72,7 @@ def main():
             assert code == 0,(label,code,(output / f'{label}.log').read_text()[-4000:])
             check_sources()
         def training(destination,stop=None):
-            command = [sys.executable,'-u','-m','utils.flow_iql_research.train_latent_selector_onestep_v1',
+            command = [sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.train_latent_selector_onestep_v1',
                 '--env',ENVIRONMENTS[tag],'--recipe',args.recipe,'--seed','0','--steps','8',
                 '--chunk','2','--probe-every','2','--train-device','cpu','--output',str(output / destination)]
             if stop:
@@ -98,12 +98,12 @@ def main():
         assert config['identity']['training_device'] == 'cpu'
         artifact = output / 'full/actor_8.pkl'
         execute('portable_isolation',[sys.executable,'-u','-m',
-            'utils.flow_iql_research.validate_standalone_latent_selector_v1',
+            'utils.codex.ukjo1.error_propagation.flow_iql_research.validate_standalone_latent_selector_v1',
             '--actor',str(artifact),'--output',str(output / 'portable_isolation_result.json')])
         evaluations = []
         for mode in ('primary','teacher'):
             target = output / f'{mode}_API_result.json'
-            execute(f'{mode}_API',[sys.executable,'-u','-m','utils.flow_iql_research.evaluate_latent_selector_onestep_v1',
+            execute(f'{mode}_API',[sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_latent_selector_onestep_v1',
                 '--run',str(output / 'full'),'--step','8','--mode',mode,'--episodes','10',
                 '--implementation-only','--output',str(target)])
             value = json.loads(target.read_text())

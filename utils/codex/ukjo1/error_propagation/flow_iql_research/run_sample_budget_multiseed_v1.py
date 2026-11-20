@@ -226,7 +226,7 @@ def main():
                       sample_counts=plan['sample_counts'])
         atomic(state_path, status)
         if all_done or time.time()-last_analysis >= 600:
-            command = [sys.executable, '-u', '-m', 'utils.flow_iql_research.analyze_sample_budget_multiseed_v1', '--root', str(root)]
+            command = [sys.executable, '-u', '-m', 'utils.codex.ukjo1.error_propagation.flow_iql_research.analyze_sample_budget_multiseed_v1', '--root', str(root)]
             if complete:
                 command.append('--final')
             with (root/'analysis_stdout.log').open('a') as stream:

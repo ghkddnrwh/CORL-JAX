@@ -14,7 +14,7 @@ import statistics
 import subprocess
 import sys
 import time
-from utils.flow_iql_research.watch_native_mixture_decoder_full9_v1 import sha,birth,atomic
+from utils.codex.ukjo1.error_propagation.flow_iql_research.watch_native_mixture_decoder_full9_v1 import sha,birth,atomic
 
 
 def create(root):
@@ -50,7 +50,7 @@ def create(root):
         scope='Prospective extra deployment policy over the same future jointly trained MDN models. Allocation remains exclusively with production. Goal requires independent full model and CPU/GPU speed review.')
     with proposal.open('x') as f:json.dump(plan,f,indent=2,allow_nan=False)
     command=['nice','-n','19','taskset','-c','48-71',sys.executable,'-u','-m',
-        'utils.flow_iql_research.watch_mixture_location_fresh_CPU_v1','--proposal',str(proposal)]
+        'utils.codex.ukjo1.error_propagation.flow_iql_research.watch_mixture_location_fresh_CPU_v1','--proposal',str(proposal)]
     with (area/'observer_stdout_v1.log').open('xb') as log:
         child=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,
                                start_new_session=True,close_fds=True)
@@ -122,7 +122,7 @@ def observe(proposal):
                 if not native.exists():continue
                 slot=next(x for x in range(4) if x not in {r['slot'] for r in state['running'].values()})
                 argv=['nice','-n','19','taskset','-c',f'{48+slot*6}-{53+slot*6}',sys.executable,'-u','-m',
-                    'utils.flow_iql_research.evaluate_portable_mixture_locations_v1','--run',definition['run'],
+                    'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_portable_mixture_locations_v1','--run',definition['run'],
                     '--step',str(definition['step']),'--actor-output',definition['actor'],'--output',definition['output']]
                 env=dict(os.environ,CUDA_VISIBLE_DEVICES='',JAX_PLATFORM_NAME='cpu',OMP_NUM_THREADS='1',
                     OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1',

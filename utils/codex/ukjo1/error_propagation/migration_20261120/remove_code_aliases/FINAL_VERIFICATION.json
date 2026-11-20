@@ -1,0 +1,137 @@
+{
+  "status": "PASS",
+  "time": 1795146286.4911659,
+  "removed_links": [
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/flow_iql_research",
+    "/home/ukjo1/research/ssd1/offline_rl/insampling/utils/propagation_research"
+  ],
+  "training_running": [
+    {
+      "id": "stab1_aml_critic_batch1024_s0",
+      "pid": 2852777,
+      "gpu": 0,
+      "resume_step": 330000,
+      "first_completed_step": 330100
+    },
+    {
+      "id": "stab1_hmm_critic_batch1024_s0",
+      "pid": 2852778,
+      "gpu": 1,
+      "resume_step": 280000,
+      "first_completed_step": 280100
+    },
+    {
+      "id": "stab1_cube2_critic_batch1024_s0",
+      "pid": 2852779,
+      "gpu": 0,
+      "resume_step": 620000,
+      "first_completed_step": 620100
+    },
+    {
+      "id": "stab1_puzzle4_critic_batch1024_s0",
+      "pid": 2852780,
+      "gpu": 1,
+      "resume_step": 610000,
+      "first_completed_step": 610100
+    },
+    {
+      "id": "stab1_aml_critic_batch1024_s1",
+      "pid": 2852781,
+      "gpu": 0,
+      "resume_step": 20000,
+      "first_completed_step": 20100
+    },
+    {
+      "id": "stab1_hmm_critic_batch1024_s1",
+      "pid": 2852782,
+      "gpu": 1,
+      "resume_step": 10000,
+      "first_completed_step": 10100
+    },
+    {
+      "id": "stab1_cube2_critic_batch1024_s1",
+      "pid": 2852783,
+      "gpu": 0,
+      "resume_step": 40000,
+      "first_completed_step": 40100
+    },
+    {
+      "id": "stab1_puzzle4_critic_batch1024_s1",
+      "pid": 2852784,
+      "gpu": 1,
+      "resume_step": 40000,
+      "first_completed_step": 40100
+    },
+    {
+      "id": "stab1_cube2_control_s2",
+      "pid": 2852785,
+      "gpu": 0,
+      "resume_step": 70000,
+      "first_completed_step": 70100
+    },
+    {
+      "id": "stab1_aml_critic_batch1024_s2",
+      "pid": 2852786,
+      "gpu": 1,
+      "resume_step": 20000,
+      "first_completed_step": 20100
+    },
+    {
+      "id": "stab1_hmm_critic_batch1024_s2",
+      "pid": 2852787,
+      "gpu": 0,
+      "resume_step": 10000,
+      "first_completed_step": 10100
+    },
+    {
+      "id": "stab1_cube2_critic_batch1024_s2",
+      "pid": 2852788,
+      "gpu": 1,
+      "resume_step": 40000,
+      "first_completed_step": 40100
+    },
+    {
+      "id": "stab1_puzzle4_critic_batch1024_s2",
+      "pid": 2852789,
+      "gpu": 0,
+      "resume_step": 40000,
+      "first_completed_step": 40100
+    },
+    {
+      "id": "stab1_aml_control_s3",
+      "pid": 2852790,
+      "gpu": 1,
+      "resume_step": 40000,
+      "first_completed_step": 40100
+    },
+    {
+      "id": "stab1_hmm_control_s3",
+      "pid": 2852791,
+      "gpu": 0,
+      "resume_step": 30000,
+      "first_completed_step": 30100
+    },
+    {
+      "id": "stab1_cube2_control_s3",
+      "pid": 2852792,
+      "gpu": 1,
+      "resume_step": 70000,
+      "first_completed_step": 70100
+    }
+  ],
+  "pending": 13,
+  "numerical_validation": {
+    "status": "PASS",
+    "cases": 4,
+    "arrays_compared": 1188,
+    "maximum_difference": 0,
+    "serialization_resume_exact": true
+  },
+  "controller_pid": 2852776,
+  "controller_heartbeat_age": 1.4180541038513184,
+  "methods": [
+    "control",
+    "critic_batch1024"
+  ],
+  "canceled_methods_still_excluded": true
+}

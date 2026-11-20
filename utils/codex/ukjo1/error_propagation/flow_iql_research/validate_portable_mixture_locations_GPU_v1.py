@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import sys
 import time
-from utils.flow_iql_research import standalone_mixture_location_actor_v1 as portable
+from utils.codex.ukjo1.error_propagation.flow_iql_research import standalone_mixture_location_actor_v1 as portable
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -17,8 +17,8 @@ def main():
     p.add_argument('--output',type=Path,required=True);a=p.parse_args();assert not a.output.exists()
     assert os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION']=='0.1'
     assert os.environ['XLA_PYTHON_CLIENT_PREALLOCATE']=='false'
-    forbidden=('flax','optax','ogbench','utils.flow_iql_research.vendor.flax_utils',
-               'utils.flow_iql_research.mixture_onestep_deploy_core_v1')
+    forbidden=('flax','optax','ogbench','utils.codex.ukjo1.error_propagation.flow_iql_research.vendor.flax_utils',
+               'utils.codex.ukjo1.error_propagation.flow_iql_research.mixture_onestep_deploy_core_v1')
     assert all(name not in sys.modules for name in forbidden)
     rows=[]
     for path in a.actors:

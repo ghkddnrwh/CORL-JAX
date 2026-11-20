@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import time
-from utils.flow_iql_research.onestep_implementation_registry_v1 import IMPLEMENTATIONS,SET_RECIPES
+from utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_implementation_registry_v1 import IMPLEMENTATIONS,SET_RECIPES
 
 
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -69,7 +69,7 @@ def main():
     plan['implementation_extension']['integration_validation']=evidence
     args.registration.write_text(json.dumps(plan,indent=2,allow_nan=False))
     contract=dict(old,registration=str(args.registration.resolve()),registration_sha256=sha(args.registration),
-        source_sha256=plan['all_source_sha256'],GPU_scheduler_module='utils.flow_iql_research.scheduler_onestep_deploy_v2',
+        source_sha256=plan['all_source_sha256'],GPU_scheduler_module='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_onestep_deploy_v2',
         implementation_extension=plan['implementation_extension'])
     args.contract.write_text(json.dumps(contract,indent=2,allow_nan=False))
     print(json.dumps(dict(registration=str(args.registration),contract=str(args.contract),

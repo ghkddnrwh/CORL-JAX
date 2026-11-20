@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 import numpy as np
-from utils.flow_iql_research import tau_matched_extraction_v1 as helper
+from utils.codex.ukjo1.error_propagation.flow_iql_research import tau_matched_extraction_v1 as helper
 
 COUNTERFIT_STEPS=(2,8,32)
 QUERY_ROWS=8192
@@ -47,8 +47,8 @@ def metrics(q,tq,v,reward,mask,tau):
 
 
 def run_job(registration,job,output):
-    from utils.flow_iql_research import policy_core,probability_value_core_v1 as scoring
-    from utils.propagation_research.reward_bounds import REWARD_COMPONENTS
+    from utils.codex.ukjo1.error_propagation.flow_iql_research import policy_core,probability_value_core_v1 as scoring
+    from utils.codex.ukjo1.error_propagation.propagation_research.reward_bounds import REWARD_COMPONENTS
     import flax.serialization
     import jax
     import jax.numpy as jnp
@@ -201,7 +201,7 @@ def watch(plan,registration):
             if slot in occupied or not ready:continue
             job=ready.pop(0);logpath=output/(job['id']+'.log');log=logpath.open('a')
             command=['nice','-n','19','taskset','-c',','.join(map(str,cpus)),sys.executable,'-u','-m',
-                'utils.flow_iql_research.unit_value_fitting_diagnostic_v1',str(registration),'--job',job['id']]
+                'utils.codex.ukjo1.error_propagation.flow_iql_research.unit_value_fitting_diagnostic_v1',str(registration),'--job',job['id']]
             proc=subprocess.Popen(command,env=environment,stdin=subprocess.DEVNULL,stdout=log,
                 stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)
             running[job['id']]=dict(process=proc,log=log,path=logpath,slot=slot,

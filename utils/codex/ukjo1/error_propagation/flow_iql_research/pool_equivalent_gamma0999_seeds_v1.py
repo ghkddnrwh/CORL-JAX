@@ -36,7 +36,7 @@ def main():
     root = args.root.resolve()
     out = root / 'analysis/all_equivalent_seeds_gamma0999_20261120_v1'
     assert json.loads((out / 'numerical_equivalence_v1.json').read_text())['status'] == 'PASS'
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = next(parent for parent in Path(__file__).resolve().parents if (parent / '.git').exists())
     diag = workspace / 'logs/diagnosis'
     canonical_root = (diag / 'finite_mean_target_ablation_20261105').resolve()
     canonical = json.loads((canonical_root / 'registration_v1.json').read_text())

@@ -4,8 +4,8 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-from utils.flow_iql_research.activate_mixture_full9_prefetch_v1 import identity,atomic,sha
-from utils.flow_iql_research.activate_routed_policy_pipeline_v1 import stop_owned_parent
+from utils.codex.ukjo1.error_propagation.flow_iql_research.activate_mixture_full9_prefetch_v1 import identity,atomic,sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.activate_routed_policy_pipeline_v1 import stop_owned_parent
 
 
 def main():
@@ -18,15 +18,15 @@ def main():
     cpath=root/'CONTINUATION.json';c=json.loads(cpath.read_text());owner=c['analysis_controller']
     assert Path(c['analysis_contract'])==root/'analysis/execution_contract_v20.json'
     assert identity(owner['pid'])==owner['process_identity']
-    assert 'utils.flow_iql_research.watch_onestep_deploy_v11'in Path(f'/proc/{owner["pid"]}/cmdline').read_text().split('\0')
+    assert 'utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v11'in Path(f'/proc/{owner["pid"]}/cmdline').read_text().split('\0')
     env=dict(x.split('=',1)for x in Path(f'/proc/{owner["pid"]}/environ').read_text().split('\0')if'='in x)
     before=area/'activation_before_v1.json';assert not before.exists()
     atomic(before,dict(time=time.time(),old_CPU_owner=owner,scheduler=c['scheduler'],gradient=c['gradient_controller'],
         scheduler_status=json.loads((root/'scheduler_status.json').read_text()),
         research_state=json.loads((root/'analysis/onestep_pipeline_v1/research_state.json').read_text()),
         no_learner_evaluator_or_gradient_producer_signals=True,all_jobs_identities_and_active_attempt_preserved=True))
-    stop_owned_parent(owner,'utils.flow_iql_research.watch_onestep_deploy_v11')
-    command=['utils.flow_iql_research.watch_onestep_deploy_v12'if x=='utils.flow_iql_research.watch_onestep_deploy_v11'else x for x in owner['command']];command[-1]=str(contract)
+    stop_owned_parent(owner,'utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v11')
+    command=['utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v12'if x=='utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v11'else x for x in owner['command']];command[-1]=str(contract)
     with(area/'CPU_controller_activation_v1.log').open('a')as log:
         child=subprocess.Popen(command,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,
             start_new_session=True,close_fds=True)

@@ -14,7 +14,7 @@ import subprocess
 import sys
 import time
 
-from utils.flow_iql_research.rank_mean_bundle_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.rank_mean_bundle_v1 import sha
 
 
 def atomic(path, value):
@@ -57,10 +57,10 @@ def main():
         log = (out / (job['id'] + '_' + stage + '.log')).open('a')
         command = ['taskset', '-c', ','.join(map(str, plan['CPUslots'][slot])), sys.executable, '-u', '-m']
         if stage == 'export':
-            command += ['utils.flow_iql_research.export_rank_mean_bundle_v1', '--critic-runs',
+            command += ['utils.codex.ukjo1.error_propagation.flow_iql_research.export_rank_mean_bundle_v1', '--critic-runs',
                 *job['critic_runs'], '--step', '1000000', '--output', job['bundle']]
         else:
-            command += ['utils.flow_iql_research.evaluate_rank_mean_bundle_v1', job['bundle'],
+            command += ['utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_rank_mean_bundle_v1', job['bundle'],
                 '--output', job['evaluation'], '--reference', job['reference']]
         process = subprocess.Popen(command, env=environment, stdin=subprocess.DEVNULL,
             stdout=log, stderr=subprocess.STDOUT, start_new_session=True, close_fds=True)

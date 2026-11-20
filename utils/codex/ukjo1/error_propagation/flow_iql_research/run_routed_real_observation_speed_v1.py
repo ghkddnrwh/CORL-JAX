@@ -13,7 +13,7 @@ import statistics
 import subprocess
 import sys
 import time
-from utils.flow_iql_research.run_routed_strict_GPU_speed_v1 import readiness
+from utils.codex.ukjo1.error_propagation.flow_iql_research.run_routed_strict_GPU_speed_v1 import readiness
 
 
 def sha(path):
@@ -53,7 +53,7 @@ def main():
             folder / 'benchmark_routed_real_observations_v1.py', folder / 'run_routed_strict_GPU_speed_v1.py']
         atomic(proposal, dict(time=time.time(), source_sha256={str(path): sha(path) for path in paths},
             registration_sha256=sha(reg), original_gates_and_speed_protocol_unchanged=True,
-            benchmark_module='utils.flow_iql_research.benchmark_routed_real_observations_v1',
+            benchmark_module='utils.codex.ukjo1.error_propagation.flow_iql_research.benchmark_routed_real_observations_v1',
             environment_count=9, observations_per_environment=64, reset_seeds=[42, 105],
             model_step=1000000, model_training_seed=0, NVIDIA_TF32_OVERRIDE='0',
             common_precision_for_teacher_and_actor=True, modes=['primary', 'teacher'],

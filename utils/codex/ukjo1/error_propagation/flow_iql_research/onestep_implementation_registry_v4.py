@@ -1,13 +1,13 @@
 """Add the mixture actor; route all previous recipes to unchanged sources."""
-from utils.flow_iql_research import onestep_implementation_registry_v3 as previous
+from utils.codex.ukjo1.error_propagation.flow_iql_research import onestep_implementation_registry_v3 as previous
 
 Implementation=previous.Implementation
 FLAT,SET,MEAN_TEACHER,ENERGY=previous.FLAT,previous.SET,previous.MEAN_TEACHER,previous.ENERGY
 SET_RECIPES=previous.SET_RECIPES
-MIXTURE=Implementation('mixture','utils.flow_iql_research.mixture_onestep_deploy_core_v1',
-    'utils.flow_iql_research.train_mixture_onestep_v1',
-    'utils.flow_iql_research.evaluate_mixture_onestep_v1',
-    'utils.flow_iql_research.benchmark_mixture_onestep_v1')
+MIXTURE=Implementation('mixture','utils.codex.ukjo1.error_propagation.flow_iql_research.mixture_onestep_deploy_core_v1',
+    'utils.codex.ukjo1.error_propagation.flow_iql_research.train_mixture_onestep_v1',
+    'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_mixture_onestep_v1',
+    'utils.codex.ukjo1.error_propagation.flow_iql_research.benchmark_mixture_onestep_v1')
 IMPLEMENTATIONS=(*previous.IMPLEMENTATIONS,MIXTURE)
 MIXTURE_RECIPES=('mdn9_bc','mdn9_q_a003','mdn9_q_a03','mdn9_q_a3')
 

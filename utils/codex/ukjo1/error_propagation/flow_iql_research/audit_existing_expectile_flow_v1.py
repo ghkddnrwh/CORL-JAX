@@ -7,7 +7,7 @@ from pathlib import Path
 import statistics
 import time
 import numpy as np
-from utils.flow_iql_research import tau_matched_extraction_v1 as helper
+from utils.codex.ukjo1.error_propagation.flow_iql_research import tau_matched_extraction_v1 as helper
 
 
 def tree_equal(a,b):
@@ -57,7 +57,7 @@ def main():
                 record=json.loads(cp.read_text());helper.check_episodes(record,step)
                 assert helper.digest(cp)==plan['control_evaluation_sha256'][str(cp)]
                 assert record['selection_samples']==9 and record['selection_rule']=='max'
-                assert record['policy_source_sha256']==plan['source_sha256']['utils/flow_iql_research/selection_v2.py']
+                assert record['policy_source_sha256']==plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/selection_v2.py']
                 conf,saved_control=model(pair['control_run'],step)
                 assert record['run']==pair['control_run'] and record['config_sha256']==helper.digest(control/'config.json')
                 assert record['checkpoint_sha256']==pins[f"{pair['control_run']}:{step}"]['sha256']

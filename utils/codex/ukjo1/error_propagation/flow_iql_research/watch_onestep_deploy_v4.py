@@ -18,11 +18,11 @@ import subprocess
 import sys
 import time
 import numpy as np
-from utils.flow_iql_research import onestep_deploy_core_v1 as core
-from utils.flow_iql_research.onestep_implementation_registry_v1 import (
+from utils.codex.ukjo1.error_propagation.flow_iql_research import onestep_deploy_core_v1 as core
+from utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_implementation_registry_v1 import (
     implementation, specification, configuration, config_for, training_sources, SET_RECIPES)
-from utils.flow_iql_research.register_onestep_deploy_v1 import SECOND_ROUND
-from utils.flow_iql_research.evaluate_onestep_deploy_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.register_onestep_deploy_v1 import SECOND_ROUND
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1 import sha
 
 
 STEPS=(800000,900000,1000000)

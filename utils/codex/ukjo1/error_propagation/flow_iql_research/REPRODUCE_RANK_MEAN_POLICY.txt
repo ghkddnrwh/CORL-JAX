@@ -26,7 +26,7 @@ environment train learners3,4,5 (and then6,7,8 for the second fresh group):
 
   CUDA_VISIBLE_DEVICES=<assigned GPU> XLA_PYTHON_CLIENT_MEM_FRACTION=0.1 \
   OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 MUJOCO_GL=egl \
-  python -m utils.flow_iql_research.train_policy_v2 \
+  python -m utils.codex.ukjo1.error_propagation.flow_iql_research.train_policy_v2 \
     --env <OGBench environment> --output <member directory> \
     --kind ifql --profile bounded_v2 --seed <member seed> \
     --discount .999 --expectile .9 --samples 9 \
@@ -38,7 +38,7 @@ machine. The existing scheduler runs8 learners per GPU on2 GPUs.
 For every800K/900K/1M checkpoint, using all3 same-step member models:
 
   CUDA_VISIBLE_DEVICES='' OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MUJOCO_GL=egl \
-  python -m utils.flow_iql_research.evaluate_independent_critic_policy_v2 \
+  python -m utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_independent_critic_policy_v2 \
     --actor-run <seed3 directory> \
     --critic-runs <seed3 directory> <seed4 directory> <seed5 directory> \
     --step <checkpoint step> --rule mean_rank --output <new JSON path>

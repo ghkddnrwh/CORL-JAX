@@ -15,7 +15,7 @@ from pathlib import Path
 import sys
 import time
 import numpy as np
-from utils.flow_iql_research import train_mean_empirical_backup_v1 as compatibility
+from utils.codex.ukjo1.error_propagation.flow_iql_research import train_mean_empirical_backup_v1 as compatibility
 import gymnasium as gym
 import ogbench
 
@@ -70,12 +70,12 @@ def main():
     run=root/'runs'/rid;conf=json.loads((run/'config.json').read_text());gamma=conf['identity']['config']['discount']
     point=area/f'{a.case}_canonical_point_v1.json';assert not point.exists()
     if a.case=='center':
-        module=importlib.import_module('utils.flow_iql_research.evaluate_portable_mixture_locations_v1')
+        module=importlib.import_module('utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_portable_mixture_locations_v1')
         actor=root/f'analysis/evaluations_v1/routed_actors_v1/{rid}_1000000_component_location.pkl'
         args=['--run',str(run),'--step','1000000','--actor-output',str(actor),'--output',str(point)]
         reference=root/f'analysis/evaluations_v1/{rid}_1000000_component_location_n50.json'
     else:
-        module=importlib.import_module('utils.flow_iql_research.evaluate_onestep_deploy_v1')
+        module=importlib.import_module('utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1')
         mode='teacher'if a.case=='teacher'else'primary'
         args=['--run',str(run),'--step','1000000','--mode',mode,'--episodes','50','--output',str(point)]
         reference=root/f'analysis/evaluations_v1/{rid}_1000000_{mode}_n50.json'

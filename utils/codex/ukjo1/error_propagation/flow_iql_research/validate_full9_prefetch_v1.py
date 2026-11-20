@@ -11,10 +11,10 @@ import subprocess
 import sys
 import time
 from types import SimpleNamespace
-from utils.flow_iql_research.register_full9_prefetch_v1 import build_plan
-from utils.flow_iql_research.evaluate_onestep_deploy_v1 import sha
-from utils.flow_iql_research.onestep_implementation_registry_v2 import configuration,implementation
-from utils.flow_iql_research.scheduler_v4 import process_identity
+from utils.codex.ukjo1.error_propagation.flow_iql_research.register_full9_prefetch_v1 import build_plan
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_implementation_registry_v2 import configuration,implementation
+from utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_v4 import process_identity
 
 
 def main():
@@ -56,13 +56,13 @@ def main():
     registration=out/'private_registration.json';registration.write_text(json.dumps(private,indent=2))
     contract=out/'private_contract.json';contract.write_text(json.dumps(dict(registration=str(registration),
         registration_sha256=sha(registration),source_sha256=private['all_source_sha256'],
-        GPU_manager_CPU_affinity=list(range(96)),GPU_scheduler_module='utils.flow_iql_research.scheduler_onestep_deploy_v4'),indent=2))
+        GPU_manager_CPU_affinity=list(range(96)),GPU_scheduler_module='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_onestep_deploy_v4'),indent=2))
     (out/'queue.json').write_text(json.dumps(private['jobs'],indent=2));(out/'finished.json').write_text('{}')
     (out/'scheduler_status.json').write_text(json.dumps(dict(pid=os.getpid(),running={},pending=78,finished=0)))
     for job in selected[:2]:
         destination=out/'runs'/job['id'];destination.mkdir(parents=True)
         shutil.copyfile(root/'runs'/job['id']/'config.json',destination/'config.json')
-    command=[sys.executable,'-u','-m','utils.flow_iql_research.watch_onestep_deploy_v6',str(contract)]
+    command=[sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v6',str(contract)]
     with(out/'controller.log').open('a')as log:
         child=subprocess.Popen(command,env=dict(os.environ,CUDA_VISIBLE_DEVICES=''),stdin=subprocess.DEVNULL,
             stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)

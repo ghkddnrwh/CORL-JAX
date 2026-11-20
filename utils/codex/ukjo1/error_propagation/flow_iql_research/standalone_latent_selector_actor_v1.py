@@ -9,8 +9,8 @@ import pickle
 import jax
 import jax.numpy as jnp
 import numpy as np
-from utils.flow_iql_research import latent_selected_actor_v1 as diagonal
-from utils.flow_iql_research import orderstat_latent_actor_v1 as order
+from utils.codex.ukjo1.error_propagation.flow_iql_research import latent_selected_actor_v1 as diagonal
+from utils.codex.ukjo1.error_propagation.flow_iql_research import orderstat_latent_actor_v1 as order
 
 
 def definition(metadata):

@@ -12,7 +12,7 @@ import statistics
 import subprocess
 import sys
 import time
-from utils.flow_iql_research import tau_matched_extraction_v1 as helper
+from utils.codex.ukjo1.error_propagation.flow_iql_research import tau_matched_extraction_v1 as helper
 
 
 def qualifies(audit,threshold=.47):
@@ -76,7 +76,7 @@ def main():
         fingerprint=[(j['id'],(root/'runs'/j['id']/'completed.json').exists())for j in discovery_plan['all9jobs']]
         if previous!=fingerprint:
             path=output/f'discovery_audit_{index}.json';index+=1
-            command=[sys.executable,'-u','-m','utils.flow_iql_research.audit_mean_backup_full9_v1',
+            command=[sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.audit_mean_backup_full9_v1',
                 plan['discovery_registration'],'--output',str(path)]
             with(output/f'discovery_audit_{index-1}.log').open('a')as log:
                 code=subprocess.run(command,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT).returncode

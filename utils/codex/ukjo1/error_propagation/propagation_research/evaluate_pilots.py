@@ -93,7 +93,7 @@ def main():
             env = dict(os.environ, CUDA_VISIBLE_DEVICES="", JAX_PLATFORMS="cpu",
                 OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1", MKL_NUM_THREADS="1", MUJOCO_GL="egl")
             cmd = ["taskset", "-c", slot, sys.executable, "-u", "-m",
-                "utils.propagation_research.evaluate_checkpoint", job["run"], job["output"],
+                "utils.codex.ukjo1.error_propagation.propagation_research.evaluate_checkpoint", job["run"], job["output"],
                 "--checkpoint", "checkpoint_300000.pkl", "--device", "cpu", "--episodes", "50"]
             log = (out / (job["id"]+".log")).open("a")
             process = subprocess.Popen(cmd, env=env, stdout=log, stderr=subprocess.STDOUT,

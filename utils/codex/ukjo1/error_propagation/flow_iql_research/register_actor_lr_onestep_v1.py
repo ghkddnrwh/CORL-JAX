@@ -7,8 +7,8 @@ import json
 from pathlib import Path
 import time
 
-from utils.flow_iql_research.evaluate_onestep_deploy_v1 import sha
-from utils.flow_iql_research.onestep_implementation_registry_v4 import configuration,specification,implementation
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_implementation_registry_v4 import configuration,specification,implementation
 
 
 def main():
@@ -35,7 +35,7 @@ def main():
     new=[];expected={}
     for tag,environment in specs:
         rid=f'osl2_{tag}_bank_bc_lr2_s0';assert not(root/'runs'/rid).exists()
-        job=dict(id=rid,module='utils.flow_iql_research.train_onestep_deploy_v1',
+        job=dict(id=rid,module='utils.codex.ukjo1.error_propagation.flow_iql_research.train_onestep_deploy_v1',
                  args=dict(env=environment,recipe=recipe,seed=0,steps=1000000))
         new.append(job);expected[rid]=configuration(environment,recipe,0)
         cfg=expected[rid]['config'];base=configuration(environment,'bank_bc',0)['config']

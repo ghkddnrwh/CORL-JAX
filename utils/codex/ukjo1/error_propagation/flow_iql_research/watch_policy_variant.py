@@ -87,7 +87,7 @@ def main():
             env = dict(os.environ, CUDA_VISIBLE_DEVICES='', OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1',
                        MKL_NUM_THREADS='1', MUJOCO_GL='egl', TF_NUM_INTRAOP_THREADS='1', TF_NUM_INTEROP_THREADS='1')
             command = ['taskset', '-c', ','.join(map(str, slots[slot])), sys.executable, '-u', '-m',
-                'utils.flow_iql_research.evaluate_selection_v2', job['run'], '--checkpoint', job['checkpoint'],
+                'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_selection_v2', job['run'], '--checkpoint', job['checkpoint'],
                 '--output', str(target), '--episodes', '50', '--rule', plan['rule'], '--samples', str(plan['samples'])]
             process = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             running[job['id']] = dict(p=process, log=log, slot=slot)

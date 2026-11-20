@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 
-from utils.propagation_research.seeded_reset import PROTOCOL
+from utils.codex.ukjo1.error_propagation.propagation_research.seeded_reset import PROTOCOL
 
 
 def digest(path):
@@ -146,7 +146,7 @@ def main():
             env = dict(os.environ, CUDA_VISIBLE_DEVICES="", JAX_PLATFORMS="cpu", MUJOCO_GL="egl",
                        OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1", MKL_NUM_THREADS="1")
             command = ["taskset", "-c", slot, sys.executable, "-u", "-m",
-                "utils.propagation_research.evaluate_checkpoint", str(root/"runs"/job["run"]),
+                "utils.codex.ukjo1.error_propagation.propagation_research.evaluate_checkpoint", str(root/"runs"/job["run"]),
                 str(out/(name+".json")), "--checkpoint", "checkpoint_1000000.pkl",
                 "--device", "cpu", "--episodes", "50", "--seeded-action-space",
                 "--expected-checkpoint-sha256", ready[name]]

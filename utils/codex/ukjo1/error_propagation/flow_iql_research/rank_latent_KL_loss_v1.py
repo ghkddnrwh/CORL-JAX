@@ -6,7 +6,7 @@ objective a surrogate, not an exactly measured reverse KL. Its parameters
 are absent from deployment; the actor remains one Gaussian and one action.
 """
 import math
-from utils.flow_iql_research import affine_latent_actor_v1 as affine
+from utils.codex.ukjo1.error_propagation.flow_iql_research import affine_latent_actor_v1 as affine
 import jax
 import jax.numpy as jnp
 

@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 import time
 
-from utils.flow_iql_research.evaluate_onestep_deploy_v1 import sha
-from utils.flow_iql_research.onestep_implementation_registry_v4 import MIXTURE,configuration
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_implementation_registry_v4 import MIXTURE,configuration
 
 
 def build_plan(root):
@@ -102,7 +102,7 @@ def main():
     args.registration.write_text(json.dumps(plan,indent=2,allow_nan=False))
     previous = root / 'analysis/execution_contract_v12.json'
     contract.update(registration=str(args.registration.resolve()),registration_sha256=sha(args.registration),
-        source_sha256=plan['all_source_sha256'],GPU_scheduler_module='utils.flow_iql_research.scheduler_onestep_deploy_v6',
+        source_sha256=plan['all_source_sha256'],GPU_scheduler_module='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_onestep_deploy_v6',
         previous_execution_contract=str(previous),previous_execution_contract_sha256=sha(previous),
         mixture_implementation_extension=plan['mixture_implementation_extension'])
     args.contract.write_text(json.dumps(contract,indent=2,allow_nan=False))

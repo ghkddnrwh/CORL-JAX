@@ -1,7 +1,7 @@
 """Prepare and verify a reproducible OGBench suite for the existing scheduler.
 
 Example (creates files; launch run_suite.sh when the GPUs are available):
-  python -m utils.propagation_research.suite logs/my_iql_suite \
+  python -m utils.codex.ukjo1.error_propagation.propagation_research.suite logs/my_iql_suite \
       --profile bounded_v2 --discount .999 --seeds 0 1 2
 """
 
@@ -14,13 +14,13 @@ import shlex
 import subprocess
 import sys
 
-from utils.propagation_research.summarize import ENVIRONMENTS
+from utils.codex.ukjo1.error_propagation.propagation_research.summarize import ENVIRONMENTS
 
 
 REPOSITORY = next(p for p in Path(__file__).resolve().parents if (p / '.git').exists())
 SOURCES = ("algorithms/uk_offline/basic/iql_residual_control.py",
            "algorithms/uk_offline/basic/iql_jax.py", "hyperparams/ogbench/iql_jax.yml",
-           "utils/propagation_research/reward_bounds.py")
+           "utils/codex/ukjo1/error_propagation/propagation_research/reward_bounds.py")
 
 
 def profiles():
@@ -125,9 +125,9 @@ def main():
         target = snapshots / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((REPOSITORY / name).read_bytes())
-    command = [sys.executable, "-u", "-m", "utils.propagation_research.scheduler", str(root)]
+    command = [sys.executable, "-u", "-m", "utils.codex.ukjo1.error_propagation.propagation_research.scheduler", str(root)]
     script = ("#!/usr/bin/env bash\nset -euo pipefail\ncd " + shlex.quote(str(REPOSITORY)) + "\n" +
-              shlex.join([sys.executable, "-m", "utils.propagation_research.suite", str(root), "--verify"]) +
+              shlex.join([sys.executable, "-m", "utils.codex.ukjo1.error_propagation.propagation_research.suite", str(root), "--verify"]) +
               "\nexec " + shlex.join(command) + "\n")
     launch = root / "run_suite.sh"
     launch.write_text(script)

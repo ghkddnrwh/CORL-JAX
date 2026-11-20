@@ -163,11 +163,11 @@ Repository root에서 `ogbench` 환경의 Python을 사용한다. `suite.py`는 
 queue/source/config를 준비하며 바로 학습을 시작하지 않는다. 새 빈 경로를 쓴다.
 
 ```bash
-python -m utils.propagation_research.suite logs/new_bounded_iql \
+python -m utils.codex.ukjo1.error_propagation.propagation_research.suite logs/new_bounded_iql \
   --profile bounded_v2 --expectile .9 --discount .999 \
   --bound-source ogbench --seeds 0 1 2
 
-python -m utils.propagation_research.suite logs/new_original_iql \
+python -m utils.codex.ukjo1.error_propagation.propagation_research.suite logs/new_original_iql \
   --profile baseline --expectile .9 --discount original --seeds 0
 ```
 
@@ -182,18 +182,18 @@ bash logs/new_bounded_iql/run_suite.sh
 # 위 suite가 끝난 뒤:
 bash logs/new_original_iql/run_suite.sh
 
-python -m utils.propagation_research.benchmark_audit \
+python -m utils.codex.ukjo1.error_propagation.propagation_research.benchmark_audit \
   logs/diagnosis/propagation_research_20261025
-python -m utils.propagation_research.stress_comparison \
+python -m utils.codex.ukjo1.error_propagation.propagation_research.stress_comparison \
   logs/diagnosis/propagation_research_20261025 --plot
-python -m utils.propagation_research.final_report \
+python -m utils.codex.ukjo1.error_propagation.propagation_research.final_report \
   logs/diagnosis/propagation_research_20261025
 ```
 
 Frozen actor의 별도 평가에는 실제 run 경로와 새 출력 파일을 지정한다.
 
 ```bash
-python -m utils.propagation_research.evaluate_checkpoint RUN_DIR NEW_RESULT.json \
+python -m utils.codex.ukjo1.error_propagation.propagation_research.evaluate_checkpoint RUN_DIR NEW_RESULT.json \
   --checkpoint checkpoint_1000000.pkl --device cpu --episodes 50 \
   --seeded-action-space
 ```

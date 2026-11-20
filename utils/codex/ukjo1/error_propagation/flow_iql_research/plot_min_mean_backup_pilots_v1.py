@@ -27,8 +27,8 @@ def main():
     assert compare['status'] == 'complete' and compare['completed_pilots'] == 3
     assert compare['actual_unique_late_checkpoints_verified'] == 18
     assert minimum['completed_tasks'] == 9 and mean['completed_pilots'] == 3
-    assert compare['source_sha256'] == sha('utils/flow_iql_research/audit_min_mean_backup_pilots_v1.py')
-    assert mean['source_sha256'] == sha('utils/flow_iql_research/audit_mean_backup_pilots_v1.py')
+    assert compare['source_sha256'] == sha('utils/codex/ukjo1/error_propagation/flow_iql_research/audit_min_mean_backup_pilots_v1.py')
+    assert mean['source_sha256'] == sha('utils/codex/ukjo1/error_propagation/flow_iql_research/audit_mean_backup_pilots_v1.py')
     primary_files = {}
     for row in compare['rows']:
         baseline = next(r for r in minimum['rows'] if r['environment'] == row['environment'])

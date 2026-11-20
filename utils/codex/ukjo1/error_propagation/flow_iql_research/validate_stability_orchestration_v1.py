@@ -8,8 +8,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 from unittest.mock import patch
-from utils.flow_iql_research import run_stability_study_v1 as controller
-from utils.flow_iql_research import analyze_stability_study_v1 as analyzer
+from utils.codex.ukjo1.error_propagation.flow_iql_research import run_stability_study_v1 as controller
+from utils.codex.ukjo1.error_propagation.flow_iql_research import analyze_stability_study_v1 as analyzer
 
 
 def scheduler_check():

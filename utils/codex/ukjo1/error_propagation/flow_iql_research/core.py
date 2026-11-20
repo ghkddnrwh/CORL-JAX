@@ -18,8 +18,8 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from utils.flow_iql_research.vendor.iql import IQLAgent, get_config
-from utils.propagation_research.reward_bounds import return_bounds
+from utils.codex.ukjo1.error_propagation.flow_iql_research.vendor.iql import IQLAgent, get_config
+from utils.codex.ukjo1.error_propagation.propagation_research.reward_bounds import return_bounds
 
 
 ENVIRONMENTS = (
@@ -70,10 +70,10 @@ def create(seed, observations, actions, config, kind='iql'):
     if kind == 'iql':
         cls = IQLAgent
     elif kind == 'ifql':
-        from utils.flow_iql_research.vendor.ifql import IFQLAgent
+        from utils.codex.ukjo1.error_propagation.flow_iql_research.vendor.ifql import IFQLAgent
         cls = IFQLAgent
     elif kind == 'fql':
-        from utils.flow_iql_research.vendor.fql import FQLAgent
+        from utils.codex.ukjo1.error_propagation.flow_iql_research.vendor.fql import FQLAgent
         cls = FQLAgent
     else:
         raise ValueError(kind)

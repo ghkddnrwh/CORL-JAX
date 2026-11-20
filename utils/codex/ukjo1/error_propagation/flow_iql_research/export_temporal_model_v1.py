@@ -46,11 +46,11 @@ def main():
         current = saved
     cfg = dict(ident['config'])
     cfg.update(num_samples=9, critic_history_size=3, critic_snapshot_stride=100000)
-    sources = ['utils/flow_iql_research/temporal_core_v1.py',
-               'utils/flow_iql_research/temporal_selection_v1.py',
-               'utils/flow_iql_research/selection_v2.py',
-               'utils/flow_iql_research/evaluate_temporal_model_v1.py',
-               'utils/flow_iql_research/train_temporal_policy_v1.py']
+    sources = ['utils/codex/ukjo1/error_propagation/flow_iql_research/temporal_core_v1.py',
+               'utils/codex/ukjo1/error_propagation/flow_iql_research/temporal_selection_v1.py',
+               'utils/codex/ukjo1/error_propagation/flow_iql_research/selection_v2.py',
+               'utils/codex/ukjo1/error_propagation/flow_iql_research/evaluate_temporal_model_v1.py',
+               'utils/codex/ukjo1/error_propagation/flow_iql_research/train_temporal_policy_v1.py']
     bundle = dict(kind='temporal_IFQL_deployment_bundle_v1', created_at=time.time(),
         resumable_training_checkpoint=False, step=args.step, state=current['state'],
         critic_history=history, training_identity=ident, inference_config=cfg,

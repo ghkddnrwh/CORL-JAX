@@ -9,7 +9,7 @@ import sys
 import time
 from types import SimpleNamespace
 
-PROJECT = Path(__file__).resolve().parents[2]
+PROJECT = next(parent for parent in Path(__file__).resolve().parents if (parent / '.git').exists())
 if str(PROJECT) not in sys.path:
     sys.path.insert(0, str(PROJECT))
 
@@ -107,7 +107,7 @@ def read_source(source, restore=True):
     import jax
     import jax.numpy as jnp
     import numpy as np
-    from utils.flow_iql_research import sample_budget_core_v1 as core
+    from utils.codex.ukjo1.error_propagation.flow_iql_research import sample_budget_core_v1 as core
     run = Path(source['run'])
     conf = json.loads((run / 'config.json').read_text())
     assert sha(run / 'config.json') == source['config_sha256']
@@ -168,9 +168,9 @@ def evaluate_job(plan_path, job_id):
     import jax
     import numpy as np
     import ogbench
-    from utils.flow_iql_research import sample_budget_core_v1 as core
-    from utils.flow_iql_research.train_mean_empirical_backup_v1 import evaluate
-    from utils.propagation_research.seeded_reset import prepare_seeded_action_space
+    from utils.codex.ukjo1.error_propagation.flow_iql_research import sample_budget_core_v1 as core
+    from utils.codex.ukjo1.error_propagation.flow_iql_research.train_mean_empirical_backup_v1 import evaluate
+    from utils.codex.ukjo1.error_propagation.propagation_research.seeded_reset import prepare_seeded_action_space
     assert all(d.platform == 'cpu' for d in jax.devices())
     plan = json.loads(plan_path.read_text())
     for path, digest in plan['source_sha256'].items():

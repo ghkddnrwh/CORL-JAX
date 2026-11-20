@@ -6,7 +6,7 @@ from pathlib import Path
 import pickle
 import sys
 import time
-from utils.flow_iql_research import standalone_latent_selector_actor_v1 as portable
+from utils.codex.ukjo1.error_propagation.flow_iql_research import standalone_latent_selector_actor_v1 as portable
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -15,8 +15,8 @@ import numpy as np
 def main():
     p=argparse.ArgumentParser();p.add_argument('--actor',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True);a=p.parse_args();assert not a.output.exists()
-    forbidden=('ogbench','optax','utils.flow_iql_research.latent_selector_onestep_core_v1',
-               'utils.flow_iql_research.onestep_deploy_core_v1','utils.flow_iql_research.vendor.flax_utils')
+    forbidden=('ogbench','optax','utils.codex.ukjo1.error_propagation.flow_iql_research.latent_selector_onestep_core_v1',
+               'utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_deploy_core_v1','utils.codex.ukjo1.error_propagation.flow_iql_research.vendor.flax_utils')
     assert all(x not in sys.modules for x in forbidden)
     assert all(d.platform=='cpu'for d in jax.devices())
     loaded=portable.load_actor(a.actor);metadata=loaded.metadata

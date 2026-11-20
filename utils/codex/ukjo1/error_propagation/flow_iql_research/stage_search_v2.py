@@ -13,7 +13,7 @@ from pathlib import Path
 import pickle
 import signal
 import time
-from utils.flow_iql_research.scheduler_v4 import process_identity
+from utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_v4 import process_identity
 
 
 def atomic(path, value):
@@ -80,7 +80,7 @@ def main():
                 continue
             assert identity == record['process_identity']
             command = Path(f'/proc/{pid}/cmdline').read_bytes().decode().split('\0')
-            assert command[command.index('-m')+1] == 'utils.flow_iql_research.train_policy_v2'
+            assert command[command.index('-m')+1] == 'utils.codex.ukjo1.error_propagation.flow_iql_research.train_policy_v2'
             assert Path(command[command.index('--output')+1]).resolve() == run
             queue = json.loads((root/'queue.json').read_text())
             resume = next(j for j in queue if j['id'] == plan['resume_prefix']+name)

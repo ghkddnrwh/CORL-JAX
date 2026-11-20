@@ -107,7 +107,7 @@ def create(root):
         priority_scope='HMM available points first for diagnosis; all9tasks receive identical options and all3late checkpoints.')
     with proposal.open('x')as f:json.dump(plan,f,indent=2,allow_nan=False)
     argv=['nice','-n','19','taskset','-c','48-71',sys.executable,'-u','-m',
-        'utils.flow_iql_research.watch_native_mixture_temperature_CPU_v1','--proposal',str(proposal)]
+        'utils.codex.ukjo1.error_propagation.flow_iql_research.watch_native_mixture_temperature_CPU_v1','--proposal',str(proposal)]
     with(area/'observer_stdout_v1.log').open('xb')as log:
         child=subprocess.Popen(argv,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,
             start_new_session=True,close_fds=True)
@@ -145,7 +145,7 @@ def observe(proposal):
                 assert conf['source_sha256']==plan['native_training_source_sha256']
                 slot=next(i for i in range(4)if i not in {r['slot']for r in state['running'].values()})
                 argv=['nice','-n','19','taskset','-c',','.join(map(str,plan['CPU_affinity_slots'][slot])),
-                    sys.executable,'-u','-m','utils.flow_iql_research.evaluate_tempered_mixture_CPU_v1',
+                    sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_tempered_mixture_CPU_v1',
                     '--run',job['run'],'--step',str(job['step']),'--temperature',str(job['temperature']),'--output',key]
                 env=dict(os.environ,CUDA_VISIBLE_DEVICES='',JAX_PLATFORM_NAME='cpu',OMP_NUM_THREADS='1',
                     OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1',

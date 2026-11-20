@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 
-from utils.flow_iql_research.onestep_scheduling_policy_v1 import order_pending
+from utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_scheduling_policy_v1 import order_pending
 
 
 def sha(path):
@@ -57,7 +57,7 @@ def main():
     for role, row in owners.items():
         assert identity(row['pid']) == row['process_identity']
         command = Path(f'/proc/{row["pid"]}/cmdline').read_bytes().decode().split('\0')
-        assert 'utils.flow_iql_research.' + expected[role] in command
+        assert 'utils.codex.ukjo1.error_propagation.flow_iql_research.' + expected[role] in command
     atomic(area / 'activation_before_v1.json', dict(time=time.time(),scheduler=scheduler,owners=owners,
         registration_sha256=sha(root / 'registration_v11.json'),activation_script_sha256=sha(__file__),
         learner_and_evaluator_signals_authorized_or_used=False))
@@ -101,9 +101,9 @@ def main():
         atomic(root / 'queue.json', ordered)
     python = '/home/ukjo1/anaconda3/envs/ogbench/bin/python'
     commands = dict(
-        scheduler=['taskset','-c','0-95',python,'-u','-m','utils.flow_iql_research.scheduler_onestep_deploy_v6',str(root),'--per-gpu','8'],
-        analysis_controller=['nice','-n','10','taskset','-c','36-47',python,'-u','-m','utils.flow_iql_research.watch_onestep_deploy_v8',str(root / 'analysis/execution_contract_v13.json')],
-        gradient_controller=['nice','-n','15','taskset','-c','36-41',python,'-u','-m','utils.flow_iql_research.watch_onestep_gradients_v5',str(root / 'analysis/gradient_execution_contract_v5.json')])
+        scheduler=['taskset','-c','0-95',python,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_onestep_deploy_v6',str(root),'--per-gpu','8'],
+        analysis_controller=['nice','-n','10','taskset','-c','36-47',python,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v8',str(root / 'analysis/execution_contract_v13.json')],
+        gradient_controller=['nice','-n','15','taskset','-c','36-41',python,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_gradients_v5',str(root / 'analysis/gradient_execution_contract_v5.json')])
     handles = {}
     for role, command in commands.items():
         with (area / f'activation_{role}_v1.log').open('a') as log:
@@ -118,7 +118,7 @@ def main():
         saved[role] = handles[role]
     saved.update(time=time.time(),registration_sha256=sha(root / 'registration_v11.json'),
         analysis_contract=str(root / 'analysis/execution_contract_v13.json'),gradient_contract=str(root / 'analysis/gradient_execution_contract_v5.json'),
-        runtime_inspector='utils.flow_iql_research.inspect_onestep_runtime_v5',current_registered_jobs=100,
+        runtime_inspector='utils.codex.ukjo1.error_propagation.flow_iql_research.inspect_onestep_runtime_v5',current_registered_jobs=100,
         mixture_joint_learner_draft=dict(saved['mixture_joint_learner_draft'],status='registered_mdN9_BC_only_R11_V13_gradV5',
             GPU_queue_unchanged=False,no_GPU_registration_or_active_owner_change=False,activation_receipt=str(receipt)),
         next_actions=['Use R11/contractV13/gradientV5 and inspectorV5. Audit adoption of all16 original learners and live evaluators; no learner signals.',

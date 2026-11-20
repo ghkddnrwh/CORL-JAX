@@ -7,7 +7,7 @@ import subprocess
 import sys
 import time
 
-from utils.flow_iql_research.diagnose_sample_budget_components_v1 import atomic, sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.diagnose_sample_budget_components_v1 import atomic, sha
 
 
 def main():
@@ -55,7 +55,7 @@ def main():
                 job = queue.pop(0)
                 log = (root / 'worker_logs' / f'{job["id"]}.log').open('w')
                 command = ['taskset', '-c', ','.join(map(str, cores)), sys.executable, '-u', '-m',
-                    'utils.flow_iql_research.diagnose_sample_budget_components_v1', 'evaluate',
+                    'utils.codex.ukjo1.error_propagation.flow_iql_research.diagnose_sample_budget_components_v1', 'evaluate',
                     '--plan', str(args.plan.resolve()), '--job', job['id']]
                 process = subprocess.Popen(command, env=environment, stdin=subprocess.DEVNULL,
                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)

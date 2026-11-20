@@ -9,8 +9,8 @@ import shutil
 import statistics
 import subprocess
 import time
-from utils.flow_iql_research.refresh_method_review_v27 import ENVIRONMENTS
-from utils.flow_iql_research import tau_matched_extraction_v1 as helper
+from utils.codex.ukjo1.error_propagation.flow_iql_research.refresh_method_review_v27 import ENVIRONMENTS
+from utils.codex.ukjo1.error_propagation.flow_iql_research import tau_matched_extraction_v1 as helper
 
 
 def create(path,value):
@@ -48,7 +48,7 @@ def runtime(root):
     assert len(workers)==16 and collections.Counter(w['gpu']for w in workers)=={0:8,1:8}
     apps=subprocess.check_output(['nvidia-smi','--query-compute-apps=pid,gpu_uuid,used_memory','--format=csv,noheader'],text=True)
     assert {int(line.split(',')[0])for line in apps.splitlines()}<={w['pid']for w in workers}
-    return dict(time=time.time(),scheduler_pid=status['pid'],scheduler_module='utils.flow_iql_research.scheduler_v20',
+    return dict(time=time.time(),scheduler_pid=status['pid'],scheduler_module='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_v20',
         scheduler_finished=status['finished'],scheduler_pending=status['pending'],actual_learner_processes=16,
         per_GPU={'0':8,'1':8},workers=workers,nvidia_compute_apps=apps,
         free_NVMe_bytes=shutil.disk_usage(root).free,queue_size=len(json.loads((root/'queue.json').read_text())),goal_complete=False)
@@ -94,7 +94,7 @@ def main():
     review['preferred_candidate']=dict(recipe='mean target twin Q finite flow expectile; projected Bellman target; min online twin Q deployment',
         tau=.9,gamma=.999,candidates=9,learners=1,discovery_seed0_mean=mean['nine_task_mean'],fresh_seeds=[9,10,11],
         fresh_confirmation_passed=confirmation['independent_confirmation_criteria_passed'],
-        reproducibility='utils/flow_iql_research/REPRODUCE_MEAN_FINITE_BACKUP_V1.txt',
+        reproducibility='utils/codex/ukjo1/error_propagation/flow_iql_research/REPRODUCE_MEAN_FINITE_BACKUP_V1.txt',
         unused_V_fits='Retained2Adamfits are clock-control overhead; they do not enter finite backup or deployment.')
     review['component_control']=dict(actual_late_models=54,BC_and_moments_and_RNG_all_exact=True,
         finite_min_mean=component['min_backup_nine_task_mean'],finite_mean_mean=component['mean_backup_nine_task_mean'],

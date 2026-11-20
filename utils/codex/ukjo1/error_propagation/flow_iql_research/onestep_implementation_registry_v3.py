@@ -1,14 +1,14 @@
 """Route the experimental energy student; all previous implementations frozen."""
-from utils.flow_iql_research import onestep_implementation_registry_v2 as previous
+from utils.codex.ukjo1.error_propagation.flow_iql_research import onestep_implementation_registry_v2 as previous
 
 Implementation = previous.Implementation
 FLAT,SET = previous.FLAT,previous.SET
 SET_RECIPES = previous.SET_RECIPES
 MEAN_TEACHER = previous.MEAN_TEACHER
-ENERGY = Implementation('energy','utils.flow_iql_research.energy_onestep_deploy_core_v1',
-    'utils.flow_iql_research.train_energy_onestep_v1',
-    'utils.flow_iql_research.evaluate_energy_onestep_v1',
-    'utils.flow_iql_research.benchmark_energy_onestep_v1')
+ENERGY = Implementation('energy','utils.codex.ukjo1.error_propagation.flow_iql_research.energy_onestep_deploy_core_v1',
+    'utils.codex.ukjo1.error_propagation.flow_iql_research.train_energy_onestep_v1',
+    'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_energy_onestep_v1',
+    'utils.codex.ukjo1.error_propagation.flow_iql_research.benchmark_energy_onestep_v1')
 IMPLEMENTATIONS = (*previous.IMPLEMENTATIONS,ENERGY)
 
 

@@ -11,8 +11,8 @@ import json
 from pathlib import Path
 import time
 
-from utils.flow_iql_research import core, benchmark_core, policy_core, selection_v2
-from utils.flow_iql_research.independent_critic_policy_v2 import make_selector
+from utils.codex.ukjo1.error_propagation.flow_iql_research import core, benchmark_core, policy_core, selection_v2
+from utils.codex.ukjo1.error_propagation.flow_iql_research.independent_critic_policy_v2 import make_selector
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -62,8 +62,8 @@ def main():
     plan = json.loads(plan_path.read_text())
     source_paths = [Path(__file__), Path(core.__file__), Path(policy_core.__file__),
                     Path(benchmark_core.__file__), Path(selection_v2.__file__),
-                    Path('utils/flow_iql_research/independent_critic_policy_v2.py'),
-                    Path('utils/flow_iql_research/independent_critic_policy_v1.py')]
+                    Path('utils/codex/ukjo1/error_propagation/flow_iql_research/independent_critic_policy_v2.py'),
+                    Path('utils/codex/ukjo1/error_propagation/flow_iql_research/independent_critic_policy_v1.py')]
     source_paths += sorted(Path(core.__file__).parent.joinpath('vendor').glob('*.py'))
     result = dict(time=time.time(), status='running', rows=[],
                   plan_sha256=sha(plan_path), source_sha256={str(p): sha(p) for p in source_paths},

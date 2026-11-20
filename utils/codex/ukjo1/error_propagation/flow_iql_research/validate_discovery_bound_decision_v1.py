@@ -10,9 +10,9 @@ import signal
 import subprocess
 import sys
 import time
-from utils.flow_iql_research.evaluate_onestep_deploy_v1 import sha
-from utils.flow_iql_research.watch_onestep_deploy_v6 import qualified_pick
-from utils.flow_iql_research.scheduler_v4 import process_identity
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v6 import qualified_pick
+from utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_v4 import process_identity
 
 
 def main():
@@ -44,7 +44,7 @@ def main():
     # Restore the actual coordinator in a private, weightless root with the
     # proposed failed-attempt state. The live test parent owns its manager slot.
     private=copy.deepcopy(plan);private['root']=str(out);registration=out/'private_registration.json';registration.write_text(json.dumps(private,indent=2))
-    contract=out/'private_contract.json';contract.write_text(json.dumps(dict(registration=str(registration),registration_sha256=sha(registration),source_sha256=private['all_source_sha256'],GPU_manager_CPU_affinity=list(range(96)),GPU_scheduler_module='utils.flow_iql_research.scheduler_onestep_deploy_v4'),indent=2))
+    contract=out/'private_contract.json';contract.write_text(json.dumps(dict(registration=str(registration),registration_sha256=sha(registration),source_sha256=private['all_source_sha256'],GPU_manager_CPU_affinity=list(range(96)),GPU_scheduler_module='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_onestep_deploy_v4'),indent=2))
     state['phase']='pilot';state['tested_candidates']=tested
     state['attempts'][0].update(status='discovery_historical_gate_impossible',early_failure_bound=dict(proof=str(proof_path),sha256=sha(proof_path),upper_bound=float(upper),historical_minimum=floor))
     state['evaluation_workers']={};state['benchmark_workers']={};state['benchmark_results']={}
@@ -52,7 +52,7 @@ def main():
     (out/'queue.json').write_text(json.dumps(state['jobs'],indent=2));(out/'finished.json').write_text('{}');(out/'scheduler_status.json').write_text(json.dumps(dict(pid=os.getpid(),running={},pending=len(state['jobs']),finished=0)))
     for rid in ('os1_ant_bank_bc_s0','os1_cubed_bank_bc_s0'):
         target=out/'runs'/rid;target.mkdir(parents=True);shutil.copyfile(root/'runs'/rid/'config.json',target/'config.json')
-    command=[sys.executable,'-u','-m','utils.flow_iql_research.watch_onestep_deploy_v6',str(contract)]
+    command=[sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v6',str(contract)]
     with(out/'controller.log').open('a')as log:child=subprocess.Popen(command,env=dict(os.environ,CUDA_VISIBLE_DEVICES=''),stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)
     birth=process_identity(child.pid);(out/'controller_launch.json').write_text(json.dumps(dict(pid=child.pid,birth=birth,command=command),indent=2))
     path=out/'analysis/onestep_pipeline_v1/status.json';end=time.monotonic()+25

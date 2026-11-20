@@ -40,7 +40,7 @@ def main():
             if slot in occupied or not ready:continue
             job=ready.pop(0);log=(out/(job['id']+'.log')).open('a')
             cmd=['taskset','-c',','.join(map(str,slots[slot])),sys.executable,'-u','-m',
-                'utils.flow_iql_research.next_boundary_snapshot_v1',job['run'],'--step',str(job['step']),'--output',job['output']]
+                'utils.codex.ukjo1.error_propagation.flow_iql_research.next_boundary_snapshot_v1',job['run'],'--step',str(job['step']),'--output',job['output']]
             process=subprocess.Popen(cmd,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)
             running[job['id']]=dict(process=process,log=log,slot=slot,
                 process_identity=Path(f'/proc/{process.pid}/stat').read_text().split(') ',1)[1].split()[19])

@@ -39,7 +39,7 @@ def main():
     prefix = ['taskset', '-c', ','.join(map(str, cpu_ids)), sys.executable, '-u', '-m']
     def run(output, extra, label):
         with (root/(label+'.log')).open('w') as log:
-            subprocess.run(prefix+['utils.flow_iql_research.train_half_empirical_backup_v1',
+            subprocess.run(prefix+['utils.codex.ukjo1.error_propagation.flow_iql_research.train_half_empirical_backup_v1',
                                    '--output', str(output)]+common+extra,
                            env=environment, stdout=log, stderr=subprocess.STDOUT, check=True)
     run(root/'full', [], 'full')
@@ -57,7 +57,7 @@ def main():
             assert a[key] == b[key]
     frozen = root/'frozen.json'
     with (root/'frozen.log').open('w') as log:
-        subprocess.run(prefix+['utils.flow_iql_research.frozen_diagnostics_v3', str(root/'full'),
+        subprocess.run(prefix+['utils.codex.ukjo1.error_propagation.flow_iql_research.frozen_diagnostics_v3', str(root/'full'),
                               '--step', '4', '--output', str(frozen)], env=environment,
                        stdout=log, stderr=subprocess.STDOUT, check=True)
     diagnostic = json.loads(frozen.read_text())

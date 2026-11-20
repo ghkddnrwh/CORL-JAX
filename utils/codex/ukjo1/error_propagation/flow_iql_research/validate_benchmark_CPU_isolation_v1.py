@@ -8,9 +8,9 @@ import signal
 import subprocess
 import sys
 import time
-from utils.flow_iql_research import watch_onestep_deploy_v12 as controller
-from utils.flow_iql_research.register_benchmark_CPU_isolation_v1 import build_plan
-from utils.flow_iql_research.evaluate_onestep_deploy_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research import watch_onestep_deploy_v12 as controller
+from utils.codex.ukjo1.error_propagation.flow_iql_research.register_benchmark_CPU_isolation_v1 import build_plan
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1 import sha
 
 
 def save(path,value):
@@ -49,7 +49,7 @@ def main():
     save(fixture/'analysis/onestep_pipeline_v1/research_state.json',initial)
     save(fixture/'queue.json',initial['jobs']);save(fixture/'scheduler_status.json',dict(pid=os.getpid(),running={}))
     save(fixture/'finished.json',{})
-    argv=[sys.executable,'-u','-m','utils.flow_iql_research.watch_onestep_deploy_v12',str(fixture/'contract.json')]
+    argv=[sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v12',str(fixture/'contract.json')]
     environment=dict(os.environ,CUDA_VISIBLE_DEVICES='',JAX_PLATFORM_NAME='cpu',OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1')
     with (area/'fixture_controller.log').open('xb')as log:
         child=subprocess.Popen(argv,env=environment,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)

@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 
-from utils.flow_iql_research.onestep_scheduling_policy_v1 import order_pending
+from utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_scheduling_policy_v1 import order_pending
 
 
 def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
@@ -68,7 +68,7 @@ def main():
     continuation=root/'CONTINUATION.json';saved=json.loads(continuation.read_text());owner=saved['analysis_controller']
     assert identity(owner['pid'])==owner['process_identity']
     command=Path(f'/proc/{owner["pid"]}/cmdline').read_bytes().decode().split('\0')
-    assert 'utils.flow_iql_research.watch_onestep_deploy_v8'in command and str(previous)in command
+    assert 'utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v8'in command and str(previous)in command
     before=area/'hard_task_priority_before_v1.json';assert not before.exists()
     atomic(before,dict(time=time.time(),owner=owner,scheduler=scheduler,amendment=amendment))
     # Only the CPU analysis controller is replaced; manager and every learner remain live.

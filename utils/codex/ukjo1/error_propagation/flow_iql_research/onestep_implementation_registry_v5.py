@@ -1,17 +1,17 @@
 """Add joint latent selectors; preserve every previous implementation route."""
-from utils.flow_iql_research import onestep_implementation_registry_v4 as previous
+from utils.codex.ukjo1.error_propagation.flow_iql_research import onestep_implementation_registry_v4 as previous
 
 Implementation=previous.Implementation
 FLAT,SET,MEAN_TEACHER,ENERGY,MIXTURE=(previous.FLAT,previous.SET,previous.MEAN_TEACHER,previous.ENERGY,previous.MIXTURE)
 SET_RECIPES=previous.SET_RECIPES
-LATENT=Implementation('latent','utils.flow_iql_research.latent_selector_onestep_core_v1',
-    'utils.flow_iql_research.train_latent_selector_onestep_v1',
-    'utils.flow_iql_research.evaluate_latent_selector_onestep_v1',
-    'utils.flow_iql_research.benchmark_latent_selector_onestep_v1')
-GUIDED=Implementation('latent_guided','utils.flow_iql_research.latent_order_guided_core_v1',
-    'utils.flow_iql_research.train_latent_order_guided_v1',
-    'utils.flow_iql_research.evaluate_latent_order_guided_v1',
-    'utils.flow_iql_research.benchmark_latent_order_guided_v1')
+LATENT=Implementation('latent','utils.codex.ukjo1.error_propagation.flow_iql_research.latent_selector_onestep_core_v1',
+    'utils.codex.ukjo1.error_propagation.flow_iql_research.train_latent_selector_onestep_v1',
+    'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_latent_selector_onestep_v1',
+    'utils.codex.ukjo1.error_propagation.flow_iql_research.benchmark_latent_selector_onestep_v1')
+GUIDED=Implementation('latent_guided','utils.codex.ukjo1.error_propagation.flow_iql_research.latent_order_guided_core_v1',
+    'utils.codex.ukjo1.error_propagation.flow_iql_research.train_latent_order_guided_v1',
+    'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_latent_order_guided_v1',
+    'utils.codex.ukjo1.error_propagation.flow_iql_research.benchmark_latent_order_guided_v1')
 IMPLEMENTATIONS=(*previous.IMPLEMENTATIONS,LATENT,GUIDED)
 GUIDED_RECIPES=('latent_order9_q_a003','latent_order9_q_a03','latent_order9_q_a3')
 LATENT_RECIPES=('latent_order9','latent_diag9')

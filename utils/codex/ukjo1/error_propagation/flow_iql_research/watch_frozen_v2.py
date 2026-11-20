@@ -47,7 +47,7 @@ def main():
                 env=dict(os.environ,CUDA_VISIBLE_DEVICES='',OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',
                          MKL_NUM_THREADS='1',MUJOCO_GL='egl',PYTHONUNBUFFERED='1',TF_NUM_INTRAOP_THREADS='1',TF_NUM_INTEROP_THREADS='1')
                 cmd=['taskset','-c',','.join(map(str,slots[slot])),sys.executable,'-u','-m',
-                     'utils.flow_iql_research.frozen_diagnostics_v3',str(run),'--step',str(step),'--output',str(out/f'{key}.json')]
+                     'utils.codex.ukjo1.error_propagation.flow_iql_research.frozen_diagnostics_v3',str(run),'--step',str(step),'--output',str(out/f'{key}.json')]
                 p=subprocess.Popen(cmd,env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
                 running[key]=dict(process=p,log=log,slot=slot,started_at=time.time())
                 print('START',key,'PID',p.pid,flush=True)

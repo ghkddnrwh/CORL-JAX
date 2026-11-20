@@ -1,0 +1,362 @@
+{
+  "time": 1795146087.6082563,
+  "processes": [
+    {
+      "pid": 2804447,
+      "birth": "346559217",
+      "command": [
+        "/home/ukjo1/anaconda3/envs/ogbench/bin/python",
+        "-u",
+        "-m",
+        "utils.codex.ukjo1.error_propagation.flow_iql_research.supervise_stability_study_v3",
+        "--root",
+        "/data/sda2/ukjo1/codex/error_propagation/logs/diagnosis/finite_mean_stability_4task_20261120_v1"
+      ]
+    },
+    {
+      "pid": 2804450,
+      "birth": "346559222",
+      "command": [
+        "/home/ukjo1/anaconda3/envs/ogbench/bin/python",
+        "-u",
+        "-m",
+        "utils.codex.ukjo1.error_propagation.flow_iql_research.run_stability_study_v3",
+        "--root",
+        "/data/sda2/ukjo1/codex/error_propagation/logs/diagnosis/finite_mean_stability_4task_20261120_v1"
+      ]
+    },
+    {
+      "pid": 2804451,
+      "birth": "346559228",
+      "command": [
+        "/home/ukjo1/anaconda3/envs/ogbench/bin/python",
+        "-u",
+        "-m",
+        "utils.codex.ukjo1.error_propagation.flow_iql_research.train_stability_study_v1",
+        "--env",
+        "antmaze-large-navigate-singletask-v0",
+        "--recipe",
+        "critic_batch1024",
+        "--seed",
+        "0",
+        "--output",
+        "/data/sda2/ukjo1/codex/error_propagation/logs/diagnosis/finite_mean_stability_4task_20261120_v1/runs/stab1_aml_critic_batch1024_s0"
+      ],
+      "id": "stab1_aml_critic_batch1024_s0",
+      "role": "running"
+    },
+    {
+      "pid": 2804452,
+      "birth": "346559228",
+      "command": [
+        "/home/ukjo1/anaconda3/envs/ogbench/bin/python",
+        "-u",
+        "-m",
+        "utils.codex.ukjo1.error_propagation.flow_iql_research.train_stability_study_v1",
+        "--env",
+        "humanoidmaze-medium-navigate-singletask-v0",
+        "--recipe",
+        "critic_batch1024",
+        "--seed",
+        "0",
+        "--output",
+        "/data/sda2/ukjo1/codex/error_propagation/logs/diagnosis/finite_mean_stability_4task_20261120_v1/runs/stab1_hmm_critic_batch1024_s0"
+      ],
+      "id": "stab1_hmm_critic_batch1024_s0",
+      "role": "running"
+    },
+    {
+      "pid": 2804453,
+      "birth": "346559228",
+      "command": [
+        "/home/ukjo1/anaconda3/envs/ogbench/bin/python",
+        "-u",
+        "-m",
+        "utils.codex.ukjo1.error_propagation.flow_iql_research.train_stability_study_v1",
+        "--env",
+        "cube-double-play-singletask-v0",
+        "--recipe",
+        "critic_batch1024",
+        "--seed",
+        "0",
+        "--output",
+        "/data/sda2/ukjo1/codex/error_propagation/logs/diagnosis/finite_mean_stability_4task_20261120_v1/runs/stab1_cube2_critic_batch1024_s0"
+      ],
+      "id": "stab1_cube2_critic_batch1024_s0",
+      "role": "running"
+    },
+    {
+      "pid": 2804454,
+      "birth": "346559228",
+      "command": [
+        "/home/ukjo1/anaconda3/envs/ogbench/bin/python",
+        "-u",
+        "-m",
+        "utils.codex.ukjo1.error_propagation.flow_iql_research.train_stability_study_v1",
+        "--env",
+        "puzzle-4x4-play-singletask-v0",
+        "--recipe",
+        "critic_batch1024",
+        "--seed",
+        "0",
+        "--output",
+        "/data/sda2/ukjo1/codex/error_propagation/logs/diagnosis/finite_mean_stability_4task_20261120_v1/runs/stab1_puzzle4_critic_batch1024_s0"
+      ],
+      "id": "stab1_puzzle4_critic_batch1024_s0",
+      "role": "running"
+    },
+    {
+      "pid": 2804455,
+      "birth": "346559228",
+      "command": [
+        "/home/ukjo1/anaconda3/envs/ogbench/bin/python",
+        "-u",
+        "-m",
+        "utils.codex.ukjo1.error_propagation.flow_iql_research.train_stability_study_v1",
+        "--env",
+        "antmaze-large-navigate-singletask-v0",
+        "--recipe",
+        "critic_batch1024",
+        "--seed",
+        "1",
+        "--output",
+        "/data/sda2/ukjo1/codex/error_propagation/logs/diagnosis/finite_mean_stability_4task_20261120_v1/runs/stab1_aml_critic_batch1024_s1"
+      ],
+      "id": "stab1_aml_critic_batch1024_s1",
+      "role": "running"
+    },
+    {
+      "pid": 2804456,
+      "birth": "346559228",
+      "command": [
+        "/home/ukjo1/anaconda3/envs/ogbench/bin/python",
+        "-u",
+        "-m",
+        "utils.codex.ukjo1.error_propagation.flow_iql_research.train_stability_study_v1",
+        "--env",
+        "humanoidmaze-medium-navigate-singletask-v0",
+        "--recipe",
+        "critic_batch1024",
+        "--seed",
+        "1",
+        "--output",
+        "/data/sda2/ukjo1/codex/error_propagation/logs/diagnosis/finite_mean_stability_4task_20261120_v1/runs/stab1_hmm_critic_batch1024_s1"
+      ],
+      "id": "stab1_hmm_critic_batch1024_s1",
+      "role": "running"
+    },
+    {
+      "pid": 2804457,
+      "birth": "346559228",
+      "command": [
+        "/home/ukjo1/anaconda3/envs/ogbench/bin/python",
+        "-u",
+        "-m",
+        "utils.codex.ukjo1.error_propagation.flow_iql_research.train_stability_study_v1",
+        "--env",
+        "cube-double-play-singletask-v0",
+        "--recipe",
+        "critic_batch1024",
+        "--seed",
+        "1",
+        "--output",
+        "/data/sda2/ukjo1/codex/error_propagation/logs/diagnosis/finite_mean_stability_4task_20261120_v1/runs/stab1_cube2_critic_batch1024_s1"
+      ],
+      "id": "stab1_cube2_critic_batch1024_s1",
+      "role": "running"
+    },
+    {
+      "pid": 2804458,
+      "birth": "346559229",
+      "command": [
+        "/home/ukjo1/anaconda3/envs/ogbench/bin/python",
+        "-u",
+        "-m",
+        "utils.codex.ukjo1.error_propagation.flow_iql_research.train_stability_study_v1",
+        "--env",
+        "puzzle-4x4-play-singletask-v0",
+        "--recipe",
+        "critic_batch1024",
+        "--seed",
+        "1",
+        "--output",
+        "/data/sda2/ukjo1/codex/error_propagation/logs/diagnosis/finite_mean_stability_4task_20261120_v1/runs/stab1_puzzle4_critic_batch1024_s1"
+      ],
+      "id": "stab1_puzzle4_critic_batch1024_s1",
+      "role": "running"
+    },
+    {
+      "pid": 2804459,
+      "birth": "346559229",
+      "command": [
+        "/home/ukjo1/anaconda3/envs/ogbench/bin/python",
+        "-u",
+        "-m",
+        "utils.codex.ukjo1.error_propagation.flow_iql_research.train_stability_study_v1",
+        "--env",
+        "cube-double-play-singletask-v0",
+        "--recipe",
+        "control",
+        "--seed",
+        "2",
+        "--output",
+        "/data/sda2/ukjo1/codex/error_propagation/logs/diagnosis/finite_mean_stability_4task_20261120_v1/runs/stab1_cube2_control_s2"
+      ],
+      "id": "stab1_cube2_control_s2",
+      "role": "running"
+    },
+    {
+      "pid": 2804460,
+      "birth": "346559229",
+      "command": [
+        "/home/ukjo1/anaconda3/envs/ogbench/bin/python",
+        "-u",
+        "-m",
+        "utils.codex.ukjo1.error_propagation.flow_iql_research.train_stability_study_v1",
+        "--env",
+        "antmaze-large-navigate-singletask-v0",
+        "--recipe",
+        "critic_batch1024",
+        "--seed",
+        "2",
+        "--output",
+        "/data/sda2/ukjo1/codex/error_propagation/logs/diagnosis/finite_mean_stability_4task_20261120_v1/runs/stab1_aml_critic_batch1024_s2"
+      ],
+      "id": "stab1_aml_critic_batch1024_s2",
+      "role": "running"
+    },
+    {
+      "pid": 2804461,
+      "birth": "346559229",
+      "command": [
+        "/home/ukjo1/anaconda3/envs/ogbench/bin/python",
+        "-u",
+        "-m",
+        "utils.codex.ukjo1.error_propagation.flow_iql_research.train_stability_study_v1",
+        "--env",
+        "humanoidmaze-medium-navigate-singletask-v0",
+        "--recipe",
+        "critic_batch1024",
+        "--seed",
+        "2",
+        "--output",
+        "/data/sda2/ukjo1/codex/error_propagation/logs/diagnosis/finite_mean_stability_4task_20261120_v1/runs/stab1_hmm_critic_batch1024_s2"
+      ],
+      "id": "stab1_hmm_critic_batch1024_s2",
+      "role": "running"
+    },
+    {
+      "pid": 2804462,
+      "birth": "346559229",
+      "command": [
+        "/home/ukjo1/anaconda3/envs/ogbench/bin/python",
+        "-u",
+        "-m",
+        "utils.codex.ukjo1.error_propagation.flow_iql_research.train_stability_study_v1",
+        "--env",
+        "cube-double-play-singletask-v0",
+        "--recipe",
+        "critic_batch1024",
+        "--seed",
+        "2",
+        "--output",
+        "/data/sda2/ukjo1/codex/error_propagation/logs/diagnosis/finite_mean_stability_4task_20261120_v1/runs/stab1_cube2_critic_batch1024_s2"
+      ],
+      "id": "stab1_cube2_critic_batch1024_s2",
+      "role": "running"
+    },
+    {
+      "pid": 2804463,
+      "birth": "346559229",
+      "command": [
+        "/home/ukjo1/anaconda3/envs/ogbench/bin/python",
+        "-u",
+        "-m",
+        "utils.codex.ukjo1.error_propagation.flow_iql_research.train_stability_study_v1",
+        "--env",
+        "puzzle-4x4-play-singletask-v0",
+        "--recipe",
+        "critic_batch1024",
+        "--seed",
+        "2",
+        "--output",
+        "/data/sda2/ukjo1/codex/error_propagation/logs/diagnosis/finite_mean_stability_4task_20261120_v1/runs/stab1_puzzle4_critic_batch1024_s2"
+      ],
+      "id": "stab1_puzzle4_critic_batch1024_s2",
+      "role": "running"
+    },
+    {
+      "pid": 2804464,
+      "birth": "346559229",
+      "command": [
+        "/home/ukjo1/anaconda3/envs/ogbench/bin/python",
+        "-u",
+        "-m",
+        "utils.codex.ukjo1.error_propagation.flow_iql_research.train_stability_study_v1",
+        "--env",
+        "antmaze-large-navigate-singletask-v0",
+        "--recipe",
+        "control",
+        "--seed",
+        "3",
+        "--output",
+        "/data/sda2/ukjo1/codex/error_propagation/logs/diagnosis/finite_mean_stability_4task_20261120_v1/runs/stab1_aml_control_s3"
+      ],
+      "id": "stab1_aml_control_s3",
+      "role": "running"
+    },
+    {
+      "pid": 2804465,
+      "birth": "346559229",
+      "command": [
+        "/home/ukjo1/anaconda3/envs/ogbench/bin/python",
+        "-u",
+        "-m",
+        "utils.codex.ukjo1.error_propagation.flow_iql_research.train_stability_study_v1",
+        "--env",
+        "humanoidmaze-medium-navigate-singletask-v0",
+        "--recipe",
+        "control",
+        "--seed",
+        "3",
+        "--output",
+        "/data/sda2/ukjo1/codex/error_propagation/logs/diagnosis/finite_mean_stability_4task_20261120_v1/runs/stab1_hmm_control_s3"
+      ],
+      "id": "stab1_hmm_control_s3",
+      "role": "running"
+    },
+    {
+      "pid": 2804466,
+      "birth": "346559229",
+      "command": [
+        "/home/ukjo1/anaconda3/envs/ogbench/bin/python",
+        "-u",
+        "-m",
+        "utils.codex.ukjo1.error_propagation.flow_iql_research.train_stability_study_v1",
+        "--env",
+        "cube-double-play-singletask-v0",
+        "--recipe",
+        "control",
+        "--seed",
+        "3",
+        "--output",
+        "/data/sda2/ukjo1/codex/error_propagation/logs/diagnosis/finite_mean_stability_4task_20261120_v1/runs/stab1_cube2_control_s3"
+      ],
+      "id": "stab1_cube2_control_s3",
+      "role": "running"
+    },
+    {
+      "pid": 2804448,
+      "birth": "346559217",
+      "command": [
+        "/home/ukjo1/anaconda3/envs/ogbench/bin/python",
+        "-u",
+        "-m",
+        "utils.codex.ukjo1.error_propagation.flow_iql_research.monitor",
+        "/home/ukjo1/research/ssd1/offline_rl/insampling/logs/codex/ukjo1/error_propagation/diagnosis/flow_iql_research_20261026"
+      ]
+    }
+  ],
+  "all_stopped": true,
+  "planned_restart_not_failure": true
+}

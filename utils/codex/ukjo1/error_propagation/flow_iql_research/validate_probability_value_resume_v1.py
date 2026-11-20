@@ -23,12 +23,12 @@ def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--output',type=Path,required=True);args=parser.parse_args()
     output=args.output.resolve();output.mkdir(parents=True,exist_ok=False)
-    paths=[Path(__file__),Path('utils/flow_iql_research/train_probability_value_v1.py'),Path('utils/flow_iql_research/probability_value_core_v1.py')]
+    paths=[Path(__file__),Path('utils/codex/ukjo1/error_propagation/flow_iql_research/train_probability_value_v1.py'),Path('utils/codex/ukjo1/error_propagation/flow_iql_research/probability_value_core_v1.py')]
     sources={str(p):sha(p)for p in paths}
     environment=dict(os.environ,CUDA_VISIBLE_DEVICES='',OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1',MUJOCO_GL='egl')
     rows=[]
     for mode in ('mse','kl'):
-        base=[sys.executable,'-u','-m','utils.flow_iql_research.train_probability_value_v1',
+        base=[sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.train_probability_value_v1',
             '--env','puzzle-3x3-play-singletask-v0','--kind','ifql','--profile',f'bounded_v2_unit_{mode}',
             '--seed','3','--discount','0.999','--expectile','0.9','--samples','9','--steps','1000000',
             '--episodes','50','--train-device','cpu','--chunk','2','--aux-eval-steps','']

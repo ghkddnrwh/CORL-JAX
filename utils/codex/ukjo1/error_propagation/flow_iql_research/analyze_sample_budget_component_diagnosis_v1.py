@@ -9,7 +9,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 
-from utils.flow_iql_research.diagnose_sample_budget_components_v1 import atomic, sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.diagnose_sample_budget_components_v1 import atomic, sha
 
 
 def interval(a, b, indices):

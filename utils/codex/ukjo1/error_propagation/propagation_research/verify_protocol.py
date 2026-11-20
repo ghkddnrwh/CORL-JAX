@@ -2,7 +2,7 @@
 
 from algorithms.uk_offline.basic import iql_jax as base
 from algorithms.uk_offline.basic import iql_residual_control as research
-from utils.propagation_research.diagnose_checkpoint import differentiable_adam, build_jvp_controller
+from utils.codex.ukjo1.error_propagation.propagation_research.diagnose_checkpoint import differentiable_adam, build_jvp_controller
 
 import jax
 import jax.numpy as jnp

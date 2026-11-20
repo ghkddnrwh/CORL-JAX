@@ -44,7 +44,7 @@ def check_case(root,environment,recipe,cpus):
     directory=root/recipe;directory.mkdir();full=directory/'full8';resume=directory/'resume4plus4'
     common=['--env',environment,'--recipe',recipe,'--seed','6','--steps','8','--chunk','2',
             '--probe-every','2','--train-device','cpu']
-    runner='utils.flow_iql_research.train_set_onestep_deploy_v1'
+    runner='utils.codex.ukjo1.error_propagation.flow_iql_research.train_set_onestep_deploy_v1'
     invoke(directory,'full8',cpus,runner,[*common,'--output',str(full)])
     invoke(directory,'part4',cpus,runner,[*common,'--output',str(resume),'--stop-at','4'])
     invoke(directory,'resume8',cpus,runner,[*common,'--output',str(resume)])
@@ -69,7 +69,7 @@ def check_case(root,environment,recipe,cpus):
     assert left.keys()==right.keys() and all(np.array_equal(value,right[key]) for key,value in left.items())
     left,right=(dict(leaves(saved['replay_rng'])) for saved in states)
     assert left.keys()==right.keys() and all(np.array_equal(value,right[key]) for key,value in left.items())
-    invoke(directory,'portable',cpus,'utils.flow_iql_research.validate_standalone_set_actor_v1',
+    invoke(directory,'portable',cpus,'utils.codex.ukjo1.error_propagation.flow_iql_research.validate_standalone_set_actor_v1',
            ['--actor',str(full/'actor_8.pkl'),'--output',str(directory/'portable.json')])
     result=dict(environment=environment,recipe=recipe,full_state_resume_bitwise_equal=True,
         actor_export_params_bitwise_equal=True,Q_Adam_steps=8,actor_Adam_steps=8,V_updates=0,
@@ -89,7 +89,7 @@ def main():
     # Separate portable clients above imported no learner or environment modules.
     # Now compare their outputs to the training definition in this CPU process.
     import jax
-    from utils.flow_iql_research import set_onestep_deploy_core_v1 as core
+    from utils.codex.ukjo1.error_propagation.flow_iql_research import set_onestep_deploy_core_v1 as core
     assert all(device.platform=='cpu' for device in jax.devices())
     for row in rows:
         run=Path(row['run'])
@@ -103,7 +103,7 @@ def main():
     cube=next(row for row in rows if row['recipe']=='set_bc');directory=args.output_dir/'set_bc'
     for mode in ('primary','teacher'):
         output=directory/('evaluation_'+mode+'.json')
-        invoke(directory,'evaluation_'+mode,'42-47','utils.flow_iql_research.evaluate_set_onestep_deploy_v1',
+        invoke(directory,'evaluation_'+mode,'42-47','utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_set_onestep_deploy_v1',
             ['--run',cube['run'],'--step','8','--mode',mode,'--episodes','10',
              '--implementation-only','--output',str(output)])
         result=json.loads(output.read_text());assert result['no_performance_claim'] and len(result['episode_successes'])==10

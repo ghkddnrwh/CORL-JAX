@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 import pickle
 import time
-from utils.flow_iql_research import core,policy_core,mean_value_teacher_core_v1 as changed
-from utils.flow_iql_research.audit_temporal_cohort_v1 import Verifier
-from utils.flow_iql_research.validate_value_sampling_v1 import difference
+from utils.codex.ukjo1.error_propagation.flow_iql_research import core,policy_core,mean_value_teacher_core_v1 as changed
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_temporal_cohort_v1 import Verifier
+from utils.codex.ukjo1.error_propagation.flow_iql_research.validate_value_sampling_v1 import difference
 import flax.serialization
 import jax
 import jax.numpy as jnp
@@ -61,7 +61,7 @@ def main():
             actual_widths=cfg['value_hidden_dims'],trace=trace))
     result=dict(time=time.time(),status='passed',results=results,actual_updates=len(results)*12,
         validation_min_control_generated_by_only_reduction_reversal=True,
-        sources={str(p):verifier.digest(p)for p in(Path(__file__),Path(changed.__file__),Path('utils/flow_iql_research/train_mean_value_teacher_v1.py'))},
+        sources={str(p):verifier.digest(p)for p in(Path(__file__),Path(changed.__file__),Path('utils/codex/ukjo1/error_propagation/flow_iql_research/train_mean_value_teacher_v1.py'))},
         new_GPU_training=0,new_policy_evaluations=0,goal_complete=False,
         limits=['Actual full-width1M source states on CPU, four updates per variant; not a performance or GPU bitwise-equivalence claim.',
             'Only the V teacher head reduction is reversed in the validation-only in-memory control; no training file is patched.',

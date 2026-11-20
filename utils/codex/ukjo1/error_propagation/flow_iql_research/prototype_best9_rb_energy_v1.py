@@ -17,9 +17,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from utils.flow_iql_research import onestep_deploy_core_v1 as flat
-from utils.flow_iql_research import energy_onestep_deploy_core_v1 as energy
-from utils.flow_iql_research import best9_subset_weights_v1 as subset
+from utils.codex.ukjo1.error_propagation.flow_iql_research import onestep_deploy_core_v1 as flat
+from utils.codex.ukjo1.error_propagation.flow_iql_research import energy_onestep_deploy_core_v1 as energy
+from utils.codex.ukjo1.error_propagation.flow_iql_research import best9_subset_weights_v1 as subset
 
 
 def sha(path):

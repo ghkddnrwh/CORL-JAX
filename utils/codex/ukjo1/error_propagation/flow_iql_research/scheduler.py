@@ -58,7 +58,7 @@ def main():
             per_process = max(1, len(cpu_ids)//len(slots))
             cpus = cpu_ids[idx*per_process:(idx+1)*per_process]
             cmd = ["taskset", "-c", ",".join(map(str, cpus)), sys.executable, "-u", "-m",
-                   "utils.flow_iql_research.train", "--output", str(output)]
+                   "utils.codex.ukjo1.error_propagation.flow_iql_research.train", "--output", str(output)]
             for k, value in job["args"].items():
                 cmd.extend(["--"+k, str(value)])
             log = (output / "stdout.log").open("a")

@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 import numpy as np
-from utils.flow_iql_research.audit_temporal_cohort_v1 import Verifier
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_temporal_cohort_v1 import Verifier
 
 
 def atomic(path,value):
@@ -51,8 +51,8 @@ def main():
                 assert abs(statistics.mean(result['episode_successes'])-result['success_rate'])<1e-12
                 assert result['config_sha256']==job['config_sha256']
                 assert result['checkpoint_sha256']==verifier.checkpoint(run/f"checkpoint_{job['step']}.pkl",config,job['step'])
-                assert result['selector_source_sha256']==plan['source_sha256']['utils/flow_iql_research/head_aggregation_policy_v1.py']
-                assert result['evaluator_source_sha256']==plan['source_sha256']['utils/flow_iql_research/evaluate_head_aggregation_v1.py']
+                assert result['selector_source_sha256']==plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/head_aggregation_policy_v1.py']
+                assert result['evaluator_source_sha256']==plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/evaluate_head_aggregation_v1.py']
                 valid[job['id']]=result
             elif job['id']not in running and job['id']not in failures and(run/f"checkpoint_{job['step']}.pkl").exists():
                 pending.append(job)
@@ -85,7 +85,7 @@ def main():
             for slot,cpus in enumerate(slots):
                 if slot in occupied or not pending:continue
                 job=pending.pop(0);path=Path(job['output']);path.parent.mkdir(parents=True,exist_ok=True)
-                command=['taskset','-c',cpus,sys.executable,'-u','-m','utils.flow_iql_research.evaluate_head_aggregation_v1',job['run'],'--step',str(job['step']),'--aggregation','mean','--episodes','50','--output',str(path)]
+                command=['taskset','-c',cpus,sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_head_aggregation_v1',job['run'],'--step',str(job['step']),'--aggregation','mean','--episodes','50','--output',str(path)]
                 env=dict(os.environ,CUDA_VISIBLE_DEVICES='',OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1',MUJOCO_GL='egl',TF_NUM_INTRAOP_THREADS='1',TF_NUM_INTEROP_THREADS='1')
                 log=path.with_suffix('.log').open('a');process=subprocess.Popen(command,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)
                 running[job['id']]=dict(process=process,log=log,slot=slot,started_at=time.time());print('START',job['id'],process.pid,flush=True)

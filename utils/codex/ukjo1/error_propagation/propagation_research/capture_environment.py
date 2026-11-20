@@ -17,7 +17,7 @@ import sys
 import tarfile
 import time
 
-from utils.propagation_research.summarize import ENVIRONMENTS
+from utils.codex.ukjo1.error_propagation.propagation_research.summarize import ENVIRONMENTS
 
 
 def digest(path):
@@ -44,11 +44,11 @@ def main():
     criterion = repository/"algorithms/uk_offline/basic/propagation/criterion.txt"
     if criterion.exists():
         paths.append(criterion)
-    paths += sorted((repository/"utils/propagation_research").glob("*.py"))
-    paths += sorted((repository/"utils/propagation_research").glob("*.md"))
+    paths += sorted((repository/"utils/codex/ukjo1/error_propagation/propagation_research").glob("*.py"))
+    paths += sorted((repository/"utils/codex/ukjo1/error_propagation/propagation_research").glob("*.md"))
     for name in ("algorithms/__init__.py", "algorithms/uk_offline/__init__.py",
                  "algorithms/uk_offline/basic/__init__.py", "algorithms/uk_offline/common/__init__.py",
-                 "utils/__init__.py", "utils/propagation_research/__init__.py", "hyperparams/iql_jax.yml"):
+                 "utils/__init__.py", "utils/codex/ukjo1/error_propagation/propagation_research/__init__.py", "hyperparams/iql_jax.yml"):
         if (repository/name).exists():
             paths.append(repository/name)
     # Capture each source once, so the hash and exported bytes always agree.

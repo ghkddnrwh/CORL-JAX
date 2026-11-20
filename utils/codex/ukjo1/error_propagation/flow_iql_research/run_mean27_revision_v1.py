@@ -206,7 +206,7 @@ def main():
                       expected_training=len(plan['jobs']), expected_evaluations=expected_eval)
         atomic(state_path, status)
         if all_done or time.time()-last_analysis >= 600:
-            command = [sys.executable, '-u', '-m', 'utils.flow_iql_research.analyze_mean27_revision_v1',
+            command = [sys.executable, '-u', '-m', 'utils.codex.ukjo1.error_propagation.flow_iql_research.analyze_mean27_revision_v1',
                        '--root', str(root)]
             if all_done and status['phase'] == 'complete':
                 command.append('--final')

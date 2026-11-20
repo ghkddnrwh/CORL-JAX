@@ -11,7 +11,7 @@ import jax
 import jax.numpy as jnp
 from jax.scipy.special import ndtr
 import numpy as np
-from utils.flow_iql_research import lazy_mixture_location_actor_v1 as location
+from utils.codex.ukjo1.error_propagation.flow_iql_research import lazy_mixture_location_actor_v1 as location
 
 
 TEMPERATURES=(0.,.25,.5,1.)

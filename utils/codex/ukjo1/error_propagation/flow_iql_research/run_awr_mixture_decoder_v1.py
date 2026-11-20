@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 
-from utils.flow_iql_research.rank_mean_bundle_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.rank_mean_bundle_v1 import sha
 
 
 def atomic(path, value):
@@ -29,7 +29,7 @@ def verify(path, job, plan):
     assert result['rule'] == job['rule']
     assert result['config_sha256'] == plan['config_sha256']
     assert result['checkpoint_sha256'] == sha(Path(plan['run']) / f"checkpoint_{job['step']}.pkl")
-    assert result['source_sha256'] == plan['source_sha256']['utils/flow_iql_research/evaluate_awr_mixture_decoder_v1.py']
+    assert result['source_sha256'] == plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/evaluate_awr_mixture_decoder_v1.py']
     assert result['n_episodes'] == 50 and result['first_episode_seed'] == 42
     assert result['eval_device'] == 'cpu' and result['protocol'] == 'last3_cpu50_independent_seeded_episodes_v1'
     assert len(result['episode_successes']) == len(result['episode_rewards']) == len(result['episode_lengths']) == 50
@@ -87,7 +87,7 @@ def main():
             if job is None:
                 continue
             command = ['taskset', '-c', ','.join(map(str, cpus)), sys.executable, '-u', '-m',
-                'utils.flow_iql_research.evaluate_awr_mixture_decoder_v1', str(run), '--step', str(job['step']),
+                'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_awr_mixture_decoder_v1', str(run), '--step', str(job['step']),
                 '--rule', job['rule'], '--output', job['output']]
             if job.get('self_reference'):
                 command.append('--self-reference')

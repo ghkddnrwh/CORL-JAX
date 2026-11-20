@@ -14,7 +14,7 @@ from pathlib import Path
 import pickle
 import time
 
-from utils.propagation_research.diagnose_checkpoint import CheckpointReader
+from utils.codex.ukjo1.error_propagation.propagation_research.diagnose_checkpoint import CheckpointReader
 
 
 def main():

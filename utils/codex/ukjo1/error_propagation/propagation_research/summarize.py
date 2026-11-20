@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 if __package__:
-    from utils.propagation_research.reward_bounds import effective_backup_rule
+    from utils.codex.ukjo1.error_propagation.propagation_research.reward_bounds import effective_backup_rule
 else:
     from reward_bounds import effective_backup_rule
 

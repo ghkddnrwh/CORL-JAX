@@ -1,0 +1,58 @@
+{
+  "utils/networks.py": {
+    "original_sha256": "3f38e3d413d573597348e31f2abb5431f54bf89e96fc76781a9471c72d6062aa",
+    "vendored_sha256": "3f38e3d413d573597348e31f2abb5431f54bf89e96fc76781a9471c72d6062aa",
+    "changes": [
+      "local import namespace",
+      "unfreeze init params for Flax0.6.1 (agents only)"
+    ]
+  },
+  "utils/flax_utils.py": {
+    "original_sha256": "5b6a8e9a919bf57dae0c1454f327ded4235385f9d9dcd1e62263fe4fad9fd484",
+    "vendored_sha256": "5b6a8e9a919bf57dae0c1454f327ded4235385f9d9dcd1e62263fe4fad9fd484",
+    "changes": [
+      "local import namespace",
+      "unfreeze init params for Flax0.6.1 (agents only)"
+    ]
+  },
+  "utils/encoders.py": {
+    "original_sha256": "c4cff610086e5369cb44a943a55667c1cf393694ac1035df807a280d67e04bd8",
+    "vendored_sha256": "830cb84fa0f8e0c0f4c835434f3ae73c2c8f1e9647cc8890d32017e072403b57",
+    "changes": [
+      "local import namespace",
+      "unfreeze init params for Flax0.6.1 (agents only)"
+    ]
+  },
+  "agents/iql.py": {
+    "original_sha256": "26c080196f979d816a1e16b11d299509b413ee6b268786774c4de6505cccceb9",
+    "vendored_sha256": "3dbf6cc104510b41358b6dd2d91582262aa07f020b481ecc55a3af0b39259086",
+    "changes": [
+      "local import namespace",
+      "unfreeze init params for Flax0.6.1 (agents only)"
+    ]
+  },
+  "agents/ifql.py": {
+    "original_sha256": "59c7422abb6ad6884066419de89755cd9cf7bd5b146ced521540b3d25642dfca",
+    "vendored_sha256": "1bfb9c39ad8fe1aa033a274043da824c696b78bf89ed8ff41daed7d49acfacd9",
+    "changes": [
+      "local import namespace",
+      "unfreeze init params for Flax0.6.1 (agents only)"
+    ]
+  },
+  "agents/fql.py": {
+    "original_sha256": "234c313d3acb3ba3d5d2cf1a08feb8a9cda23d47577687ff1daa9b29d425ed1f",
+    "vendored_sha256": "e4ff2f19705a3a219c7924d7d6da216a1d2c5bed5fedd85295d27604ebb4602c",
+    "changes": [
+      "local import namespace",
+      "unfreeze init params for Flax0.6.1 (agents only)"
+    ]
+  },
+  "agents/rebrac.py": {
+    "original_sha256": "eb8ea77b113b2dfbcb0c61cc40c2f60f3bb2765165ae2bee0fa94de6b8916987",
+    "vendored_sha256": "33cd498007503920cf734f93b3a414df2f7f079cd6ad32b79378fae434ee9ac9",
+    "changes": [
+      "local import namespace",
+      "unfreeze init params for Flax0.6.1 (agents only)"
+    ]
+  }
+}

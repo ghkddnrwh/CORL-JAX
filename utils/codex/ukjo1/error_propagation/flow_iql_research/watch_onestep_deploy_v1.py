@@ -18,10 +18,10 @@ import subprocess
 import sys
 import time
 import numpy as np
-from utils.flow_iql_research import onestep_deploy_core_v1 as core
-from utils.flow_iql_research import train_onestep_deploy_v1 as runner
-from utils.flow_iql_research.register_onestep_deploy_v1 import SECOND_ROUND
-from utils.flow_iql_research.evaluate_onestep_deploy_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research import onestep_deploy_core_v1 as core
+from utils.codex.ukjo1.error_propagation.flow_iql_research import train_onestep_deploy_v1 as runner
+from utils.codex.ukjo1.error_propagation.flow_iql_research.register_onestep_deploy_v1 import SECOND_ROUND
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1 import sha
 
 
 STEPS=(800000,900000,1000000)
@@ -193,14 +193,14 @@ def main():
     for key,row in list(state['evaluation_workers'].items()):
         if process_identity(row['pid'])==row['process_identity']:
             command=Path(f'/proc/{row["pid"]}/cmdline').read_bytes().decode().split('\0')
-            assert 'utils.flow_iql_research.evaluate_onestep_deploy_v1'in command and str(root/'runs'/row['run'])in command
+            assert 'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1'in command and str(root/'runs'/row['run'])in command
             assert set(os.sched_getaffinity(row['pid']))==set(plan['CPUslots'][row['slot']])
             workers[key]=dict(process=None,log=None,**row)
         else:del state['evaluation_workers'][key]
     for gpu,row in list(state['benchmark_workers'].items()):
         if process_identity(row['pid'])==row['process_identity']:
             command=Path(f'/proc/{row["pid"]}/cmdline').read_bytes().decode().split('\0')
-            assert 'utils.flow_iql_research.benchmark_onestep_deploy_v1'in command
+            assert 'utils.codex.ukjo1.error_propagation.flow_iql_research.benchmark_onestep_deploy_v1'in command
             benchmarks[gpu]=dict(process=None,log=None,**row)
         else:
             path=Path(row['output'])
@@ -216,7 +216,7 @@ def main():
         trial=state['evaluation_tries'].get(key,0)+1;state['evaluation_tries'][key]=trial
         log=(evdir/f'{rid}_{step}_{mode}_n{episodes}_try{trial}.log').open('a')
         command=['nice','-n','10','taskset','-c',','.join(map(str,plan['CPUslots'][slot])),sys.executable,'-u','-m',
-            'utils.flow_iql_research.evaluate_onestep_deploy_v1','--run',str(root/'runs'/rid),'--step',str(step),'--mode',mode,
+            'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1','--run',str(root/'runs'/rid),'--step',str(step),'--mode',mode,
             '--episodes',str(episodes),'--output',str(result_path(rid,step,mode,episodes))]
         p=subprocess.Popen(command,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)
         record=dict(pid=p.pid,process_identity=process_identity(p.pid),run=rid,step=step,mode=mode,episodes=episodes,slot=slot,trial=trial)
@@ -235,7 +235,7 @@ def main():
         if any(j['args']['recipe']==recipe and j['args']['env']==environment and j['args']['seed']==seed for j in state['jobs']+new):return
         tag=['ant','hmmed','hmlarge','soccer','cube','cubed','pz3','pz4','scene'][core.ENVIRONMENTS.index(environment)]
         rid=f'{prefix}_{tag}_{recipe}_s{seed}'
-        new.append(dict(id=rid,module='utils.flow_iql_research.train_onestep_deploy_v1',args=dict(env=environment,recipe=recipe,seed=seed,steps=1000000)))
+        new.append(dict(id=rid,module='utils.codex.ukjo1.error_propagation.flow_iql_research.train_onestep_deploy_v1',args=dict(env=environment,recipe=recipe,seed=seed,steps=1000000)))
         expected[rid]=runner.configuration(environment,recipe,seed)
 
     def promote(candidate):
@@ -313,7 +313,7 @@ def main():
             if process_identity(manager_pid) is None and not(root/'STOP').exists():
                 log=(output/'GPU_scheduler_restarts.log').open('a')
                 command=['taskset','-c',','.join(map(str,contract['GPU_manager_CPU_affinity'])),sys.executable,'-u','-m',
-                    'utils.flow_iql_research.scheduler_onestep_deploy_v1',str(root),'--per-gpu','8']
+                    'utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_onestep_deploy_v1',str(root),'--per-gpu','8']
                 manager=subprocess.Popen(command,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)
                 log.close();state['events'].append(dict(time=time.time(),label='restart_owned_GPU_scheduler',pid=manager.pid,process_identity=process_identity(manager.pid)));persist()
             rows=[];ready_late=[];ready_early=[];evaluations={}
@@ -381,7 +381,7 @@ def main():
                         for gpu in (0,1):
                             input_path=folder/f'GPU{gpu}_input.json';atomic(input_path,dict(jobs=[dict(run=str(root/'runs'/r['run']))for r in chosen[gpu::2]]))
                             path=folder/f'GPU{gpu}_timings.json';log=(folder/f'GPU{gpu}.log').open('a')
-                            command=['taskset','-c',f'{6*gpu}-{6*gpu+5}',sys.executable,'-u','-m','utils.flow_iql_research.benchmark_onestep_deploy_v1','--input',str(input_path),'--output',str(path)]
+                            command=['taskset','-c',f'{6*gpu}-{6*gpu+5}',sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.benchmark_onestep_deploy_v1','--input',str(input_path),'--output',str(path)]
                             p=subprocess.Popen(command,env=dict(env,CUDA_VISIBLE_DEVICES=str(gpu)),stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)
                             record=dict(pid=p.pid,process_identity=process_identity(p.pid),output=str(path));benchmarks[str(gpu)]=dict(process=p,log=log,**record);state['benchmark_workers'][str(gpu)]=record;persist()
                     if len(state['benchmark_results'])==2:

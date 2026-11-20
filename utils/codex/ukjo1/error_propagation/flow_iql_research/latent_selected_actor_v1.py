@@ -16,8 +16,8 @@ import jax.numpy as jnp
 from jax.scipy.special import logsumexp, ndtr
 import numpy as np
 
-from utils.flow_iql_research.mixture_onestep_actor_v1 import MixtureActor
-from utils.flow_iql_research.standalone_onestep_actor_v1 import _Actor
+from utils.codex.ukjo1.error_propagation.flow_iql_research.mixture_onestep_actor_v1 import MixtureActor
+from utils.codex.ukjo1.error_propagation.flow_iql_research.standalone_onestep_actor_v1 import _Actor
 
 
 def latent_log_probability(parameters, values):

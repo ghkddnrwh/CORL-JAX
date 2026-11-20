@@ -16,8 +16,8 @@ import subprocess
 import sys
 import time
 import numpy as np
-from utils.flow_iql_research import train_efficient_v1 as runner
-from utils.flow_iql_research import efficient_mean_core_v1 as core
+from utils.codex.ukjo1.error_propagation.flow_iql_research import train_efficient_v1 as runner
+from utils.codex.ukjo1.error_propagation.flow_iql_research import efficient_mean_core_v1 as core
 
 
 STEPS=(800000,900000,1000000)
@@ -179,7 +179,7 @@ def main():
         key=f'{job["id"]}:{step}:{mode}'
         log=(eval_folder/(key.replace(':','_')+'.log')).open('a')
         command=['nice','-n','10','taskset','-c',','.join(map(str,plan['CPUslots'][slot])),sys.executable,'-u','-m',
-            'utils.flow_iql_research.evaluate_efficient_v1','--run',str(root/'runs'/job['id']),'--step',str(step),
+            'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_efficient_v1','--run',str(root/'runs'/job['id']),'--step',str(step),
             '--mode',mode,'--output',str(result_path(job['id'],step,mode))]
         p=subprocess.Popen(command,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)
         running[key]=dict(process=p,log=log,slot=slot,process_identity=Path(f'/proc/{p.pid}/stat').read_text().split(') ',1)[1].split()[19])
@@ -189,7 +189,7 @@ def main():
         # Every byte is verified and all public paths remain available via links.
         if shutil.disk_usage(root).free<18*1024**3:
             destination=Path(contract['completed_checkpoint_offload_destination'])
-            command=[sys.executable,'-u','-m','utils.flow_iql_research.offload_completed_checkpoints_v2',
+            command=[sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.offload_completed_checkpoints_v2',
                 str(root),'--destination',str(destination),'--target-free-gib','18','--apply']
             with (output/'completed_checkpoint_offload.log').open('a') as log:
                 subprocess.run(command,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,check=True)
@@ -200,7 +200,7 @@ def main():
                 if any(j['args']['env']==environment and j['args']['variant']==variant and j['args']['seed']==seed for j in jobs):continue
                 short=['ant','hmmed','hmlarge','soccer','cube','cubed','pz3','pz4','scene'][index]
                 rid=f'eff2_{short}_{variant}_s{seed}'
-                job=dict(id=rid,module='utils.flow_iql_research.train_efficient_v1',args=dict(env=environment,variant=variant,seed=seed,steps=1000000))
+                job=dict(id=rid,module='utils.codex.ukjo1.error_propagation.flow_iql_research.train_efficient_v1',args=dict(env=environment,variant=variant,seed=seed,steps=1000000))
                 new.append(job);expected[rid]=runner.configuration(environment,variant,seed)
         receipt=dict(time=time.time(),selected_candidate=candidate,selection_evidence=evidence,new_jobs=new,expected_identities=expected,
             conditional_rule=plan['promotion_rule'],fixed_seeds=plan['future_confirmation_seeds'],
@@ -286,7 +286,7 @@ def main():
                     out=bench_folder/f'GPU{gpu}_timings.json';log=(bench_folder/f'GPU{gpu}.log').open('a')
                     cpu_ids=list(range(6*gpu,6*gpu+6))
                     command=['taskset','-c',','.join(map(str,cpu_ids)),sys.executable,'-u','-m',
-                        'utils.flow_iql_research.benchmark_efficient_models_v1','--input',str(input_path),'--output',str(out)]
+                        'utils.codex.ukjo1.error_propagation.flow_iql_research.benchmark_efficient_models_v1','--input',str(input_path),'--output',str(out)]
                     p=subprocess.Popen(command,env=dict(env,CUDA_VISIBLE_DEVICES=str(gpu)),stdin=subprocess.DEVNULL,
                         stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)
                     benchmarks[gpu]=dict(process=p,log=log,output=out)

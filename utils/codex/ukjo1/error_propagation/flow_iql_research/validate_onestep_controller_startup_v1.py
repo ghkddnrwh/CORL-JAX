@@ -8,8 +8,8 @@ import signal
 import subprocess
 import sys
 import time
-from utils.flow_iql_research.evaluate_onestep_deploy_v1 import sha
-from utils.flow_iql_research.scheduler_v4 import process_identity
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_v4 import process_identity
 
 
 def main():
@@ -26,7 +26,7 @@ def main():
     registration=private/'private_registration.json';registration.write_text(json.dumps(plan,indent=2))
     contract=private/'private_contract.json';contract.write_text(json.dumps(dict(registration=str(registration),
         registration_sha256=sha(registration),source_sha256=plan['all_source_sha256'],GPU_manager_CPU_affinity=list(range(96)),
-        GPU_scheduler_module='utils.flow_iql_research.scheduler_onestep_deploy_v3'),indent=2))
+        GPU_scheduler_module='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_onestep_deploy_v3'),indent=2))
     queue=plan['jobs'];(private/'queue.json').write_text(json.dumps(queue,indent=2))
     (private/'finished.json').write_text('{}')
     # This *live test process* occupies the manager handle. The controller
@@ -38,7 +38,7 @@ def main():
         shutil.copyfile(args.root/'runs'/job['id']/'config.json',output/'config.json')
         # No source archive or weights: legitimate 'initializing', never a
         # synthetic performance score or a runnable training artifact.
-    command=[sys.executable,'-u','-m','utils.flow_iql_research.watch_onestep_deploy_v5',str(contract)]
+    command=[sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v5',str(contract)]
     with(private/'controller.log').open('a')as log:
         child=subprocess.Popen(command,env=dict(os.environ,CUDA_VISIBLE_DEVICES=''),stdin=subprocess.DEVNULL,
             stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)
@@ -61,7 +61,7 @@ def main():
     assert first['args']['recipe']=='bank_bc'and first['args']['env']==plan['pilot_environments'][2]
     assert process_identity(child.pid)==birth
     cmd=Path(f'/proc/{child.pid}/cmdline').read_bytes().decode().split('\0')
-    assert cmd[cmd.index('-m')+1]=='utils.flow_iql_research.watch_onestep_deploy_v5'
+    assert cmd[cmd.index('-m')+1]=='utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v5'
     os.kill(child.pid,signal.SIGTERM);child.wait(timeout=5)
     result=dict(time=time.time(),status='pass',checks=[
         'Actual V5 first loop verifies frozen sources and writes status in an isolated root',

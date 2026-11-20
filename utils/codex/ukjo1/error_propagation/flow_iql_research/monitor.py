@@ -10,7 +10,7 @@ import time
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('root',type=Path);args=parser.parse_args()
     while not (args.root/'STOP_MONITOR').exists():
-        subprocess.run([sys.executable,'-m','utils.flow_iql_research.audit',str(args.root)],check=False)
+        subprocess.run([sys.executable,'-m','utils.codex.ukjo1.error_propagation.flow_iql_research.audit',str(args.root)],check=False)
         try:
             status=json.loads((args.root/'scheduler_status.json').read_text())
             audit=json.loads((args.root/'analysis/live_audit.json').read_text())

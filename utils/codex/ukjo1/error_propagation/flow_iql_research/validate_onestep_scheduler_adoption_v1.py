@@ -6,11 +6,11 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-from utils.flow_iql_research import scheduler_onestep_deploy_v2 as wrapper
-from utils.flow_iql_research.scheduler_v4 import atomic_json,process_identity
+from utils.codex.ukjo1.error_propagation.flow_iql_research import scheduler_onestep_deploy_v2 as wrapper
+from utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_v4 import atomic_json,process_identity
 
 
-MODULE='utils.flow_iql_research.validate_onestep_scheduler_adoption_v1'
+MODULE='utils.codex.ukjo1.error_propagation.flow_iql_research.validate_onestep_scheduler_adoption_v1'
 
 
 def wait_for(test, timeout=25):
@@ -36,8 +36,8 @@ def main():
         return
     root=args.output.resolve();root.mkdir(parents=True,exist_ok=False)
     assert len(os.sched_getaffinity(0))==12
-    assert {'utils.flow_iql_research.train_onestep_deploy_v1',
-            'utils.flow_iql_research.train_set_onestep_deploy_v1'}<=wrapper.allowed_modules()
+    assert {'utils.codex.ukjo1.error_propagation.flow_iql_research.train_onestep_deploy_v1',
+            'utils.codex.ukjo1.error_propagation.flow_iql_research.train_set_onestep_deploy_v1'}<=wrapper.allowed_modules()
     cpus=sorted(os.sched_getaffinity(0));jobs=[];running={};workers=[]
     env=dict(os.environ,CUDA_VISIBLE_DEVICES='',XLA_PYTHON_CLIENT_MEM_FRACTION='0.1')
     for index,(rid,duration) in enumerate((('fixture_old_a',4),('fixture_old_b',8),('fixture_pending',1))):
@@ -60,7 +60,7 @@ def main():
     atomic_json(root/'queue.json',jobs)
     atomic_json(root/'scheduler_status.json',dict(pid=999999999,running=running,pending=1,finished=0))
     log=(root/'manager.log').open('a')
-    code=('import sys; from utils.flow_iql_research import scheduler_onestep_deploy_v2 as w; '
+    code=('import sys; from utils.codex.ukjo1.error_propagation.flow_iql_research import scheduler_onestep_deploy_v2 as w; '
           'w.scheduler_v4.MODULES=w.allowed_modules()|{'+repr(MODULE)+'}; '
           'w.scheduler_v4.main()')
     manager=subprocess.Popen([sys.executable,'-u','-c',code,str(root),'--per-gpu','1'],env=env,

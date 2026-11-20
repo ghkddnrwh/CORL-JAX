@@ -7,7 +7,7 @@ The supplied repository's LICENSE is preserved in this directory.
 The seven copied modules are agents/iql.py, ifql.py, fql.py, rebrac.py and
 utils/flax_utils.py, networks.py, encoders.py. Their only code translations are:
 
-1. from utils.* imports point to utils.flow_iql_research.vendor.*.
+1. from utils.* imports point to utils.codex.ukjo1.error_propagation.flow_iql_research.vendor.*.
 2. The four agents' initialized network_params are converted with
    flax.core.unfreeze(), for the existing Flax0.6.1 parameter-container API.
 
@@ -31,7 +31,7 @@ reproduction across different library/simulator versions. Fresh local FQL and
 ReBRAC references use the same campaign runtime. Current dataset hashes identify
 the current files; they do not retroactively certify every earlier run's input.
 
-Import utils.flow_iql_research.core before restoring standalone Optax objects;
+Import utils.codex.ukjo1.error_propagation.flow_iql_research.core before restoring standalone Optax objects;
 it contains the existing runtime-only SciPy tril/triu compatibility alias.
 No installed dependency has been edited or upgraded for this research.
 

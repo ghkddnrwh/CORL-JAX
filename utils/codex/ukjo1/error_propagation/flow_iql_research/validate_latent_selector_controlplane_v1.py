@@ -10,14 +10,14 @@ import subprocess
 import sys
 import time
 from types import SimpleNamespace
-from utils.flow_iql_research import onestep_implementation_registry_v4 as old_registry
-from utils.flow_iql_research import onestep_implementation_registry_v5 as registry
-from utils.flow_iql_research import scheduler_onestep_deploy_v6 as old_manager
-from utils.flow_iql_research import scheduler_onestep_deploy_v7 as manager
-from utils.flow_iql_research.evaluate_onestep_deploy_v1 import sha
-from utils.flow_iql_research.register_latent_selector_onestep_v1 import build_plan,RECIPES
-from utils.flow_iql_research.onestep_scheduling_policy_v1 import order_pending
-from utils.flow_iql_research.activate_latent_selector_onestep_v1 import identity
+from utils.codex.ukjo1.error_propagation.flow_iql_research import onestep_implementation_registry_v4 as old_registry
+from utils.codex.ukjo1.error_propagation.flow_iql_research import onestep_implementation_registry_v5 as registry
+from utils.codex.ukjo1.error_propagation.flow_iql_research import scheduler_onestep_deploy_v6 as old_manager
+from utils.codex.ukjo1.error_propagation.flow_iql_research import scheduler_onestep_deploy_v7 as manager
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.register_latent_selector_onestep_v1 import build_plan,RECIPES
+from utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_scheduling_policy_v1 import order_pending
+from utils.codex.ukjo1.error_propagation.flow_iql_research.activate_latent_selector_onestep_v1 import identity
 
 
 def main():
@@ -31,7 +31,7 @@ def main():
         x=job['args'];assert registry.implementation(x['recipe'])==old_registry.implementation(x['recipe'])
         assert registry.configuration(x['env'],x['recipe'],x['seed'])==plan['expected_identities'][job['id']]
     assert manager.allowed_modules()==old_manager.allowed_modules()|{
-        'utils.flow_iql_research.train_latent_selector_onestep_v1','utils.flow_iql_research.train_latent_order_guided_v1'}
+        'utils.codex.ukjo1.error_propagation.flow_iql_research.train_latent_selector_onestep_v1','utils.codex.ukjo1.error_propagation.flow_iql_research.train_latent_order_guided_v1'}
     scheduler=json.loads((root/'scheduler_status.json').read_text());assert len(scheduler['running'])==16
     for row in scheduler['running'].values():
         assert identity(row['pid'])==row['process_identity']
@@ -70,7 +70,7 @@ def main():
     for recipe in ('latent_order9','latent_diag9','latent_order9_q_a03'):
         row=next(x for x in readiness['rows']if x['recipe']==recipe and x['environment']=='cube-single-play-singletask-v0')
         target=out/(recipe+'_gradient.json');command=[sys.executable,'-u','-m',
-            'utils.flow_iql_research.diagnose_onestep_gradients_v6','--run',row['run'],'--step','8','--output',str(target)]
+            'utils.codex.ukjo1.error_propagation.flow_iql_research.diagnose_onestep_gradients_v6','--run',row['run'],'--step','8','--output',str(target)]
         with(out/(recipe+'_gradient.log')).open('xb')as log:
             child=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)
         (out/(recipe+'_gradient_handle.json')).write_text(json.dumps(dict(pid=child.pid,birth=identity(child.pid),command=command)))
@@ -84,7 +84,7 @@ def main():
     registration.write_text(json.dumps(private,indent=2));contract=out/'private_contract.json'
     contract.write_text(json.dumps(dict(registration=str(registration),registration_sha256=sha(registration),
         source_sha256=private['all_source_sha256'],GPU_manager_CPU_affinity=list(range(96)),
-        GPU_scheduler_module='utils.flow_iql_research.scheduler_onestep_deploy_v7'),indent=2))
+        GPU_scheduler_module='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_onestep_deploy_v7'),indent=2))
     private_state={k:copy.deepcopy(state[k])for k in ('round','round_recipes','all_recipes','phase','tested_candidates','attempts','active_attempt')}
     private_state['round_recipes']+=list(RECIPES);private_state['all_recipes']+=list(RECIPES)
     private_state.update(jobs=plan['jobs'],identities=plan['expected_identities'],evaluation_workers={},evaluation_tries={},
@@ -93,7 +93,7 @@ def main():
     (directory/'research_state.json').write_text(json.dumps(private_state,indent=2))
     (out/'queue.json').write_text(json.dumps(plan['jobs'],indent=2));(out/'finished.json').write_text('{}')
     (out/'scheduler_status.json').write_text(json.dumps(dict(pid=os.getpid(),running={},pending=130,finished=0)))
-    command=[sys.executable,'-u','-m','utils.flow_iql_research.watch_onestep_deploy_v9',str(contract)]
+    command=[sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v9',str(contract)]
     with(out/'controller.log').open('xb')as log:
         child=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)
     birth=identity(child.pid);(out/'controller_handle.json').write_text(json.dumps(dict(pid=child.pid,birth=birth,command=command)))

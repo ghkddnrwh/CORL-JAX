@@ -9,8 +9,8 @@ import json
 from pathlib import Path
 import pickle
 import time
-from utils.flow_iql_research import core, policy_core
-from utils.flow_iql_research.audit_temporal_cohort_v1 import Verifier
+from utils.codex.ukjo1.error_propagation.flow_iql_research import core, policy_core
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_temporal_cohort_v1 import Verifier
 import flax.serialization
 import jax
 import jax.numpy as jnp
@@ -96,7 +96,7 @@ def main():
     if prior_path.exists():
         prior = json.loads(prior_path.read_text())
         assert prior['checkpoint_sha256'] == cp_sha and prior['config_sha256'] == verifier.digest(run/'config.json')
-        assert prior['diagnostic_source_sha256'] == verifier.digest('utils/flow_iql_research/frozen_diagnostics_v3.py')
+        assert prior['diagnostic_source_sha256'] == verifier.digest('utils/codex/ukjo1/error_propagation/flow_iql_research/frozen_diagnostics_v3.py')
         discrepancies=[]
         for old,new in zip(prior['trace'],traces['repeated_minibatch']):
             assert old['extra_frozen_v_steps'] == new['extra_V_Adam_steps']

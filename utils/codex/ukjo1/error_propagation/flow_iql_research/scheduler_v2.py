@@ -9,8 +9,8 @@ import sys
 import time
 
 
-MODULES = {'utils.flow_iql_research.train', 'utils.flow_iql_research.train_policy',
-           'utils.flow_iql_research.train_fql'}
+MODULES = {'utils.codex.ukjo1.error_propagation.flow_iql_research.train', 'utils.codex.ukjo1.error_propagation.flow_iql_research.train_policy',
+           'utils.codex.ukjo1.error_propagation.flow_iql_research.train_fql'}
 
 
 def atomic_json(path, data):
@@ -76,7 +76,7 @@ def main():
                 if slot in used: continue
                 job=next((j for j in queue if j['id'] not in running and j['id'] not in finished),None)
                 if job is None: break
-                module=job.get('module','utils.flow_iql_research.train');assert module in MODULES
+                module=job.get('module','utils.codex.ukjo1.error_propagation.flow_iql_research.train');assert module in MODULES
                 output=root/'runs'/job['id'];output.mkdir(parents=True,exist_ok=True)
                 env=dict(os.environ,CUDA_VISIBLE_DEVICES=str(slot[0]),XLA_PYTHON_CLIENT_MEM_FRACTION='0.1',
                          OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1',MUJOCO_GL='egl',

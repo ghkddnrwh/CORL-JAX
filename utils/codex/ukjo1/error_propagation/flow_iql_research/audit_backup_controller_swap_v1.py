@@ -7,7 +7,7 @@ import pickle
 import statistics
 import time
 import numpy as np
-from utils.flow_iql_research.audit_temporal_cohort_v1 import Verifier
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_temporal_cohort_v1 import Verifier
 
 
 def episodes(row):
@@ -75,8 +75,8 @@ def main():
         assert member['step']==member['Q_updates']==step and member['V_updates']==2*step
         assert member['sha256']==plan['pins'][critic]['checkpoints'][str(step)]
         assert Path(member['checkpoint']).resolve()==(Path(job['critic_run'])/f'checkpoint_{step}.pkl').resolve()
-        assert result['evaluator_source_sha256']==plan['source_sha256']['utils/flow_iql_research/evaluate_common_actor_temporal_v1.py']
-        assert result['selector_source_sha256']==plan['source_sha256']['utils/flow_iql_research/temporal_selection_v1.py']
+        assert result['evaluator_source_sha256']==plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/evaluate_common_actor_temporal_v1.py']
+        assert result['selector_source_sha256']==plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/temporal_selection_v1.py']
         assert not result['primary_evaluations_modified']and not result['mixed_learning_state_saved_or_trained']
         valid[(critic,actor,step)]=result['success_rate']
         rows.append(dict(id=job['id'],critic=critic,BC=actor,step=step,success=result['success_rate'],result_sha256=v.digest(path)))

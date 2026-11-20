@@ -38,14 +38,14 @@ class Implementation:
 def load(module):return importlib.import_module(module)
 
 
-FLAT=Implementation('flat','utils.flow_iql_research.onestep_deploy_core_v1',
-    'utils.flow_iql_research.train_onestep_deploy_v1',
-    'utils.flow_iql_research.evaluate_onestep_deploy_v1',
-    'utils.flow_iql_research.benchmark_onestep_deploy_v1')
-SET=Implementation('set','utils.flow_iql_research.set_onestep_deploy_core_v1',
-    'utils.flow_iql_research.train_set_onestep_deploy_v1',
-    'utils.flow_iql_research.evaluate_set_onestep_deploy_v1',
-    'utils.flow_iql_research.benchmark_set_onestep_deploy_v1')
+FLAT=Implementation('flat','utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_deploy_core_v1',
+    'utils.codex.ukjo1.error_propagation.flow_iql_research.train_onestep_deploy_v1',
+    'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1',
+    'utils.codex.ukjo1.error_propagation.flow_iql_research.benchmark_onestep_deploy_v1')
+SET=Implementation('set','utils.codex.ukjo1.error_propagation.flow_iql_research.set_onestep_deploy_core_v1',
+    'utils.codex.ukjo1.error_propagation.flow_iql_research.train_set_onestep_deploy_v1',
+    'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_set_onestep_deploy_v1',
+    'utils.codex.ukjo1.error_propagation.flow_iql_research.benchmark_set_onestep_deploy_v1')
 IMPLEMENTATIONS=(FLAT,SET)
 
 

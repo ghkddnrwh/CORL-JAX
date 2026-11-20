@@ -8,7 +8,7 @@ import time
 import jax
 import jax.numpy as jnp
 import numpy as np
-from utils.flow_iql_research import standalone_mixture_actor_v1 as standalone
+from utils.codex.ukjo1.error_propagation.flow_iql_research import standalone_mixture_actor_v1 as standalone
 
 
 def main():
@@ -32,7 +32,7 @@ def main():
     assert graph.count('dot_general[')==len(meta['hidden_dims'])+1,graph
     assert 'argmax' not in graph and 'while[' not in graph and 'scan[' not in graph
     forbidden=[name for name in sys.modules if name.startswith('ogbench')
-               or name.startswith('utils.flow_iql_research.vendor') or 'onestep_deploy_core' in name]
+               or name.startswith('utils.codex.ukjo1.error_propagation.flow_iql_research.vendor') or 'onestep_deploy_core' in name]
     assert not forbidden,forbidden
     result=dict(time=time.time(),status='pass',action=action.tolist(),batch_actions=actions.tolist(),
         actor_artifact_sha256=hashlib.sha256(args.actor.read_bytes()).hexdigest(),

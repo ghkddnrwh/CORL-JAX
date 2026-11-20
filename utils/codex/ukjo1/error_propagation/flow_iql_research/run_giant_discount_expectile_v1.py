@@ -128,7 +128,7 @@ def main():
                 env.pop('JAX_PLATFORMS', None)
                 env.pop('JAX_PLATFORM_NAME', None)
                 command = ['taskset', '-c', ','.join(map(str, train_cpus[slot])), sys.executable,
-                           '-u', '-m', 'utils.flow_iql_research.train_giant_discount_expectile_v1',
+                           '-u', '-m', 'utils.codex.ukjo1.error_propagation.flow_iql_research.train_giant_discount_expectile_v1',
                            '--env', job['environment'], '--recipe', job['recipe'], '--seed', str(job['seed']),
                            '--output', str(out)]
                 log = (out/'stdout.log').open('a')
@@ -166,7 +166,7 @@ def main():
                            TF_NUM_INTRAOP_THREADS='1', TF_NUM_INTEROP_THREADS='1',
                            MUJOCO_GL='egl', PYTHONUNBUFFERED='1')
                 command = ['taskset', '-c', ','.join(map(str, eval_cpus[slot])), sys.executable,
-                           '-u', '-m', 'utils.flow_iql_research.evaluate_giant_discount_expectile_v1',
+                           '-u', '-m', 'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_giant_discount_expectile_v1',
                            '--run', str(root/'runs'/key), '--step', str(step), '--mode', mode, '--output', str(output)]
                 log = output.with_suffix('.log').open('a')
                 p = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -193,7 +193,7 @@ def main():
                       expected_training=len(plan['jobs']), expected_evaluations=expected_eval)
         atomic(state_path, status)
         if all_done or time.time()-last_analysis >= 600:
-            command = [sys.executable, '-u', '-m', 'utils.flow_iql_research.analyze_giant_discount_expectile_v1',
+            command = [sys.executable, '-u', '-m', 'utils.codex.ukjo1.error_propagation.flow_iql_research.analyze_giant_discount_expectile_v1',
                        '--root', str(root)]
             if all_done and status['phase'] == 'complete':
                 command.append('--final')

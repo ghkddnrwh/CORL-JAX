@@ -228,7 +228,7 @@ def main():
                       sample_counts=plan['sample_counts'], methods=plan['methods'], registration='registration_v2.json')
         atomic(state_path, status)
         if all_done or time.time()-last_analysis >= 600:
-            command = [sys.executable, '-u', '-m', 'utils.flow_iql_research.analyze_stability_study_v2', '--root', str(root)]
+            command = [sys.executable, '-u', '-m', 'utils.codex.ukjo1.error_propagation.flow_iql_research.analyze_stability_study_v2', '--root', str(root)]
             if complete:
                 command.append('--final')
             with (root/'analysis_stdout.log').open('a') as stream:

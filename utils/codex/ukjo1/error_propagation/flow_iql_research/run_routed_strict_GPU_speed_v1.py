@@ -75,7 +75,7 @@ def main():
         input_path=Path(plan['input_paths'][gpu]);assert input_path.exists()
         output=area/f'GPU{gpu}_strict_timings_v1.json';assert not output.exists()
         argv=['taskset','-c',f'{6*gpu}-{6*gpu+5}',sys.executable,'-u','-m',
-            'utils.flow_iql_research.benchmark_routed_mixture_isolated_v1','--input',str(input_path),'--output',str(output)]
+            'utils.codex.ukjo1.error_propagation.flow_iql_research.benchmark_routed_mixture_isolated_v1','--input',str(input_path),'--output',str(output)]
         jobs.append(dict(gpu=gpu,input=str(input_path),input_sha256=sha(input_path),output=str(output),command=argv))
     atomic(invocation,dict(time=time.time(),proposal_sha256=sha(proposal),admission_checks=checks,
         NVIDIA_TF32_OVERRIDE='0',jobs=jobs,no_training_or_result_changes=True))

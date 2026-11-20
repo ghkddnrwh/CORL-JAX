@@ -28,7 +28,7 @@ def main():
     parser.add_argument('--root', type=Path, required=True)
     args = parser.parse_args()
     root = args.root.resolve()
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = next(parent for parent in Path(__file__).resolve().parents if (parent / '.git').exists())
     old = (workspace / 'logs/diagnosis/finite_mean_target_ablation_20261105').resolve()
     giant = (workspace / 'logs/diagnosis/finite_mean_giant_gamma_tau_20261107').resolve()
     old_plan = json.loads((old / 'registration_v1.json').read_text())

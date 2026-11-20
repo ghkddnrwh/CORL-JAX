@@ -6,7 +6,7 @@ from pathlib import Path
 import statistics
 import time
 import numpy as np
-from utils.flow_iql_research.audit_temporal_cohort_v1 import Verifier
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_temporal_cohort_v1 import Verifier
 
 
 def episodes(row):
@@ -36,10 +36,10 @@ def main():
         teacher_path=folder/f'{run.name}_{step}_teacher_cpu50.json';teacher=json.loads(teacher_path.read_text());episodes(teacher)
         assert teacher['policy_mode']=='teacher'and teacher['environment']==identity['environment']and teacher['training_seed']==identity['seed']
         assert teacher['checkpoint_sha256']==cp_sha and teacher['config_sha256']==verifier.digest(run/'config.json')
-        assert teacher['evaluator_source_sha256']==verifier.digest('utils/flow_iql_research/evaluate_rank_flow_teacher_v1.py')
+        assert teacher['evaluator_source_sha256']==verifier.digest('utils/codex/ukjo1/error_propagation/flow_iql_research/evaluate_rank_flow_teacher_v1.py')
         diagnostic_path=folder/f'{run.name}_{step}_distribution.json';diagnostic=json.loads(diagnostic_path.read_text())
         assert diagnostic['checkpoint_sha256']==cp_sha and diagnostic['config_sha256']==verifier.digest(run/'config.json')
-        assert diagnostic['diagnostic_source_sha256']==verifier.digest('utils/flow_iql_research/rank_flow_policy_diagnostics_v1.py')
+        assert diagnostic['diagnostic_source_sha256']==verifier.digest('utils/codex/ukjo1/error_propagation/flow_iql_research/rank_flow_policy_diagnostics_v1.py')
         s=np.asarray(student['episode_successes']);t=np.asarray(teacher['episode_successes'])
         rows.append(dict(step=step,student_success=student['success_rate'],same_model_BC_best9_success=teacher['success_rate'],
             student_minus_reference=student['success_rate']-teacher['success_rate'],

@@ -12,14 +12,14 @@ import sys
 import time
 from types import SimpleNamespace
 
-from utils.flow_iql_research.evaluate_onestep_deploy_v1 import sha
-from utils.flow_iql_research import onestep_implementation_registry_v2 as old_registry
-from utils.flow_iql_research import onestep_implementation_registry_v3 as registry
-from utils.flow_iql_research import scheduler_onestep_deploy_v4 as old_manager
-from utils.flow_iql_research import scheduler_onestep_deploy_v5 as new_manager
-from utils.flow_iql_research.onestep_scheduling_policy_v1 import order_pending
-from utils.flow_iql_research.register_energy_onestep_v1 import build_plan
-from utils.flow_iql_research.scheduler_v4 import process_identity
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research import onestep_implementation_registry_v2 as old_registry
+from utils.codex.ukjo1.error_propagation.flow_iql_research import onestep_implementation_registry_v3 as registry
+from utils.codex.ukjo1.error_propagation.flow_iql_research import scheduler_onestep_deploy_v4 as old_manager
+from utils.codex.ukjo1.error_propagation.flow_iql_research import scheduler_onestep_deploy_v5 as new_manager
+from utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_scheduling_policy_v1 import order_pending
+from utils.codex.ukjo1.error_propagation.flow_iql_research.register_energy_onestep_v1 import build_plan
+from utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_v4 import process_identity
 
 
 def main():
@@ -38,7 +38,7 @@ def main():
         x = job['args']
         assert registry.implementation(x['recipe']) == old_registry.implementation(x['recipe'])
         assert registry.configuration(x['env'],x['recipe'],x['seed']) == plan['expected_identities'][job['id']]
-    assert new_manager.allowed_modules() == old_manager.allowed_modules() | {'utils.flow_iql_research.train_energy_onestep_v1'}
+    assert new_manager.allowed_modules() == old_manager.allowed_modules() | {'utils.codex.ukjo1.error_propagation.flow_iql_research.train_energy_onestep_v1'}
     scheduler = json.loads((root / 'scheduler_status.json').read_text())
     assert len(scheduler['running']) == 16
     for item in scheduler['running'].values():
@@ -84,7 +84,7 @@ def main():
     contract = out / 'private_contract.json'
     contract.write_text(json.dumps(dict(registration=str(registration),registration_sha256=sha(registration),
         source_sha256=private['all_source_sha256'],GPU_manager_CPU_affinity=list(range(96)),
-        GPU_scheduler_module='utils.flow_iql_research.scheduler_onestep_deploy_v5'),indent=2))
+        GPU_scheduler_module='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_onestep_deploy_v5'),indent=2))
     private_state = {k:copy.deepcopy(state[k]) for k in
         ('round','round_recipes','all_recipes','phase','tested_candidates','attempts','active_attempt')}
     private_state['round_recipes'].append('energy_bc')
@@ -102,7 +102,7 @@ def main():
             target = out / 'runs' / job['id']
             target.mkdir(parents=True)
             shutil.copyfile(root / 'runs' / job['id'] / 'config.json',target / 'config.json')
-    command = [sys.executable,'-u','-m','utils.flow_iql_research.watch_onestep_deploy_v7',str(contract)]
+    command = [sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v7',str(contract)]
     with (out / 'controller.log').open('a') as log:
         child = subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,
                                  start_new_session=True,close_fds=True)

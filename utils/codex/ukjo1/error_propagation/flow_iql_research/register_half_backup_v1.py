@@ -31,14 +31,14 @@ def main():
                                 ('cubed', 'cube-double-play-singletask-v0'),
                                 ('pz3', 'puzzle-3x3-play-singletask-v0')]:
         jobs.append(dict(id=f'heb1_{short}_bounded_v2_half_empirical_backup_g999_t90_s0',
-                         module='utils.flow_iql_research.train_half_empirical_backup_v1',
+                         module='utils.codex.ukjo1.error_propagation.flow_iql_research.train_half_empirical_backup_v1',
                          args={'env':environment, 'kind':'ifql', 'profile':'bounded_v2_half_empirical_backup',
                                'seed':0, 'discount':.999, 'expectile':.9, 'samples':9,
                                'steps':1000000, 'episodes':50}))
     plan = dict(time=time.time(), kind='uniform_half_correction_pilot_registration_before_GPU_launch',
                 correction_fraction=.5, backup_samples=9, deployment_samples=9, expectile=.9, discount=.999,
                 method='IQLV2 plus half displacement toward exact finite-target-minQ expectile; original IFQL BC policy',
-                method_note='utils/flow_iql_research/HALF_EMPIRICAL_BACKUP_METHOD.txt',
+                method_note='utils/codex/ukjo1/error_propagation/flow_iql_research/HALF_EMPIRICAL_BACKUP_METHOD.txt',
                 primary_steps=[800000, 900000, 1000000], episodes=50, first_episode_seed=42,
                 final_metric='Equal last3 mean; pilots cannot form a nine-environment mean.',
                 jobs=jobs, source_sha256=pins,

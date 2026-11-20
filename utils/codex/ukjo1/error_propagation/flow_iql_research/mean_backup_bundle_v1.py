@@ -8,7 +8,7 @@ from importlib.metadata import version
 from pathlib import Path
 import pickle
 from types import SimpleNamespace
-from utils.flow_iql_research import core
+from utils.codex.ukjo1.error_propagation.flow_iql_research import core
 import flax.serialization
 import jax
 import jax.numpy as jnp
@@ -26,8 +26,8 @@ def frameworks():return {name:version(name)for name in('jax','jaxlib','flax','op
 
 
 def inference_sources():
-    root=Path(__file__).resolve().parents[2];folder=root/'utils/flow_iql_research'
-    files=[Path(__file__).resolve(),folder/'core.py',root/'utils/propagation_research/reward_bounds.py']
+    root=next(parent for parent in Path(__file__).resolve().parents if (parent / '.git').exists());folder=root/'utils/codex/ukjo1/error_propagation/flow_iql_research'
+    files=[Path(__file__).resolve(),folder/'core.py',root/'utils/codex/ukjo1/error_propagation/propagation_research/reward_bounds.py']
     files+=sorted((folder/'vendor').glob('*.py'))
     return {str(path.relative_to(root)):sha(path)for path in files}
 
@@ -38,7 +38,7 @@ def load(path):
     assert bundle['step']==1000000 and bundle['recipe']==RECIPE
     assert set(bundle['network_params'])=={'modules_actor_flow','modules_critic'}
     assert not {'state','opt_state','replay_rng','v_opt','training_rng'}&bundle.keys()
-    root=Path(__file__).resolve().parents[2]
+    root=next(parent for parent in Path(__file__).resolve().parents if (parent / '.git').exists())
     for relative,digest in bundle['inference_source_sha256'].items():
         assert not Path(relative).is_absolute()and '..'not in Path(relative).parts
         assert sha(root/relative)==digest,relative

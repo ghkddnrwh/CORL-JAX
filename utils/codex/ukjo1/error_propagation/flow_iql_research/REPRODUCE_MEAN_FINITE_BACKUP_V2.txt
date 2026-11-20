@@ -10,10 +10,10 @@ Plain FQL/ReBRAC provided criteria .47/.44 are exceeded. DD-ReBRAC .63 is not.
 These are3fresh training replicates, not81or4050independent replicates.
 
 Implementation
-Core: utils/flow_iql_research/mean_empirical_backup_core_v1.py
-Runner: utils/flow_iql_research/train_mean_empirical_backup_v1.py
-Finite root: utils/flow_iql_research/selection_v2.py:empirical_expectile
-Official agents and architectures: utils/flow_iql_research/vendor/
+Core: utils/codex/ukjo1/error_propagation/flow_iql_research/mean_empirical_backup_core_v1.py
+Runner: utils/codex/ukjo1/error_propagation/flow_iql_research/train_mean_empirical_backup_v1.py
+Finite root: utils/codex/ukjo1/error_propagation/flow_iql_research/selection_v2.py:empirical_expectile
+Official agents and architectures: utils/codex/ukjo1/error_propagation/flow_iql_research/vendor/
 Original user algorithm files remain intact. All registered sources are frozen.
 
 At every Q update
@@ -48,7 +48,7 @@ env XLA_PYTHON_CLIENT_MEM_FRACTION=0.1 CUDA_VISIBLE_DEVICES=0 \
   OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   TF_NUM_INTRAOP_THREADS=1 TF_NUM_INTEROP_THREADS=1 MUJOCO_GL=egl \
   taskset -c 0-5 /home/ukjo1/anaconda3/envs/ogbench/bin/python -u -m \
-  utils.flow_iql_research.train_mean_empirical_backup_v1 \
+  utils.codex.ukjo1.error_propagation.flow_iql_research.train_mean_empirical_backup_v1 \
   --output NEW_OUTPUT_DIRECTORY --env antmaze-large-navigate-singletask-v0 \
   --kind ifql --profile bounded_v2_mean_empirical_backup --seed 12 \
   --discount 0.999 --expectile 0.9 --samples 9 --steps 1000000 \

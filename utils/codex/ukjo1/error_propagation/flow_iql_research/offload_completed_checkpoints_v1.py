@@ -36,7 +36,7 @@ def active_outputs():
     for command in Path('/proc').glob('[0-9]*/cmdline'):
         try:
             parts = command.read_bytes().decode().split('\0')
-            if '-m' in parts and parts[parts.index('-m') + 1].startswith('utils.flow_iql_research.train') and '--output' in parts:
+            if '-m' in parts and parts[parts.index('-m') + 1].startswith('utils.codex.ukjo1.error_propagation.flow_iql_research.train') and '--output' in parts:
                 outputs.add(Path(parts[parts.index('--output') + 1]).resolve())
         except (OSError, UnicodeError, ValueError, IndexError):
             continue

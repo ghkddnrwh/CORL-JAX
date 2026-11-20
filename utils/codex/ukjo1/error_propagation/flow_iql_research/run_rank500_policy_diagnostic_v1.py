@@ -27,7 +27,7 @@ def main():
         for slot in range(2):
             if slot in occupied or not queue:continue
             job=queue.pop(0);command=['taskset','-c',','.join(map(str,slots[slot])),sys.executable,'-u','-m',
-                'utils.flow_iql_research.evaluate_rank_flow_teacher_v2',job['run'],'--step','500000',
+                'utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_rank_flow_teacher_v2',job['run'],'--step','500000',
                 '--checkpoint',job['checkpoint'],'--mode',job['mode'],'--episodes','50','--output',job['output']]
             log=(out/(job['id']+'.log')).open('a');env=dict(os.environ,CUDA_VISIBLE_DEVICES='',OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1',MUJOCO_GL='egl',PYTHONUNBUFFERED='1')
             process=subprocess.Popen(command,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)

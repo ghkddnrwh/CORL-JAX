@@ -18,17 +18,17 @@ import subprocess
 import sys
 import time
 import numpy as np
-from utils.flow_iql_research import onestep_deploy_core_v1 as core
-from utils.flow_iql_research.routed_policy_registry_v1 import (
+from utils.codex.ukjo1.error_propagation.flow_iql_research import onestep_deploy_core_v1 as core
+from utils.codex.ukjo1.error_propagation.flow_iql_research.routed_policy_registry_v1 import (
     implementation, specification, configuration, config_for, training_sources, SET_RECIPES,
     order_pending,training_recipe,POLICY,NATIVE,MODE)
-from utils.flow_iql_research.onestep_scheduling_policy_v1 import discovery_confirmation
-from utils.flow_iql_research.routed_policy_verifier_v1 import PolicyVerifier,derived_rows,actor_path
-from utils.flow_iql_research.evaluate_onestep_deploy_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_scheduling_policy_v1 import discovery_confirmation
+from utils.codex.ukjo1.error_propagation.flow_iql_research.routed_policy_verifier_v1 import PolicyVerifier,derived_rows,actor_path
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1 import sha
 
 
-from utils.flow_iql_research.discovery_bound_policy_v1 import empirical_bound
-from utils.flow_iql_research.routed_policy_registry_v1 import preferred_candidate
+from utils.codex.ukjo1.error_propagation.flow_iql_research.discovery_bound_policy_v1 import empirical_bound
+from utils.codex.ukjo1.error_propagation.flow_iql_research.routed_policy_registry_v1 import preferred_candidate
 
 STEPS=(800000,900000,1000000)
 
@@ -212,7 +212,7 @@ def main():
     assert plan['GPU_slots_per_device']==8 and float(plan['memory_fraction'])==.1
     assert set(plan['implementation_training_source_sha256'])=={'flat','set','mean_teacher','energy','mixture','latent','latent_guided'}
     assert plan['scheduling_amendment']['performance_gates_unchanged'] is True
-    assert contract['GPU_scheduler_module']=='utils.flow_iql_research.scheduler_onestep_deploy_v7'
+    assert contract['GPU_scheduler_module']=='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_onestep_deploy_v7'
     output=root/'analysis/onestep_pipeline_v1';output.mkdir(exist_ok=True)
     lock=(output/'controller.lock').open('a');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     evdir=root/'analysis/evaluations_v1';evdir.mkdir(exist_ok=True);receipts=output/'registrations';receipts.mkdir(exist_ok=True)

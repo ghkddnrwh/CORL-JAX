@@ -4,8 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 import time
-from utils.flow_iql_research import onestep_deploy_core_v1 as core
-from utils.flow_iql_research import train_onestep_deploy_v1 as runner
+from utils.codex.ukjo1.error_propagation.flow_iql_research import onestep_deploy_core_v1 as core
+from utils.codex.ukjo1.error_propagation.flow_iql_research import train_onestep_deploy_v1 as runner
 
 
 SECOND_ROUND=(
@@ -38,7 +38,7 @@ def main():
             for environment in environments:
                 tag='ant' if environment==pilots[0] else 'cubed' if environment==pilots[1] else 'hmmed'
                 rid=f'os1_{tag}_{recipe}_s0'
-                job=dict(id=rid,module='utils.flow_iql_research.train_onestep_deploy_v1',args=dict(env=environment,recipe=recipe,seed=0,steps=1000000))
+                job=dict(id=rid,module='utils.codex.ukjo1.error_propagation.flow_iql_research.train_onestep_deploy_v1',args=dict(env=environment,recipe=recipe,seed=0,steps=1000000))
                 jobs.append(job);identities[rid]=runner.configuration(environment,recipe,0)
     assert len(jobs)==48 and len({j['id']for j in jobs})==48
     training={str(path):sha(path)for path in core.source_paths()+[Path(runner.__file__).resolve()]}

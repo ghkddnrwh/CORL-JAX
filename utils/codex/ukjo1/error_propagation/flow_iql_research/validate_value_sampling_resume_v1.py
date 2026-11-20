@@ -7,8 +7,8 @@ import pickle
 import subprocess
 import sys
 import time
-from utils.flow_iql_research import core
-from utils.flow_iql_research.audit_temporal_cohort_v1 import Verifier
+from utils.codex.ukjo1.error_propagation.flow_iql_research import core
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_temporal_cohort_v1 import Verifier
 import numpy as np
 
 
@@ -23,9 +23,9 @@ def identical(a,b):
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--output',type=Path,required=True);args=parser.parse_args()
     out=args.output.resolve();out.mkdir(exist_ok=False);v=Verifier()
-    sources={p:v.digest(p) for p in ('utils/flow_iql_research/train_value_sampling_v1.py',
-        'utils/flow_iql_research/value_sampling_core_v1.py',__file__)}
-    base=[sys.executable,'-u','-m','utils.flow_iql_research.train_value_sampling_v1',
+    sources={p:v.digest(p) for p in ('utils/codex/ukjo1/error_propagation/flow_iql_research/train_value_sampling_v1.py',
+        'utils/codex/ukjo1/error_propagation/flow_iql_research/value_sampling_core_v1.py',__file__)}
+    base=[sys.executable,'-u','-m','utils.codex.ukjo1.error_propagation.flow_iql_research.train_value_sampling_v1',
         '--env','puzzle-3x3-play-singletask-v0','--kind','ifql','--profile','bounded_v2_fresh_batches',
         '--seed','3','--discount','0.999','--expectile','0.9','--samples','9','--steps','1000000',
         '--episodes','50','--train-device','cpu','--chunk','2','--aux-eval-steps','']

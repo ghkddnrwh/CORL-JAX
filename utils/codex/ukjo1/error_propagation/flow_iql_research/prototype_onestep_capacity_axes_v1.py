@@ -15,8 +15,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from utils.flow_iql_research import onestep_deploy_core_v1 as core
-from utils.flow_iql_research.energy_onestep_deploy_core_v1 import norm
+from utils.codex.ukjo1.error_propagation.flow_iql_research import onestep_deploy_core_v1 as core
+from utils.codex.ukjo1.error_propagation.flow_iql_research.energy_onestep_deploy_core_v1 import norm
 
 
 RECIPES=('bank_bc','bank_bc__d6','bank_bc__w2','bank_bc__ln')

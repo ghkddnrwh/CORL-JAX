@@ -3,8 +3,8 @@ import argparse
 import json
 from pathlib import Path
 import time
-from utils.flow_iql_research.evaluate_onestep_deploy_v1 import sha
-from utils.flow_iql_research import onestep_deploy_core_v1 as core
+from utils.codex.ukjo1.error_propagation.flow_iql_research.evaluate_onestep_deploy_v1 import sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research import onestep_deploy_core_v1 as core
 
 
 def main():
@@ -56,7 +56,7 @@ def main():
     plan['implementation_extension']['queue_policy']='Original48 definitions retained; pending scheduling follows the explicit V3 scheduling amendment. Six set recipes remain in the registered next adaptive round.'
     args.registration.write_text(json.dumps(plan,indent=2,allow_nan=False))
     contract=dict(old_contract,registration=str(args.registration.resolve()),registration_sha256=sha(args.registration),
-        source_sha256=sources,GPU_scheduler_module='utils.flow_iql_research.scheduler_onestep_deploy_v3',
+        source_sha256=sources,GPU_scheduler_module='utils.codex.ukjo1.error_propagation.flow_iql_research.scheduler_onestep_deploy_v3',
         scheduling_amendment=amendment)
     args.contract.write_text(json.dumps(contract,indent=2,allow_nan=False))
     print(json.dumps(dict(registration=str(args.registration),registration_sha256=sha(args.registration),

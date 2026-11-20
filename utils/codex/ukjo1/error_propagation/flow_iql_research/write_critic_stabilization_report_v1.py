@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 import time
 
-from utils.flow_iql_research.critic_stabilization_experiment_v1 import load_plan
-from utils.flow_iql_research.diagnose_sample_budget_components_v1 import atomic,sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.critic_stabilization_experiment_v1 import load_plan
+from utils.codex.ukjo1.error_propagation.flow_iql_research.diagnose_sample_budget_components_v1 import atomic,sha
 
 
 def run(path):
@@ -120,9 +120,9 @@ def run(path):
         '평가 episode를 학습 시드의 독립 반복으로 세지 않는다. '
         'gamma, 유한 표본 target 실현, 생성 행동에 대한 Q 일반화의 근본적 역할은 이번에 분리하지 않았다.',
         '', '재집계:',
-        'python -m utils.flow_iql_research.rescore_critic_stabilization_rankings_v1 --plan REGISTRATION --require-complete',
-        'python -m utils.flow_iql_research.analyze_critic_stabilization_v2 --plan REGISTRATION --require-complete',
-        'python -m utils.flow_iql_research.summarize_critic_stabilization_selectors_v1 --plan REGISTRATION',
+        'python -m utils.codex.ukjo1.error_propagation.flow_iql_research.rescore_critic_stabilization_rankings_v1 --plan REGISTRATION --require-complete',
+        'python -m utils.codex.ukjo1.error_propagation.flow_iql_research.analyze_critic_stabilization_v2 --plan REGISTRATION --require-complete',
+        'python -m utils.codex.ukjo1.error_propagation.flow_iql_research.summarize_critic_stabilization_selectors_v1 --plan REGISTRATION',
         'REGISTRATION = '+str(path), '']
     report=root/'analysis/FINDINGS_KO_v1.txt'
     report.write_text('\n'.join(lines))

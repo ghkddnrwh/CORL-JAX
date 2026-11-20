@@ -6,7 +6,7 @@ from pathlib import Path
 import pickle
 import time
 import numpy as np
-from utils.flow_iql_research.audit_gaussian_factorial_v1 import finite
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_gaussian_factorial_v1 import finite
 
 
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()

@@ -4,7 +4,7 @@ Enumerate mixture components only in TRAINING. All components use the same
 Gaussian draw to reduce variance. The decoder is frozen for the Q term;
 only selector parameters receive policy-improvement gradients.
 """
-from utils.flow_iql_research import orderstat_latent_actor_v1 as order
+from utils.codex.ukjo1.error_propagation.flow_iql_research import orderstat_latent_actor_v1 as order
 import jax
 import jax.numpy as jnp
 

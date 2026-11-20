@@ -5,8 +5,8 @@ one global alpha. Q guidance updates the selector only, through the frozen
 one-step decoder; no Flow BPTT, actor bootstrap or independent critic is added.
 """
 from pathlib import Path
-from utils.flow_iql_research import latent_selector_onestep_core_v1 as parent
-from utils.flow_iql_research import latent_order_guidance_v1 as guidance
+from utils.codex.ukjo1.error_propagation.flow_iql_research import latent_selector_onestep_core_v1 as parent
+from utils.codex.ukjo1.error_propagation.flow_iql_research import latent_order_guidance_v1 as guidance
 import jax
 
 

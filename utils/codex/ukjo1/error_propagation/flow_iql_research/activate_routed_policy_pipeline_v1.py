@@ -6,7 +6,7 @@ import signal
 import subprocess
 import sys
 import time
-from utils.flow_iql_research.activate_mixture_full9_prefetch_v1 import identity,atomic,sha
+from utils.codex.ukjo1.error_propagation.flow_iql_research.activate_mixture_full9_prefetch_v1 import identity,atomic,sha
 
 
 def stop_owned_parent(handle,module):
@@ -31,7 +31,7 @@ def main():
     assert Path(c['analysis_contract'])==root/'analysis/execution_contract_v19.json'
     owner=c['analysis_controller'];assert identity(owner['pid'])==owner['process_identity']
     command=Path(f'/proc/{owner["pid"]}/cmdline').read_text().split('\0')
-    assert 'utils.flow_iql_research.watch_onestep_deploy_v10' in command
+    assert 'utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v10' in command
     env=dict(x.split('=',1) for x in Path(f'/proc/{owner["pid"]}/environ').read_text().split('\0') if '=' in x)
     before=area/'activation_before_v1.json';assert not before.exists()
     atomic(before,dict(time=time.time(),old_CPU_owner=owner,scheduler=c['scheduler'],gradient=c['gradient_controller'],
@@ -39,8 +39,8 @@ def main():
         research_state=json.loads((root/'analysis/onestep_pipeline_v1/research_state.json').read_text()),
         new_registration_sha256=sha(target),no_learner_evaluator_or_gradient_producer_signals=True,
         all_142_job_definitions_and_identities_preserved=True))
-    stop_owned_parent(owner,'utils.flow_iql_research.watch_onestep_deploy_v10')
-    argv=['utils.flow_iql_research.watch_onestep_deploy_v11' if x=='utils.flow_iql_research.watch_onestep_deploy_v10' else x for x in owner['command']]
+    stop_owned_parent(owner,'utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v10')
+    argv=['utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v11' if x=='utils.codex.ukjo1.error_propagation.flow_iql_research.watch_onestep_deploy_v10' else x for x in owner['command']]
     argv[-1]=str(contract)
     with (area/'CPU_controller_activation_v1.log').open('a') as log:
         child=subprocess.Popen(argv,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,
@@ -58,7 +58,7 @@ def main():
     retirement=area/'legacy_idle_CPU_observer_retirement_v1.json'
     atomic(retirement,dict(time=time.time(),previous_handle=h,previous_state=state,
         no_children_or_GPU_jobs=True,reason='Its planned seeds21..23 remain unspent. Production policy-specific attempt4 reserves fresh24..26 before any allocation.'))
-    stop_owned_parent(h,'utils.flow_iql_research.watch_mixture_location_fresh_CPU_v1')
+    stop_owned_parent(h,'utils.codex.ukjo1.error_propagation.flow_iql_research.watch_mixture_location_fresh_CPU_v1')
     c.update(time=time.time(),analysis_controller=handle,previous_routed_policy_controller=owner,
         analysis_contract=str(contract),registration_sha256=sha(target),authoritative_registration=str(target),
         routed_policy_pipeline=dict(status='activated_await_root_adoption_audit',registration=str(target),

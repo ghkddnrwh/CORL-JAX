@@ -8,8 +8,8 @@ import statistics
 import subprocess
 import sys
 import time
-from utils.flow_iql_research import core
-from utils.flow_iql_research.audit_temporal_cohort_v1 import Verifier
+from utils.codex.ukjo1.error_propagation.flow_iql_research import core
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_temporal_cohort_v1 import Verifier
 
 
 def atomic(path,value):
@@ -23,7 +23,7 @@ def audit(plan,job,verifier):
     assert result['run']==run.name and result['environment']==identity['environment'] and result['learner_seed']==identity['seed']
     assert result['step']==1000000 and result['initial_V_Adam_count']==2000000
     assert result['kind']=='frozen_Q_value_sampling_equal_optimizer_budget_CPU_diagnostic'
-    assert result['source_sha256']==plan['source_sha256']['utils/flow_iql_research/frozen_value_sampling_v1.py']
+    assert result['source_sha256']==plan['source_sha256']['utils/codex/ukjo1/error_propagation/flow_iql_research/frozen_value_sampling_v1.py']
     assert result['checkpoint_sha256']==job['checkpoint_sha256']==verifier.checkpoint(run/'checkpoint_1000000.pkl',config,1000000)
     assert result['config_sha256']==job['config_sha256']==verifier.digest(run/'config.json')
     assert result['prior_repeated_fit_agreement'] is not None
@@ -65,7 +65,7 @@ def main():
             job=queue.pop(0)
             for path,digest in plan['source_sha256'].items():assert verifier.digest(path)==digest,path
             command=['taskset','-c',','.join(map(str,slots[slot])),sys.executable,'-u','-m',
-                'utils.flow_iql_research.frozen_value_sampling_v1',job['run'],'--step','1000000','--output',job['output']]
+                'utils.codex.ukjo1.error_propagation.flow_iql_research.frozen_value_sampling_v1',job['run'],'--step','1000000','--output',job['output']]
             log=(out/(job['id']+'.log')).open('w');process=subprocess.Popen(command,env=environment,
                 stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)
             running[job['id']]=dict(process=process,job=job,log=log,slot=slot,

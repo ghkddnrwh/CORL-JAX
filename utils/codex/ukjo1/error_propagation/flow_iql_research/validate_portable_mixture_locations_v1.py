@@ -6,8 +6,8 @@ from pathlib import Path
 import pickle
 import sys
 import time
-from utils.flow_iql_research import standalone_mixture_location_actor_v1 as portable
-from utils.flow_iql_research import lazy_mixture_location_actor_v1 as lazy
+from utils.codex.ukjo1.error_propagation.flow_iql_research import standalone_mixture_location_actor_v1 as portable
+from utils.codex.ukjo1.error_propagation.flow_iql_research import lazy_mixture_location_actor_v1 as lazy
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -20,8 +20,8 @@ def sha(path):
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--actors',nargs='+',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True);a=p.parse_args();assert not a.output.exists()
-    forbidden=('flax','optax','ogbench','utils.flow_iql_research.vendor.flax_utils',
-               'utils.flow_iql_research.onestep_deploy_core_v1')
+    forbidden=('flax','optax','ogbench','utils.codex.ukjo1.error_propagation.flow_iql_research.vendor.flax_utils',
+               'utils.codex.ukjo1.error_propagation.flow_iql_research.onestep_deploy_core_v1')
     assert all(x not in sys.modules for x in forbidden)
     assert all(d.platform=='cpu' for d in jax.devices())
     rows=[]

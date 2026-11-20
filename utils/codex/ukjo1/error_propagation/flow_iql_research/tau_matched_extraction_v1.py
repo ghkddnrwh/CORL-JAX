@@ -92,8 +92,8 @@ def primary_record(run, step):
 
 def evaluate(plan, run_id, step, output):
     # Import the compatibility shim before Flax/JAX's upstream dependencies.
-    from utils.flow_iql_research import policy_core, train_policy_v2, tau_matched_selection_v1
-    from utils.propagation_research.seeded_reset import prepare_seeded_action_space
+    from utils.codex.ukjo1.error_propagation.flow_iql_research import policy_core, train_policy_v2, tau_matched_selection_v1
+    from utils.codex.ukjo1.error_propagation.propagation_research.seeded_reset import prepare_seeded_action_space
     import flax.serialization
     import jax
     import jax.numpy as jnp
@@ -198,7 +198,7 @@ def controller(plan, registration):
                 continue
             key,run_id,step,target = ready.pop(0); logpath = output/(key+'.log'); log = logpath.open('a')
             command = ['taskset','-c',','.join(map(str,cpus)),sys.executable,'-u','-m',
-                'utils.flow_iql_research.tau_matched_extraction_v1',str(registration),
+                'utils.codex.ukjo1.error_propagation.flow_iql_research.tau_matched_extraction_v1',str(registration),
                 '--evaluate',run_id,'--step',str(step),'--output',str(target)]
             proc = subprocess.Popen(command,env=environment,stdin=subprocess.DEVNULL,stdout=log,
                 stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)

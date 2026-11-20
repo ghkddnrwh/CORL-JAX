@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 import pickle
 import time
-from utils.flow_iql_research import core,policy_core,value_sampling_core_v1 as changed
-from utils.flow_iql_research.audit_temporal_cohort_v1 import Verifier
+from utils.codex.ukjo1.error_propagation.flow_iql_research import core,policy_core,value_sampling_core_v1 as changed
+from utils.codex.ukjo1.error_propagation.flow_iql_research.audit_temporal_cohort_v1 import Verifier
 import flax.serialization
 import jax
 import jax.numpy as jnp
@@ -67,7 +67,7 @@ def main():
         trace.append(dict(extra_joint_updates=index+1,checks=checks,all_BC_parameters_exact=True,all_learner_RNGs_exact=True))
     result=dict(time=time.time(),status='passed',actual_source_checkpoint_sha256=cp_sha,
         run=run.name,trace=trace,config_sha256=verifier.digest(run/'config.json'),
-        source_sha256={str(p):verifier.digest(p)for p in (Path(__file__),Path(changed.__file__),Path('utils/flow_iql_research/train_value_sampling_v1.py'))},
+        source_sha256={str(p):verifier.digest(p)for p in (Path(__file__),Path(changed.__file__),Path('utils/codex/ukjo1/error_propagation/flow_iql_research/train_value_sampling_v1.py'))},
         limits=['CPU arithmetic on one actual1Mmodel; no claim of GPU bitwise equality or policy improvement.',
             'Resumable runner and private replay-stream state require a separate end-to-end check.'],
         new_benchmark_evaluations=0,new_GPU_training=0,goal_complete=False)

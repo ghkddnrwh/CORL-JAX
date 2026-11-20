@@ -34,7 +34,7 @@ def main():
                 if slot in occupied or not ready:continue
                 job=ready.pop(0);log=(out/(job['id']+'.log')).open('a')
                 command=['taskset','-c',','.join(map(str,slots[slot])),sys.executable,'-u','-m',
-                         'utils.flow_iql_research.terminal_boundary_snapshot_v1',job['run'],'--step',str(job['step']),
+                         'utils.codex.ukjo1.error_propagation.flow_iql_research.terminal_boundary_snapshot_v1',job['run'],'--step',str(job['step']),
                          '--output',job['output']]
                 env=dict(os.environ,CUDA_VISIBLE_DEVICES='',OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1',MUJOCO_GL='egl',PYTHONUNBUFFERED='1')
                 process=subprocess.Popen(command,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,close_fds=True)

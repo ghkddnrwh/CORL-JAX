@@ -1,0 +1,295 @@
+{
+  "pid": 2804450,
+  "birth": "346559222",
+  "time": 1795146085.7981582,
+  "phase": "running",
+  "running": {
+    "stab1_aml_critic_batch1024_s0": {
+      "pid": 2804451,
+      "birth": "346559228",
+      "gpu": 0,
+      "slot": [
+        0,
+        0
+      ],
+      "started": 1795143579.190669
+    },
+    "stab1_hmm_critic_batch1024_s0": {
+      "pid": 2804452,
+      "birth": "346559228",
+      "gpu": 1,
+      "slot": [
+        1,
+        0
+      ],
+      "started": 1795143579.191847
+    },
+    "stab1_cube2_critic_batch1024_s0": {
+      "pid": 2804453,
+      "birth": "346559228",
+      "gpu": 0,
+      "slot": [
+        0,
+        1
+      ],
+      "started": 1795143579.1928282
+    },
+    "stab1_puzzle4_critic_batch1024_s0": {
+      "pid": 2804454,
+      "birth": "346559228",
+      "gpu": 1,
+      "slot": [
+        1,
+        1
+      ],
+      "started": 1795143579.1941917
+    },
+    "stab1_aml_critic_batch1024_s1": {
+      "pid": 2804455,
+      "birth": "346559228",
+      "gpu": 0,
+      "slot": [
+        0,
+        2
+      ],
+      "started": 1795143579.1952484
+    },
+    "stab1_hmm_critic_batch1024_s1": {
+      "pid": 2804456,
+      "birth": "346559228",
+      "gpu": 1,
+      "slot": [
+        1,
+        2
+      ],
+      "started": 1795143579.1962743
+    },
+    "stab1_cube2_critic_batch1024_s1": {
+      "pid": 2804457,
+      "birth": "346559228",
+      "gpu": 0,
+      "slot": [
+        0,
+        3
+      ],
+      "started": 1795143579.1973825
+    },
+    "stab1_puzzle4_critic_batch1024_s1": {
+      "pid": 2804458,
+      "birth": "346559229",
+      "gpu": 1,
+      "slot": [
+        1,
+        3
+      ],
+      "started": 1795143579.1984231
+    },
+    "stab1_cube2_control_s2": {
+      "pid": 2804459,
+      "birth": "346559229",
+      "gpu": 0,
+      "slot": [
+        0,
+        4
+      ],
+      "started": 1795143579.1994634
+    },
+    "stab1_aml_critic_batch1024_s2": {
+      "pid": 2804460,
+      "birth": "346559229",
+      "gpu": 1,
+      "slot": [
+        1,
+        4
+      ],
+      "started": 1795143579.2004912
+    },
+    "stab1_hmm_critic_batch1024_s2": {
+      "pid": 2804461,
+      "birth": "346559229",
+      "gpu": 0,
+      "slot": [
+        0,
+        5
+      ],
+      "started": 1795143579.2015562
+    },
+    "stab1_cube2_critic_batch1024_s2": {
+      "pid": 2804462,
+      "birth": "346559229",
+      "gpu": 1,
+      "slot": [
+        1,
+        5
+      ],
+      "started": 1795143579.202777
+    },
+    "stab1_puzzle4_critic_batch1024_s2": {
+      "pid": 2804463,
+      "birth": "346559229",
+      "gpu": 0,
+      "slot": [
+        0,
+        6
+      ],
+      "started": 1795143579.2041965
+    },
+    "stab1_aml_control_s3": {
+      "pid": 2804464,
+      "birth": "346559229",
+      "gpu": 1,
+      "slot": [
+        1,
+        6
+      ],
+      "started": 1795143579.2052789
+    },
+    "stab1_hmm_control_s3": {
+      "pid": 2804465,
+      "birth": "346559229",
+      "gpu": 0,
+      "slot": [
+        0,
+        7
+      ],
+      "started": 1795143579.2064486
+    },
+    "stab1_cube2_control_s3": {
+      "pid": 2804466,
+      "birth": "346559229",
+      "gpu": 1,
+      "slot": [
+        1,
+        7
+      ],
+      "started": 1795143579.207658
+    }
+  },
+  "evaluating": {},
+  "pending": [
+    "stab1_puzzle4_control_s3",
+    "stab1_aml_critic_batch1024_s3",
+    "stab1_hmm_critic_batch1024_s3",
+    "stab1_cube2_critic_batch1024_s3",
+    "stab1_puzzle4_critic_batch1024_s3",
+    "stab1_aml_control_s4",
+    "stab1_hmm_control_s4",
+    "stab1_cube2_control_s4",
+    "stab1_puzzle4_control_s4",
+    "stab1_aml_critic_batch1024_s4",
+    "stab1_hmm_critic_batch1024_s4",
+    "stab1_cube2_critic_batch1024_s4",
+    "stab1_puzzle4_critic_batch1024_s4"
+  ],
+  "finished": {},
+  "evaluation_finished": {
+    "stab1_cube2_critic_batch1024_s0:300000:actor": {
+      "result": "complete",
+      "exit_code": 0,
+      "time": 1795126967.4323168
+    },
+    "stab1_cube2_critic_batch1024_s0:300000:lean": {
+      "result": "complete",
+      "exit_code": 0,
+      "time": 1795126977.6490862
+    },
+    "stab1_puzzle4_critic_batch1024_s0:300000:actor": {
+      "result": "complete",
+      "exit_code": 0,
+      "time": 1795127323.4023683
+    },
+    "stab1_puzzle4_critic_batch1024_s0:300000:lean": {
+      "result": "complete",
+      "exit_code": 0,
+      "time": 1795127333.61633
+    },
+    "stab1_cube2_critic_batch1024_s0:500000:actor": {
+      "result": "complete",
+      "exit_code": 0,
+      "time": 1795138520.6783066
+    },
+    "stab1_cube2_critic_batch1024_s0:500000:lean": {
+      "result": "complete",
+      "exit_code": 0,
+      "time": 1795138532.913307
+    },
+    "stab1_puzzle4_critic_batch1024_s0:500000:actor": {
+      "result": "complete",
+      "exit_code": 0,
+      "time": 1795139136.0567803
+    },
+    "stab1_puzzle4_critic_batch1024_s0:500000:lean": {
+      "result": "complete",
+      "exit_code": 0,
+      "time": 1795139142.1843982
+    },
+    "stab1_aml_critic_batch1024_s0:300000:actor": {
+      "result": "complete",
+      "exit_code": 0,
+      "time": 1795141709.9579968
+    },
+    "stab1_aml_critic_batch1024_s0:300000:lean": {
+      "result": "complete",
+      "exit_code": 0,
+      "time": 1795141736.5123348
+    }
+  },
+  "attempts": {
+    "stab1_aml_critic_batch1024_s0": 1,
+    "stab1_hmm_critic_batch1024_s0": 1,
+    "stab1_cube2_critic_batch1024_s0": 1,
+    "stab1_puzzle4_critic_batch1024_s0": 1,
+    "stab1_aml_critic_batch1024_s1": 1,
+    "stab1_hmm_critic_batch1024_s1": 1,
+    "stab1_cube2_critic_batch1024_s1": 1,
+    "stab1_puzzle4_critic_batch1024_s1": 1,
+    "stab1_cube2_control_s2": 1,
+    "stab1_aml_critic_batch1024_s2": 1,
+    "stab1_hmm_critic_batch1024_s2": 1,
+    "stab1_cube2_critic_batch1024_s2": 1,
+    "stab1_puzzle4_critic_batch1024_s2": 1,
+    "stab1_aml_control_s3": 1,
+    "stab1_hmm_control_s3": 1,
+    "stab1_cube2_control_s3": 1
+  },
+  "evaluation_attempts": {
+    "stab1_cube2_critic_batch1024_s0:300000:lean": 1,
+    "stab1_cube2_critic_batch1024_s0:300000:actor": 1,
+    "stab1_puzzle4_critic_batch1024_s0:300000:lean": 1,
+    "stab1_puzzle4_critic_batch1024_s0:300000:actor": 1,
+    "stab1_cube2_critic_batch1024_s0:500000:lean": 1,
+    "stab1_cube2_critic_batch1024_s0:500000:actor": 1,
+    "stab1_puzzle4_critic_batch1024_s0:500000:lean": 1,
+    "stab1_puzzle4_critic_batch1024_s0:500000:actor": 1,
+    "stab1_aml_critic_batch1024_s0:300000:lean": 1,
+    "stab1_aml_critic_batch1024_s0:300000:actor": 1
+  },
+  "retry_history": [],
+  "training_complete": 0,
+  "expected_training": 29,
+  "evaluations_complete": 10,
+  "expected_evaluations": 348,
+  "reused_training": 11,
+  "total_requested_cells": 40,
+  "training_seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "environments": [
+    "antmaze-large-navigate-singletask-v0",
+    "humanoidmaze-medium-navigate-singletask-v0",
+    "cube-double-play-singletask-v0",
+    "puzzle-4x4-play-singletask-v0"
+  ],
+  "sample_counts": [
+    9
+  ],
+  "methods": [
+    "control",
+    "critic_batch1024"
+  ],
+  "registration": "registration_v3.json"
+}

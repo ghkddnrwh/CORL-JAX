@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import pickle
 import time
-from utils.flow_iql_research import core, policy_core
+from utils.codex.ukjo1.error_propagation.flow_iql_research import core, policy_core
 import flax.serialization
 import jax
 import jax.numpy as jnp
@@ -16,7 +16,7 @@ def main():
     source=Path('algorithms/uk_offline/basic/propagation/fql')
     vendor=Path(core.__file__).parent/'vendor'
     for name in json.loads((vendor/'provenance.json').read_text()):
-        expected=(source/name).read_text().replace('from utils.','from utils.flow_iql_research.vendor.')
+        expected=(source/name).read_text().replace('from utils.','from utils.codex.ukjo1.error_propagation.flow_iql_research.vendor.')
         if name.startswith('agents/'):
             expected=expected.replace("network_params = network_def.init(init_rng, **network_args)['params']", "network_params = flax.core.unfreeze(network_def.init(init_rng, **network_args)['params'])")
         assert expected==(vendor/Path(name).name).read_text(),name
