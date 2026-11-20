@@ -1,0 +1,7 @@
+# Generated reports, frozen run sources, and migration inventories stay on disk.
+reports/
+source_snapshots/
+__pycache__/
+**/__pycache__/
+migration_20261120/files_before.json
+migration_20261120/path_moves.json

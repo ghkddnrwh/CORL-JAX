@@ -1,0 +1,59 @@
+오차 전파 / Finite-mean 연구 자료 위치 (2026-11-20 이동)
+
+범위 정정: 이 대화에서 수행한 Error propagation 연구 자료만 포함한다.
+별도로 진행한 ICLR tabular/rebuttal 자료는 원래 위치로 복구했다.
+
+코드와 문서: utils/codex/ukjo1/error_propagation/
+  flow_iql_research/       Finite-mean, FQL, actor, 표본 수/할인율/안정화 실험
+  propagation_research/    초기 IQL 오차 전파 실험과 분석 도구
+  diagnostics/            연구 전용 iql_residual_control 구현
+  reports/                분석 결과, 표, 그림, 보고서
+  source_snapshots/       각 run이 기록한 실행 소스 사본
+  migration_20261120/     이동 목록, 원본 파일 검증, 재개 기록
+
+학습 로그: logs/codex/ukjo1/error_propagation/
+  diagnosis/              Finite-mean/FQL 및 IQL 전파 연구 run/evaluation
+  checkpoint_objects/     외부 디스크에 보관된 과거 체크포인트
+
+원래 위치로 복구한 별도 자료:
+  utils/iclr2027_dd_iql/ 및 logs/iclr2027_dd_iql/ 전체
+  logs/iclr2027/ 및 logs/diagnosis/basic/의 기존 공용 로그
+  algorithms/uk_offline/diagnostics/iql_propagation_diagnostics.py
+  algorithms/uk_offline/basic/propagation/의 기존 논문/발표/참고 저장소
+  codex.txt
+ICLR 파일에 적용했던 경로 수정 13개도 원본으로 되돌렸다.
+
+현재 실행 범위:
+  diagnosis/finite_mean_stability_4task_20261120_v1/registration_v3.json
+  control 및 critic_batch1024, 네 환경, seed 0/1/2/3/4.
+  EMA 감소와 DR3는 취소 상태를 유지한다.
+  신규 29 run + 완료된 기준선 11개 재사용.
+  GPU 0/1에 각각 8개 작업, 종료 시 자동으로 다음 작업 실행.
+
+현재 관리기 재시작 (저장된 체크포인트에서 자동 재개):
+  /home/ukjo1/anaconda3/envs/ogbench/bin/python -u -m \
+    utils.codex.ukjo1.error_propagation.flow_iql_research.supervise_stability_study_v3 \
+    --root logs/codex/ukjo1/error_propagation/diagnosis/finite_mean_stability_4task_20261120_v1
+
+현재 집계:
+  /home/ukjo1/anaconda3/envs/ogbench/bin/python -m \
+    utils.codex.ukjo1.error_propagation.flow_iql_research.analyze_stability_study_v3 \
+    --root logs/codex/ukjo1/error_propagation/diagnosis/finite_mean_stability_4task_20261120_v1
+
+기존 경로에는 호환 링크를 남겼다. 예전 명령, 절대 경로가 기록된 JSON,
+문서, 코드 import가 새 파일을 가리킨다. 외부 디스크 자료는 같은 디스크에서
+/data/sda2/ukjo1/codex/error_propagation/ 아래로 옮겼으며 위 두 폴더에서 접근한다.
+공용 algorithms/의 IQL/FQL/ReBRAC 및 공용 hyperparams/는 기존 위치를 유지한다.
+
+최초 이동 전후 61,942개 파일의 inode, 크기, mtime과 코드/문서 SHA를 대조했다.
+이 최초 수에는 범위를 잘못 잡아 포함한 ICLR 자료도 들어 있으며 현재 범위의
+파일 수를 뜻하지 않는다. 복구 상세는 migration_20261120/scope_correction.json에 있다.
+Error propagation 도구 두 개의 루트 탐색 수정은 새 위치에서 실행하기 위해 유지한다.
+현재 학습 코드의 바이트와 수학적 연산은 변경하지 않았다.
+
+활성 run의 config/checkpoint/actor/evaluation에는 새 소스 경로 및 이에 따르는
+무결성 해시만 반영했다. 모델, optimizer, 난수 상태와 평가 점수는 그대로다.
+변경 전 원본은 현재 실험 로그의 migration_backup_20261120/에 보존했다.
+장기 실행 네 개는 310K/270K/580K/570K 체크포인트에서 이어간다.
+새 실행 열두 개는 첫 10K 저장 전 중단되어 동일 seed로 처음부터 재시작한다.
+해당 실행의 중간 로그는 migration_backup_20261120/에 보존했다.

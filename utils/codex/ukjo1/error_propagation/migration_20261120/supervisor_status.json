@@ -1,0 +1,10 @@
+{
+  "pid": 2776841,
+  "time": 1795143187.3138509,
+  "controller_pid": 2776842,
+  "controller_restarts": 0,
+  "phase": "watching",
+  "controller_heartbeat": 1795143186.9657223,
+  "training_complete": 0,
+  "running": 16
+}
