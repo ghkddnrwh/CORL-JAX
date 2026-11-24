@@ -141,7 +141,7 @@ def main():
         maximum_arbitrary_Q_V_policy_decomposition_error=max_general_identity_error,
         one_state_example=examples,checks=checks,
         scope='ExactscalarQ,fixedbehavior,smallfiniteMDPs;notneuraltraining,generatoraccuracyorOGBenchperformance.',
-        note='utils/codex/ukjo1/error_propagation/flow_iql_research/FINITE_BACKUP_POLICY_ALIGNMENT.txt',
+        note='logs/codex/ukjo1/error_propagation/documents/flow_iql_research/FINITE_BACKUP_POLICY_ALIGNMENT.txt',
         checker_source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
     args.output.parent.mkdir(parents=True,exist_ok=True);args.output.write_text(json.dumps(result,indent=2,allow_nan=False))
     print(json.dumps(dict(conditions=len(checks),max_identity_error=max_identity_error,

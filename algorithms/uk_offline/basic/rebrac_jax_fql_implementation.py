@@ -187,16 +187,7 @@ def normalize_config_aliases(config: TrainConfig) -> None:
 def refresh_algorithm_names(config: TrainConfig) -> None:
     config.project = "ORL-SMOOTH"
     config.group = f"{ALGORITHM_NAME}-JAX-FQL"
-    # Preserve existing min/min and mean/mean names; isolate mixed-aggregation runs.
-    target_aggregation = config.critic_aggregation
-    actor_aggregation = config.actor_critic_aggregation or target_aggregation
-    if (target_aggregation, actor_aggregation) == ("min", "min"):
-        aggregation_suffix = ""
-    elif (target_aggregation, actor_aggregation) == ("mean", "mean"):
-        aggregation_suffix = "-QMEAN"
-    else:
-        aggregation_suffix = f"-T{target_aggregation.upper()}-A{actor_aggregation.upper()}"
-    config.name = f"{ALGORITHM_NAME}-JAX-FQL-{config.env}{aggregation_suffix}"
+    config.name = f"{ALGORITHM_NAME}-JAX-FQL-{config.env}"
 
 
 def validate_config(config: TrainConfig) -> None:
@@ -1735,12 +1726,7 @@ def _train_impl(config: TrainConfig):
 
 
     if actor_refit_only:
-        # Refit outputs depend on the actor's Q aggregation, not the TD target aggregation.
-        actor_refit_dir_name = config.actor_refit_dir_name
-        actor_aggregation = config.actor_critic_aggregation or config.critic_aggregation
-        if actor_aggregation == "mean" and actor_refit_dir_name == "actor_refit":
-            actor_refit_dir_name = "actor_refit_QMEAN"
-        actor_refit_dir = loaded_run_dir / actor_refit_dir_name
+        actor_refit_dir = loaded_run_dir / config.actor_refit_dir_name
         actor_refit_dir.mkdir(parents=True, exist_ok=True)
         actor_state = trainer.make_initial_actor_state()
         refit_actor_state, refit_log = trainer.fit_actor(

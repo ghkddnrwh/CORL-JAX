@@ -38,7 +38,7 @@ def main():
     plan = dict(time=time.time(), kind='uniform_half_correction_pilot_registration_before_GPU_launch',
                 correction_fraction=.5, backup_samples=9, deployment_samples=9, expectile=.9, discount=.999,
                 method='IQLV2 plus half displacement toward exact finite-target-minQ expectile; original IFQL BC policy',
-                method_note='utils/codex/ukjo1/error_propagation/flow_iql_research/HALF_EMPIRICAL_BACKUP_METHOD.txt',
+                method_note='logs/codex/ukjo1/error_propagation/documents/flow_iql_research/HALF_EMPIRICAL_BACKUP_METHOD.txt',
                 primary_steps=[800000, 900000, 1000000], episodes=50, first_episode_seed=42,
                 final_metric='Equal last3 mean; pilots cannot form a nine-environment mean.',
                 jobs=jobs, source_sha256=pins,

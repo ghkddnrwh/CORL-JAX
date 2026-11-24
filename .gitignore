@@ -157,3 +157,5 @@ locals/
 shell_files/
 
 codex.txt
+# Error-propagation research archives are stored under logs/.
+/utils/codex/ukjo1/error_propagation*.zip

@@ -1574,17 +1574,11 @@ class TrainConfig:
 def refresh_algorithm_names(config: TrainConfig) -> None:
     config.project = 'ORL-SMOOTH'
     config.group = f'{ALGORITHM_NAME}-JAX'
-    if (config.q_agg, config.actor_critic_aggregation) == ('min', 'min'):
-        agg_suffix = ''
-    elif (config.q_agg, config.actor_critic_aggregation) == ('mean', 'mean'):
-        agg_suffix = '-QMEAN'
-    else:
-        agg_suffix = f'-T{config.q_agg.upper()}-A{config.actor_critic_aggregation.upper()}'
+    config.name = f'{ALGORITHM_NAME}-JAX-{config.env}'
     if config.run_tag:
         if not all(c.isalnum() or c in ('-', '_') for c in config.run_tag):
             raise ValueError('run_tag only allows letters, digits, underscore, hyphen')
-        agg_suffix += '-' + config.run_tag
-    config.name = f'{ALGORITHM_NAME}-JAX-{config.env}{agg_suffix}'
+        config.name += '-' + config.run_tag
 
 
 def validate_config(config: TrainConfig) -> None:

@@ -29,7 +29,7 @@ def main():
         validation+=d['cases']
     assert {r['recipe']for r in validation}==set(core.INITIAL_RECIPES)
     smoke=json.loads((root/'analysis/runner_smoke_validation_v1.json').read_text());assert smoke['status']=='passed'
-    protected=u/'FINITE_MEAN_REFERENCE_MANIFEST_V1.json';protection=json.loads(protected.read_text())
+    protected=Path('logs/codex/ukjo1/error_propagation/documents/flow_iql_research/FINITE_MEAN_REFERENCE_MANIFEST_V1.json');protection=json.loads(protected.read_text())
     for path,digest in protection['frozen_original_source_sha256'].items():assert sha(path)==digest,path
     pilots=[core.ENVIRONMENTS[0],core.ENVIRONMENTS[5],core.ENVIRONMENTS[1]]
     jobs=[];identities={}

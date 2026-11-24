@@ -178,20 +178,8 @@ class TrainConfig:
 def refresh_algorithm_names(config: TrainConfig) -> None:
     config.project = "ORL-SMOOTH"
     config.group = f"{ALGORITHM_NAME}-JAX"
-    # Preserve legacy min/min and mean/mean names; separate mixed-aggregation runs.
-    value_aggregation = config.critic_aggregation
-    actor_aggregation = config.actor_critic_aggregation or value_aggregation
-    if (value_aggregation, actor_aggregation) == ("min", "min"):
-        aggregation_suffix = ""
-    elif (value_aggregation, actor_aggregation) == ("mean", "mean"):
-        aggregation_suffix = "-QMEAN"
-    else:
-        aggregation_suffix = f"-V{value_aggregation.upper()}-A{actor_aggregation.upper()}"
-    target_suffix = (
-        f"-HARD{config.hard_target_update_freq}"
-        if config.target_update_mode == "hard" else ""
-    )
-    config.name = f"{ALGORITHM_NAME}-JAX-{config.env}{aggregation_suffix}{target_suffix}"
+    config.name = f"{ALGORITHM_NAME}-JAX-{config.env}"
+
 
 
 def validate_config(config: TrainConfig) -> None:
@@ -1696,12 +1684,7 @@ def _train_impl(config: TrainConfig):
         if loaded_run_dir is None:
             raise ValueError("refit mode requires --load_model")
 
-        # Keep refit runs with different actor Q reductions in distinct directories.
-        actor_refit_dir_name = config.actor_refit_dir_name
-        actor_aggregation = config.actor_critic_aggregation or config.critic_aggregation
-        if actor_aggregation == "mean" and actor_refit_dir_name == "actor_refit":
-            actor_refit_dir_name = "actor_refit_QMEAN"
-        actor_refit_dir = loaded_run_dir / actor_refit_dir_name
+        actor_refit_dir = loaded_run_dir / config.actor_refit_dir_name
         actor_refit_dir.mkdir(parents=True, exist_ok=True)
         print("---------------------------------------")
         print(f"Actor refit from saved {ALGORITHM_NAME} checkpoint")

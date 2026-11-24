@@ -17,7 +17,7 @@ def digest(path):
 def main():
     workspace = next(p for p in Path(__file__).resolve().parents if (p / '.git').exists())
     logs = workspace / 'logs/codex/ukjo1/error_propagation/diagnosis'
-    output = workspace / 'utils/codex/ukjo1/error_propagation/reports/q_normalization_literature_20261120'
+    output = workspace / 'logs/codex/ukjo1/error_propagation/reports/q_normalization_literature_20261120'
     output.mkdir(parents=True, exist_ok=True)
     controls = []
     for gamma, study, registration in (

@@ -1,10 +1,29 @@
-# Generated reports, frozen run sources, and migration inventories stay on disk.
+# Research implementation lives here; output belongs in logs/codex/ukjo1/error_propagation/.
+__pycache__/
+*.py[cod]
 reports/
 source_snapshots/
-__pycache__/
-**/__pycache__/
-migration_20261120/files_before.json
-migration_20261120/path_moves.json
-migration_20261120/remove_code_aliases/original_sources/
-migration_20261120/remove_code_aliases/staged_sources/
-migration_20261120/remove_code_aliases/numerical_before.pkl
+migration_*/
+papers/
+documents/
+archives/
+*.zip
+*.log
+*.json
+*.jsonl
+*.pkl
+*.pickle
+*.npz
+*.npy
+*.csv
+*.tsv
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.svg
+*.txt
+*.md
+# Source attribution accompanies the vendored implementation.
+!vendor/provenance.json
+!vendor/PROVENANCE.txt

@@ -94,7 +94,7 @@ def main():
     review['preferred_candidate']=dict(recipe='mean target twin Q finite flow expectile; projected Bellman target; min online twin Q deployment',
         tau=.9,gamma=.999,candidates=9,learners=1,discovery_seed0_mean=mean['nine_task_mean'],fresh_seeds=[9,10,11],
         fresh_confirmation_passed=confirmation['independent_confirmation_criteria_passed'],
-        reproducibility='utils/codex/ukjo1/error_propagation/flow_iql_research/REPRODUCE_MEAN_FINITE_BACKUP_V1.txt',
+        reproducibility='logs/codex/ukjo1/error_propagation/documents/flow_iql_research/REPRODUCE_MEAN_FINITE_BACKUP_V1.txt',
         unused_V_fits='Retained2Adamfits are clock-control overhead; they do not enter finite backup or deployment.')
     review['component_control']=dict(actual_late_models=54,BC_and_moments_and_RNG_all_exact=True,
         finite_min_mean=component['min_backup_nine_task_mean'],finite_mean_mean=component['mean_backup_nine_task_mean'],

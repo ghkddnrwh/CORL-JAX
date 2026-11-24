@@ -1,8 +1,0 @@
-{
-  "status": "PASS",
-  "python_files": 727,
-  "canonical_import_targets": 1469,
-  "old_code_references": [],
-  "active_source_pins": 44,
-  "reused_evidence_unchanged": true
-}

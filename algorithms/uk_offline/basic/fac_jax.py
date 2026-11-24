@@ -1896,13 +1896,6 @@ def refresh_algorithm_names(config: TrainConfig) -> None:
     config.project = "ORL-SMOOTH"
     config.group = "FAC-JAX"
     config.name = f"FAC-JAX-{config.env}"
-    # Follow IQL/ReBRAC convention: isolate Q aggregation ablations.
-    if config.q_agg == "mean":
-        config.name += "-QMEAN"
-    if config.logp_method != "exact":
-        config.name += f"-{config.logp_method.upper()}"
-    if config.fac_threshold != "batch_adaptive":
-        config.name += f"-{config.fac_threshold.upper()}"
     if config.run_tag:
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", config.run_tag):
             raise ValueError("run_tag may only contain letters, digits, _ . -")

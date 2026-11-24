@@ -61,7 +61,7 @@ def main():
         run_count=len(rows),records=sum(row['records']for row in rows),
         formula='sqrt(online_window_actual_critic_loss/2);twoheads,equalbatchsizes,allupdatesinthewindow',
         original_sources_and_training_logs_unchanged=True,source_sha256=sha(Path(__file__).read_bytes()),
-        semantic_note='DIAGNOSTIC_TARGET_SEMANTICS.txt',
+        semantic_note='logs/codex/ukjo1/error_propagation/documents/flow_iql_research/DIAGNOSTIC_TARGET_SEMANTICS.txt',
         limits=['OnlinewindowsincludechangingQ/targetQ/BCandactualreplaybatches;donotcompareasthesamequantityasfixed-snapshotTD.',
             'Reconstructioninheritsloggedfloat32window-averagingprecision;notoracleconditionalBellmanerrorortrueQerror.',
             'Boundary-auxiliarylossprofileisexcludedbecauseitscritic_lossincludesanextraQboundaryterm.',
