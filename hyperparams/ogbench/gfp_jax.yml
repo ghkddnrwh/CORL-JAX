@@ -217,7 +217,7 @@ _gfp_antsoccer_arena_navigate: &gfp_antsoccer_arena_navigate
   <<: *ogbench_common
   max_timesteps: 1000000
   batch_size: 256
-  discount: 0.995
+  discount: 0.99
   flow_steps: 10
   q_agg: mean
   target_agg: actor
