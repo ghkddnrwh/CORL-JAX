@@ -63,7 +63,6 @@ _ogbench_visual_common: &ogbench_visual_common
   encoder: impala_small
   p_aug: 0.5
   frame_stack: 3
-  epoch_flow_proxy: 125
 
 _d4rl_common: &d4rl_common
   <<: *ogbench_common
@@ -234,15 +233,15 @@ visual-puzzle-4x4-play-singletask-v0: { <<: *visual_puzzle_4x4 }
 visual-puzzle-4x4-play-singletask-task1-v0: { <<: *visual_puzzle_4x4 }
 
 # D4RL official FAC configs, with original state/reward handling.
-halfcheetah-medium-v2: { <<: *d4rl_common, critic_penalty_coef: 0.05, actor_bc_coef: 0.0003, epoch_flow_proxy: 250 }
-halfcheetah-medium-replay-v2: { <<: *d4rl_common, critic_penalty_coef: 0.05, actor_bc_coef: 0.0003, epoch_flow_proxy: 250 }
-halfcheetah-medium-expert-v2: { <<: *d4rl_common, critic_penalty_coef: 0.5, actor_bc_coef: 0.003, epoch_flow_proxy: 250 }
-hopper-medium-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.1, epoch_flow_proxy: 250 }
-hopper-medium-replay-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.1, epoch_flow_proxy: 250 }
-hopper-medium-expert-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.3, epoch_flow_proxy: 250 }
-walker2d-medium-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.03, epoch_flow_proxy: 250 }
-walker2d-medium-replay-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.1, epoch_flow_proxy: 250 }
-walker2d-medium-expert-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.03, epoch_flow_proxy: 250 }
+halfcheetah-medium-v2: { <<: *d4rl_common, critic_penalty_coef: 0.05, actor_bc_coef: 0.0003 }
+halfcheetah-medium-replay-v2: { <<: *d4rl_common, critic_penalty_coef: 0.05, actor_bc_coef: 0.0003 }
+halfcheetah-medium-expert-v2: { <<: *d4rl_common, critic_penalty_coef: 0.5, actor_bc_coef: 0.003 }
+hopper-medium-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.1 }
+hopper-medium-replay-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.1 }
+hopper-medium-expert-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.3 }
+walker2d-medium-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.03 }
+walker2d-medium-replay-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.1 }
+walker2d-medium-expert-v2: { <<: *d4rl_common, critic_penalty_coef: 5.0, actor_bc_coef: 0.03 }
 antmaze-umaze-v2: { <<: *d4rl_common, critic_penalty_coef: 1.0, actor_bc_coef: 0.1, fac_threshold: dataset_wide_constant }
 antmaze-umaze-diverse-v2: { <<: *d4rl_common, critic_penalty_coef: 1.0, actor_bc_coef: 0.1, fac_threshold: dataset_wide_constant }
 antmaze-medium-play-v2: { <<: *d4rl_common, critic_penalty_coef: 0.5, actor_bc_coef: 0.03, fac_threshold: dataset_wide_constant }
