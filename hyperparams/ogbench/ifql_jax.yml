@@ -1,12 +1,8 @@
-# Hyperparameters for ifql_jax.py (ORL-SMOOTH).
-# Algorithm defaults: fql-master/agents/ifql.py:get_config().
-# The IFQL README specifies discount=0.995 for humanoidmaze-medium and
-# 500k steps / impala_small / p_aug=0.5 / frame_stack=3 for visual-cube-single task1.
-# Other state tasks use the original IFQL defaults (no task-specific IFQL tuning
-# is supplied in the archive). The visual protocol is shared across visual tasks
-# following the provided FQL experiment layout; those additional tasks are not
-# individually tuned IFQL settings from the README.
-# IFQL fixes two critics and min-Q; no FQL alpha or normalize_q_loss.
+# IFQL hyperparameters for ifql_jax.py (ORL-SMOOTH).
+# FQL paper, Appendix E.2 and Tables 5–6: OGBench discounts and IFQL N.
+# The original IFQL default network width (512) is retained: the paper
+# explicitly reports width 256 for IQL manipulation, not separately for IFQL.
+# Visual settings follow the existing visual protocol.
 
 _ogbench_common: &ogbench_common
   max_timesteps: 1000000
@@ -19,7 +15,6 @@ _ogbench_common: &ogbench_common
   frame_stack: null
   p_aug: null
 
-  # One shared Adam optimizer; learning-rate aliases are for runner compatibility.
   lr: 3.0e-4
   actor_learning_rate: 3.0e-4
   critic_learning_rate: 3.0e-4
@@ -55,7 +50,7 @@ _ogbench_visual_common: &ogbench_visual_common
   p_aug: 0.5
   frame_stack: 3
 
-# State-based OGBench defaults and task aliases.
+# State-based OGBench settings and task aliases.
 
 _antmaze_large: &antmaze_large
   <<: *ogbench_common
@@ -68,7 +63,7 @@ antmaze-large-navigate-singletask-task4-v0: { <<: *antmaze_large }
 antmaze-large-navigate-singletask-task5-v0: { <<: *antmaze_large }
 
 _antmaze_giant: &antmaze_giant
-  <<: *ogbench_common
+  <<: *ogbench_discount_0995
 
 antmaze-giant-navigate-singletask-v0: { <<: *antmaze_giant }
 antmaze-giant-navigate-singletask-task1-v0: { <<: *antmaze_giant }
@@ -88,7 +83,7 @@ humanoidmaze-medium-navigate-singletask-task4-v0: { <<: *humanoidmaze_medium }
 humanoidmaze-medium-navigate-singletask-task5-v0: { <<: *humanoidmaze_medium }
 
 _humanoidmaze_large: &humanoidmaze_large
-  <<: *ogbench_common
+  <<: *ogbench_discount_0995
 
 humanoidmaze-large-navigate-singletask-v0: { <<: *humanoidmaze_large }
 humanoidmaze-large-navigate-singletask-task1-v0: { <<: *humanoidmaze_large }
@@ -98,7 +93,8 @@ humanoidmaze-large-navigate-singletask-task4-v0: { <<: *humanoidmaze_large }
 humanoidmaze-large-navigate-singletask-task5-v0: { <<: *humanoidmaze_large }
 
 _antsoccer_arena: &antsoccer_arena
-  <<: *ogbench_common
+  <<: *ogbench_discount_0995
+  num_samples: 64
 
 antsoccer-arena-navigate-singletask-v0: { <<: *antsoccer_arena }
 antsoccer-arena-navigate-singletask-task1-v0: { <<: *antsoccer_arena }
@@ -149,8 +145,7 @@ puzzle-4x4-play-singletask-task3-v0: { <<: *puzzle }
 puzzle-4x4-play-singletask-task4-v0: { <<: *puzzle }
 puzzle-4x4-play-singletask-task5-v0: { <<: *puzzle }
 
-# Visual OGBench tasks: same environment list as the supplied FQL YAML.
-# The visual-cube-single task1 recipe is explicitly documented for IFQL.
+# Visual OGBench tasks.
 
 _visual_cube_single: &visual_cube_single
   <<: *ogbench_visual_common
